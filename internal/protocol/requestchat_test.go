@@ -36,7 +36,13 @@ func TestMessagesRequestsToChat(t *testing.T) {
 		{
 			"history and thinking",
 			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[{"type":"thinking","thinking":"why","signature":"opaque"},{"type":"tool_use","id":"c1","name":"f","input":{"x":1}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"ok"},{"type":"text","text":"next"}]}],"thinking":{"type":"enabled","budget_tokens":1024}`,
-			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[],"reasoning_content":"why","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{\"x\":1}"}}]},{"role":"tool","tool_call_id":"c1","content":"ok"},{"role":"user","content":[{"type":"text","text":"next"}]}],"max_tokens":4096,"reasoning_effort":"low"`,
+			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":"","reasoning_content":"why","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{\"x\":1}"}}]},{"role":"tool","tool_call_id":"c1","content":"ok"},{"role":"user","content":[{"type":"text","text":"next"}]}],"max_tokens":4096,"reasoning_effort":"low"`,
+		},
+		{
+			// An array of Chat content parts has at least one: OpenAI refuses an empty one.
+			"a turn of tool uses alone has empty text",
+			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}},{"type":"tool_use","id":"c2","name":"g","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"a"},{"type":"tool_result","tool_use_id":"c2","content":"b"}]}]`,
+			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":"","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{}"}},{"type":"function","id":"c2","function":{"name":"g","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"a"},{"role":"tool","tool_call_id":"c2","content":"b"}],"max_tokens":4096`,
 		},
 		{
 			"images and cache marker",
@@ -111,7 +117,7 @@ func TestMessagesEmptyToolResultsToChat(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sameJSON(t, `{"model":"up","stream":true,"stream_options":{"include_usage":true},"max_tokens":4096,"messages":[{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":""}]}`, up.Body)
+		sameJSON(t, `{"model":"up","stream":true,"stream_options":{"include_usage":true},"max_tokens":4096,"messages":[{"role":"assistant","content":"","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":""}]}`, up.Body)
 	}
 }
 

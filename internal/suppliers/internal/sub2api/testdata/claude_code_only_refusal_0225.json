@@ -1,0 +1,15 @@
+{
+ "method": "POST",
+ "path": "/v1/messages",
+ "status": 503,
+ "header": {
+  "X-Client-Request-Id": "00000000-0000-4000-8000-000000000004"
+ },
+ "body": {
+  "error": {
+   "message": "No available accounts: this group only allows Claude Code clients",
+   "type": "api_error"
+  },
+  "type": "error"
+ }
+}

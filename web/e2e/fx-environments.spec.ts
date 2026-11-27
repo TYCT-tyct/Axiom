@@ -1,6 +1,6 @@
 import { type Browser, expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
-import { loop, open, pause, running, scrollTo, setHidden, siteSignIn } from "./fx-helpers.ts";
+import { loop, open, pause, running, scrollTo, setHidden, siteSignIn, whaleShows } from "./fx-helpers.ts";
 
 // The home page's animations must look and move the same on every machine (#747): a display scaled by Windows, a fast
 // monitor, a slow processor, and several effects at once. The cases here are the ones that do not depend on the
@@ -26,13 +26,6 @@ const canvases = (page: Page) =>
       })),
   );
 
-// the whale's canvas has something on it
-const painted = (page: Page) =>
-  page.locator(".tr > canvas.wh").evaluate((canvas: HTMLCanvasElement) => {
-    const g = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
-    return g.getImageData(0, 0, canvas.width, canvas.height).data.some((value, i) => i % 4 === 3 && value > 0);
-  });
-
 // The engines draw at the display's pixel ratio, up to 2 (the sea, the entrance and the departure cap it so): a canvas
 // whose backing size is not its CSS size times that ratio is drawn blurred or its character grid is mis-sized. The
 // whale's canvas takes the integer part, the sea's rounds: they never differ by more than one pixel.
@@ -51,8 +44,9 @@ for (const [dpr, size] of [
     const errors = collectErrors(page);
     await open(page);
     await running(page);
+    await page.clock.install();
     await page.keyboard.type("deepseek");
-    await expect.poll(() => painted(page), { timeout: 30_000 }).toBe(true);
+    await whaleShows(page);
     const scale = Math.min(dpr, 2);
     const drawn = await canvases(page);
     expect(drawn.map((c) => c.name).sort()).toEqual(["sea", "wh"]);
@@ -134,12 +128,7 @@ test("the whale is on the water within three seconds of the word, on a clock tha
   const loaded = page.waitForRequest(/\/assets\/whale-[\w-]+\.js$/);
   await page.keyboard.type("deepseek");
   await loaded;
-  let seen = 0;
-  for (; seen < 3000 && !(await painted(page).catch(() => false)); seen += 100) {
-    await page.clock.runFor(100);
-    await page.waitForTimeout(20);
-  }
-  expect(seen).toBeLessThan(3000);
+  await whaleShows(page, 3000);
 });
 
 // Every animation plays whatever the system's motion setting, the whale and the sea in the same picture.
@@ -153,8 +142,9 @@ test("under reduced motion the sea changes between two looks and the whale comes
       .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL().length + canvas.toDataURL().slice(-200));
   const before = await look();
   await expect.poll(look).not.toBe(before);
+  await page.clock.install();
   await page.keyboard.type("deepseek");
-  await expect.poll(() => painted(page), { timeout: 30_000 }).toBe(true);
+  await whaleShows(page);
 });
 
 // A tab hidden for ten seconds: the loop holds no frame, and the sea goes on from where it was, one short step first.
@@ -182,8 +172,9 @@ test("the whale, a scroll and the departure at once leave no error, and the sign
   const errors = collectErrors(page);
   await open(page);
   await running(page);
+  await page.clock.install();
   await page.keyboard.type("deepseek");
-  await expect.poll(() => painted(page), { timeout: 30_000 }).toBe(true);
+  await whaleShows(page);
   const frames = (await loop(page)).frames;
   await scrollTo(page, 3);
   await scrollTo(page, 6);

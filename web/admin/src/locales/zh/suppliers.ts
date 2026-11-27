@@ -60,7 +60,8 @@ export default {
     detect: "探测",
     detected: "识别为 {{kind}}",
     auto: "Axiom 读取分组、价格和模型，选用能卖的分组，并为每个能调用的分组建一个 key。登录账号要能建 key、读取 key 的内容。",
-    scopes: "new-api 的个人访问令牌要带 api_key:read、api_key:write、api_key:reveal 权限。",
+    scopes:
+      "new-api 的个人访问令牌要带 profile:read、wallet:read、usage:read、api_key:read、api_key:write、api_key:reveal 权限。",
     name: "名称",
     nameHint: "已按站点的域名填好，可以改。",
     account: "登录账号",

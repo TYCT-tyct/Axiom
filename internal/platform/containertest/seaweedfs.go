@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func StartSeaweedFS(t testing.TB, buckets ...string) SeaweedFS {
 	ctx := t.Context()
 	container, err := Start(ctx, func() (*testcontainers.DockerContainer, error) {
 		return testcontainers.Run(ctx, SeaweedFSImage,
-			testcontainers.WithExposedPorts("8333/tcp", "9333/tcp"),
+			testcontainers.WithExposedPorts("8333/tcp", "9333/tcp", "8888/tcp"),
 			testcontainers.WithFiles(testcontainers.ContainerFile{
 				Reader:            strings.NewReader(seaweedfsS3Config),
 				ContainerFilePath: "/tmp/s3.json",
@@ -55,6 +56,7 @@ func StartSeaweedFS(t testing.TB, buckets ...string) SeaweedFS {
 				wait.ForListeningPort("8333/tcp"),
 				wait.ForHTTP("/cluster/status").WithPort("9333/tcp").WithForcedIPv4LocalHost().
 					WithStartupTimeout(startupDeadline).WithResponseMatcher(seaweedFSMasterReady),
+				wait.ForHTTP("/").WithPort("8888/tcp").WithForcedIPv4LocalHost().WithStartupTimeout(startupDeadline),
 			),
 			WithHostPolicy(ctx),
 		)
@@ -78,8 +80,12 @@ func StartSeaweedFS(t testing.TB, buckets ...string) SeaweedFS {
 	if err != nil {
 		t.Fatalf("find the SeaweedFS bridge address: %v", err)
 	}
+	filer, err := container.MappedPort(ctx, "8888/tcp")
+	if err != nil {
+		t.Fatalf("find the SeaweedFS filer port: %v", err)
+	}
 	for _, bucket := range buckets {
-		createBucket(t, ctx, container, bucket)
+		createBucket(t, ctx, "http://"+net.JoinHostPort(host, filer.Port()), bucket)
 	}
 	return SeaweedFS{
 		Endpoint:         "http://" + net.JoinHostPort(host, port.Port()),
@@ -96,19 +102,26 @@ func seaweedFSMasterReady(body io.Reader) bool {
 	return jsonx.Decode(body, &status) == nil && status.IsLeader && status.Leader != ""
 }
 
-// createBucket creates one bucket. SeaweedFS's S3 server needs it before a PUT; the shell talks to the master the same
-// process started, over IPv4 because Docker Desktop resolves localhost to the IPv6 socket the master does not listen on.
-func createBucket(t testing.TB, ctx context.Context, container *testcontainers.DockerContainer, name string) {
+// createBucket creates one bucket as a directory under the filer's /buckets, which is what a bucket is to SeaweedFS's S3
+// server. It goes to the filer, which the wait strategy saw answer, and not through weed shell: the shell finds the filer
+// through the master, which lists it only once the filer has registered, a moment after the S3 port opens; without one
+// the shell prints the error and still exits 0, and its handshake with the master stalled past a deadline on a busy CI
+// host (run 45910331015).
+func createBucket(t testing.TB, ctx context.Context, filer, name string) {
 	t.Helper()
-	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	code, out, err := container.Exec(execCtx, []string{
-		"sh", "-ec", fmt.Sprintf("echo 's3.bucket.create -name %s' | weed shell -master=127.0.0.1:9333", name),
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, filer+"/buckets/"+name+"/", nil)
 	if err != nil {
 		t.Fatalf("create bucket %q: %v", name, err)
 	}
-	if output, readErr := io.ReadAll(out); readErr != nil || code != 0 {
-		t.Fatalf("create bucket %q: exit %d, %v: %s", name, code, readErr, output)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create bucket %q: %v", name, err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("create bucket %q: %v", name, err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create bucket %q: %s, %v: %s", name, resp.Status, readErr, body)
 	}
 }

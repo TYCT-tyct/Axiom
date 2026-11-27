@@ -9,7 +9,7 @@
 - `NewHandler(Deps)` → `Handler`（外面套 `httpserver.Public`）：入口、准入、模型列表、辅助接口。`NewExecutor(ExecDeps)` → `Executor.Run`（即 `Deps.Run`）：准入后把 `Call` 做到结算。依赖缺一个不启动，没有生产 stub，由 `cmd/axiom/callpath.go` 接线。
 - `New(Config)` → `Backpressure`（`InFlight`、`Funds`、`Pool`、`Queue`、`RateCounter`）：先 `Config.Validate`，一次报出全部问题；默认值只在 `DefaultConfig`。
 - `Call` 的所有权归 `Run`；`Call.Done` 归还名额和内存，可能晚于 `Run` 返回。`Outstanding` 是两者共用的排空计数。
-- `RouteDeps`（`Build`/`Publish`/`Rebuild`/`Run`）产出路由快照和模型列表；`ModelList.Public` 给价格页。`ResponseCache` 可为空；`StreamCacheSealed`/`OpenCachePayload` 供受控导出；`LedgerAmounts` 按账本补记录金额。
+- `RouteDeps`（`Build`/`Publish`/`Rebuild`/`Run`）产出路由快照和模型列表；`ModelList.Public` 给价格页，`PublicAudience` 是它与网关匿名列表共用的受众和价格是否公开。`ResponseCache` 可为空；`StreamCacheSealed`/`OpenCachePayload` 供受控导出；`LedgerAmounts` 按账本补记录金额。
 
 ## 不变量
 
@@ -49,7 +49,7 @@
 - **错误出口**：`writeRefusal` 与 `protocol.RenderError` 写同一个外壳（`TestARefusalIsAnErrorOfProtocol`）；`Retry-After` 至多 60。映射表见[错误](../../docs/domains/gateway.md#错误)。
 - **依赖故障按状态变化记日志**（`outage.go`）：数据库不可用（`pg.Unavailable`）和 accounts、catalog、routing 快照过旧回 503，每个依赖只在故障开始或原因变化时记一条 error，首个成功用它的请求记 warn 结束；每次拒绝计入 `axiom_gateway_outage_refusals_total{dependency}`。
 - **派生标识**：`Prepare` 拒绝超过 128 字节的标识和 `metadata.user_id`；派生值是 HMAC-SHA256（`ExecDeps.IdentitySecret` 加账户 ID）的 32 个十六进制字符。所有节点的 `AXIOM_IDENTITY_KEY_FILE` 必须相同，否则上游缓存换节点就断。转发的头只在 `headers.go` 一处。
-- **模型列表**：鉴权同准入（准入类名额、`accounts.Admit`，不过闸），模型集合与路由过滤同用 `allowedModels`。列表与快照同次构建，`Publish` 在 `ModelList.mu` 写锁内一起换，迟到的被拒；读锁只盖内存工作（`TestModelPublicationExcludesReaders`）；请求路径不读价。
+- **模型列表**：鉴权同准入（准入类名额、`accounts.Admit`，不过闸），模型集合与路由过滤同用 `allowedModels`。列表与快照同次构建，`Publish` 在 `ModelList.mu` 写锁内一起换，迟到的被拒；读锁只盖内存工作（`TestModelPublicationExcludesReaders`）；请求路径不读价。不带任何 key 的列表、单模型和计数读公开视图（`publicView`：本次构建的公共模型、`PublicAudience` 的价），不读库；带错 key 仍 401。`/v1` 条目的 OpenRouter 成员与隐藏价格的切口（`pricingIn`）都在构建时编码，列表请求只拷字节。
 
 ## 辅助接口
 
@@ -57,7 +57,7 @@
 
 - `/key`：`usage*` 只算已收，窗口是数据库时钟的 UTC 日、周、月；`limit_remaining` = 上限 −（窗口内已收 + 在途预留），不为负，与准入拒绝的依据相同。
 - 余额类字段读 `billing.spend` 的合计，不对随调用数增长的账本求和。
-- `count_tokens` 不调上游：`⌈TextBytes ÷ 3⌉ + 图片数 × 1600 + 文件数 × 3000`，`TextBytes` 是体字节减去图片、文件数据。不预留、不收费、不记录；模型必须存在且 key 可用，否则 404 `model_not_found`。
+- `count_tokens`：准入事务和池许可还回后，按调用的路由（`NativeOnly`）取第一个能拿到凭证的端点，用 `protocol.CountBody` 和 `suppliers.Call.Count` 发出，等 `countWait`（3s），严格读至多 4 KiB 的 `{"input_tokens": n}`；凭证名额发完即还。答不了就估算：`⌈TextBytes ÷ 3⌉ + 图片数 × 1600 + 文件数 × 3000`，`TextBytes` 是体字节减去图片、文件数据。不预留、不收费、不记录；模型必须存在且 key 可用，否则 404 `model_not_found`。
 
 ## 尝试与转发
 

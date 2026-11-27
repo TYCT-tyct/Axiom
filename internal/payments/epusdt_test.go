@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 func epusdtConfig(t *testing.T, gateway string) []byte {
@@ -32,6 +33,44 @@ func TestEpusdtPreset(t *testing.T) {
 	}
 	if !strings.Contains(checkout.PayURL, "/payments/epay/v1/order/create-transaction/submit.php?") || !strings.Contains(checkout.PayURL, "type=usdt.tron") || !strings.Contains(checkout.PayURL, "currency=cny") {
 		t.Fatal("incorrect Epusdt checkout")
+	}
+}
+
+// TestEpusdtDocumentedSignatures replays the sample messages of Epusdt's EPay-compatible API documentation
+// (epusdt.com/api/payment), signed with its demonstration key: the create request and the GET callback.
+func TestEpusdtDocumentedSignatures(t *testing.T) {
+	const key = "epusdt_secret_key"
+	create := url.Values{
+		"pid": {"1000"}, "money": {"100"}, "out_trade_no": {"ORD202605230001"}, "notify_url": {"https://merchant.example/notify"},
+		"return_url": {"https://merchant.example/return"}, "name": {"VIP"}, "type": {"alipay"},
+	}
+	if got := easyPaySign(create, key); got != "b865b0acbb2b01554c35a1bd33351452" {
+		t.Fatalf("create signature %s", got)
+	}
+	gateway := "https://pay.example.com/payments/epay/v1/order/create-transaction"
+	cfg := easyPayConfig(t, gateway)
+	cfg.Settings = easyPayJSON(t, easyPaySettings{Gateway: gateway, PID: "1000", Preset: "epusdt"})
+	cfg.Secrets["key"] = secret.New(key)
+	ch := easyPayOpen(t, cfg)
+	callback := "pid=1000&trade_no=20260523171652123456001&out_trade_no=ORD202605230001&type=alipay&name=VIP" +
+		"&money=100.0000&trade_status=TRADE_SUCCESS&sign=cc44fab3f264615d859f8a1fd36d2f08&sign_type=MD5"
+	for _, tc := range []struct {
+		name, query string
+		valid       bool
+	}{
+		{"documented callback", callback, true},
+		{"amount changed", strings.Replace(callback, "money=100.0000", "money=1000.0000", 1), false},
+		{"order changed", strings.Replace(callback, "ORD202605230001", "ORD202605230002", 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notice, err := ch.Verify(t.Context(), Callback{Method: http.MethodGet, RawQuery: tc.query})
+			if (err == nil) != tc.valid {
+				t.Fatalf("verified %t, want %t: %v", err == nil, tc.valid, err)
+			}
+			if tc.valid && (!notice.Success || notice.Order != "ORD202605230001" || notice.Paid.Minor != 10000) {
+				t.Fatalf("%+v", notice)
+			}
+		})
 	}
 }
 

@@ -46,13 +46,13 @@ func TestRestoredDatabaseNeedsTheKeyVersionsItReferences(t *testing.T) {
 
 	fingerprint := historical.fingerprints[1]
 	missing := newVersionCheck()
-	missing.add(current, 1, fingerprint[:], "active", 0)
+	missing.add(current, 1, fingerprint[:], "active", nil)
 	if err := missing.err(); err == nil || !strings.Contains(err.Error(), "missing versions [1]") {
 		t.Fatalf("a restored database whose version 1 is absent from the current file was accepted: %v", err)
 	}
 
 	present := newVersionCheck()
-	present.add(historical, 1, fingerprint[:], "active", 0)
+	present.add(historical, 1, fingerprint[:], "active", nil)
 	if err := present.err(); err != nil {
 		t.Fatalf("the historical file with version 1 was refused: %v", err)
 	}

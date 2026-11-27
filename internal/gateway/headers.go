@@ -86,11 +86,16 @@ func forwardable(in http.Header) http.Header {
 // and a value that is blank names no session, so it is dropped rather than derived into one every client would share.
 func (a *attempt) upstreamHeader() http.Header {
 	s := a.s
-	rules := requestHeaders[a.entry.Target.Format]
-	derive := s.x.identity(uuid.UUID(s.c.caller.AccountID()))
+	return protocolHeader(a.entry.Target.Format, s.c.Header, s.x.identity(uuid.UUID(s.c.caller.AccountID())))
+}
+
+// protocolHeader is the client's values of the headers the format takes, the session ones derived. A format without a
+// session header, Messages, never calls derive.
+func protocolHeader(f protocol.Format, in http.Header, derive func(string) string) http.Header {
+	rules := requestHeaders[f]
 	out := make(http.Header, len(rules))
 	for _, r := range rules {
-		for _, v := range s.c.Header.Values(r.name) {
+		for _, v := range in.Values(r.name) {
 			if v = strings.TrimSpace(v); v != "" {
 				if r.session {
 					v = derive(v)

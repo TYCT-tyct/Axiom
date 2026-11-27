@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `protocol` | `Inspect` 读摘要；`Prepare`、`PrepareBudgeted` 改写或转换请求；`Relay` 转发、计量或聚合；`RenderError` 写流开始前的错误；直接格式的 `DirectUsage`、`ValidateDirectReply`、`RewriteDirectReply`；compact 的 `UsageOf`、`ValidateCompactReply`、`RewriteCompactReply` |
+| `protocol` | `Inspect` 读摘要；`Prepare`、`PrepareBudgeted` 改写或转换请求；`Relay` 转发、计量或聚合；`RenderError` 写流开始前的错误；直接格式的 `DirectUsage`、`ValidateDirectReply`、`RewriteDirectReply`；compact 的 `UsageOf`、`ValidateCompactReply`、`RewriteCompactReply`；`CountBody` 写 count_tokens 的请求体（端点的模型名加 Anthropic 收的五个成员，先向 `Memory` 申请） |
 | `internal/sse` | 把上游字节读成严格校验过的事件 |
 | `internal/streamcheck` | 按格式检查流结构；`Sample` 检查样本 |
 | `internal/record` | `just record`，见「录制样本」 |
@@ -46,7 +46,8 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 - **两类错误**：形状错（名字、`text`、`arguments` 不是字符串，`detail` 不是 `auto`、`low`、`high`）为 `ErrInvalid`；目标表达不了（`canon` 没读的成员取非默认值、非函数工具、调用配不上）为 `*NotSupported`，gateway 换端点。不删约束凑合。
 - **规格没说不是 no**：`Target` 的 `Thinking`、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`、`ForcedToolChoice` 等由 gateway 从 `catalog.Dialect` 填，零值是未设置；请求用到时未设置与否定一样 `*NotSupported`，`Reason` 给客户端，缺的键放 `Detail` 只进日志。只添东西的 `include`、缓存断点未设置按 no。
 - 控制字段按解码值比较，正文、签名、工具参数保留原字节。
-- **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`；合规且不以 `axid_` 开头的原样，其余写成 `axid_` 加原字节的十六进制，两类不相交。
+- **工具**：Responses 的 `custom`（自由格式）写成只收一个 `input` 字符串的函数，语法放进描述；历史里的 `custom_tool_call` 及其输出照此配对，回复按 `RelayOptions.CustomTools` 还原成 `custom_tool_call`，输入在结束时整段给出。Messages 的 `type:"custom"` 当函数。Anthropic 的服务端与带类型工具、OpenAI 的托管工具没有等价函数，按类型点名 `*NotSupported`。
+- **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`；合规且不以 `axid_` 开头的原样，其余写成 `axid_` 加原字节的十六进制，两类不相交。Gemini 的思考签名（Google 兼容层放在 Chat 调用的 `extra_content.google.thought_signature`）给 Messages、Responses 客户端时带在调用 ID 里（`_axts_` 加 base64url），转回 Chat 时拆回原处；Chat 聚合保留 `extra_content`。
 - **旧版函数调用**（`legacy.go`）：`functions`、`function_call` 升级成 `tools`、`tool_choice`，旧调用分到 `call_legacy_<n>`，结果配同名中最早未配的调用；冲突为 `ErrInvalid`，配不上为 `NotSupported`。只用旧表示的客户端（`UsageContext.LegacyFunctions`）收回 `function_call` 形状。
 - **推理回放**：`reasoning_details` 先按类型和 `index` 合并（`mergeDetails`）；到 Messages 只回放带签名的 `anthropic-claude-v1`，到 Responses 只回放带密文的 `openai-responses-v1`。
 - **结构化输出子集**（Messages）：无数值、字符串约束，`minItems` 只 0 或 1，对象都 `additionalProperties: false`，`$ref` 只指本 schema、不递归；否则 `*NotSupported`。
@@ -66,6 +67,10 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 | exclude true/false | 已开启时 display omitted/summarized | 同左 | 不要摘要 / summary auto |
 
 手动预算 = `max(min(上限 × 比例, 128000), 1024)`；显式预算须为正，manual 目标还须 ≥1024 且小于输出上限。预算换档按与有效上限（请求的，否则 `Target.MaxOutput`，都没有则 `NotSupported`）之比取最近档，同距取低。反向到 Chat 用同样比例；有非空 `output_config.effort` 时以它为准。
+
+## Gemini
+
+Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同一组结构和表（`gemini.go`）：客户端用 `GeminiToChat` 和 `GeminiReply`（流按事件、整份按 `Body`、错误按 `GeminiErrorBody`），上游用 `ChatToGemini` 和 `ChatFromGemini`（把 `streamGenerateContent?alt=sse` 读成 Chat 流）。没有 ID 的调用按位置编号，结果按 ID 否则按同名最早未答的配对；思考签名在 Chat 一侧放 `extra_content.google.thought_signature`，转往 Gemini 时缺签名的首个调用写官方的跳过值；`thoughtsTokenCount` 计入输出和推理，各模态明细（音频、图片、视频，含缓存的）对应 Chat 明细的同名成员；上游报告过用量后断流或以 Chat 没有的原因结束，错误块带上这份用量。Gemini 表达不了的成员两个方向都点名拒绝。
 
 ## 读 SSE
 

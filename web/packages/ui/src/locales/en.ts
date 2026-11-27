@@ -69,6 +69,9 @@ export default {
     preset_quota: "This account has as many routing presets as it may hold. Edit one instead.",
     presets_suspended:
       "The platform has paused routing presets, so presets, defaults and a key’s preset can’t be changed now. Try again once they’re resumed.",
+    code_reused: "That code was already used. Wait for your authenticator to show the next one.",
+    email_unavailable:
+      "This site sends no email, and this step must email you, so it can’t be done now. Contact the site’s administrator.",
     network: "Can’t reach Axiom. Check your connection and try again.",
     unknown: "Something went wrong. Try again in a moment.",
     field: "This doesn’t meet the requirements.",

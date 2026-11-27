@@ -293,10 +293,30 @@ class BuildChecks(unittest.TestCase):
                 self.assertFalse(expression(check[1], event=event, go=False))
                 self.assertFalse(expression(check[1], event=event, docs=True))
 
-    def test_journey_runs_on_trains_and_main_only(self):
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_journey_walks_pull_requests_that_touch_its_path(self):
+        lane = textwrap.dedent(re.search(r"- id: lane\n        if: github.event_name == 'pull_request'\n        run: \|\n(.*?)(?=      - )",
+                                         job("journey"), re.S)[1])
+        stub = "git() { printf '%s\\n' \"$*\" > \"$DIFF_ARGS\"; return \"$DIFF_STATUS\"; }\n"
+        for status in (0, 1, 128):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                output, args = Path(tmp) / "output", Path(tmp) / "args"
+                env = {**os.environ, "BASE": "base", "DIFF_STATUS": str(status), "GITHUB_OUTPUT": output.as_posix(),
+                       "DIFF_ARGS": args.as_posix()}
+                subprocess.run([BASH, "-euo", "pipefail", "-c", stub + lane], env=env, capture_output=True, check=True)
+                # Only no difference skips; a failed diff walks the journey
+                self.assertEqual(output.exists() and output.read_text(), status == 0 and "skip=true\n")
+                self.assertEqual(args.read_text().split(), ["diff", "--quiet", "base...HEAD", "--", "web/", "cmd/axiom/",
+                                                            "internal/gateway/", "internal/billing/", "internal/accounts/"])
+        # A skipped lane does not set up, build or walk; the cleanups are cheap and run whatever happened
+        for step in job("journey").split("\n      - "):
+            if any(work in step for work in ("actions/setup", "reports.py prepare", "just web-embed", "dir web journey")):
+                self.assertIn("steps.lane.outputs.skip != 'true'", step, step)
+
+    def test_journey_runs_on_pull_requests_trains_and_main(self):
         cases = (
-            ("frontend PR", "pull_request", {"web": True}, False),
-            ("backend-only PR", "pull_request", {"web": False}, False),
+            ("frontend PR", "pull_request", {"web": True}, True),
+            ("backend-only PR", "pull_request", {"web": False}, True),
             ("docs-only PR", "pull_request", {"docs": True}, False),
             ("train", "workflow_dispatch", {"web": False}, True),
             ("light train", "workflow_dispatch", {"light": True}, False),

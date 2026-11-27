@@ -47,6 +47,7 @@ type Call struct {
 	Hold          *billing.Hold
 	Plan          routing.Plan
 
+	gemini      *geminiInbound // set for a call that came by a Gemini path
 	site        accounts.Site
 	caller      accounts.Caller
 	host        string

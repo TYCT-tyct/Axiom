@@ -213,7 +213,7 @@ func TestExchangeReferenceSelectionAndMissingRate(t *testing.T) {
 	m, _ := snap.Model(id)
 	costs := []PriceCost{priceCost(t, id, "0.000000001")}
 	costs[0].Currency, costs[0].CurrencyCode = cny, "CNY"
-	p, err := proposePrice(defaultPricePolicy(), []Rule{selected, fallback}, m, snap, cny, costs, fallbacks{})
+	p, err := proposePrice(defaultPricePolicy(), []Rule{selected, fallback}, nil, m, snap, cny, costs, fallbacks{})
 	if err != nil || len(p.Schedule) != 0 || !strings.Contains(p.Problem, "no exchange rate") || !strings.Contains(string(p.Basis), selected.ID.String()) {
 		t.Fatalf("missing rate fell through: %+v %v", p, err)
 	}

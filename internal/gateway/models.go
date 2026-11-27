@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
+	"uuid"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
@@ -14,12 +16,20 @@ import (
 	"axiom/internal/routing"
 )
 
-// Every model says it was created at the Unix epoch: the catalog keeps no listing time, and the clients that need the
-// field only need it to be there.
-const (
-	createdUnix = 0
-	createdAt   = "1970-01-01T00:00:00Z"
-)
+// createdOf is when the model was added to the catalog, in Unix seconds, which is what OpenRouter's created says: the
+// catalog's one insert takes its ID from catalog.model's default, uuidv7(), whose first 48 bits are that moment in
+// milliseconds (RFC 9562 §5.7). An ID of another version carries no time and reads as the epoch.
+func createdOf(m catalog.ModelID) int64 {
+	id := uuid.UUID(m)
+	if id[6]>>4 != 7 {
+		return 0
+	}
+	var ms int64
+	for _, b := range id[:6] {
+		ms = ms<<8 | int64(b)
+	}
+	return ms / 1000
+}
 
 // visibility is what the model endpoints show: the catalog snapshot, the models this key may call (nil is every model)
 // and the key's view of the routing snapshot, which says which models have an endpoint its preset leaves it. A model is
@@ -28,16 +38,17 @@ const (
 // in OpenRouter's shape is the one published with the snapshot the view is of, so one response is one build's
 // (openRouterListing.entry).
 type visibility struct {
-	audience billing.Audience
-	snap     *catalog.Snapshot
-	allowed  map[catalog.ModelID]struct{} // nil: every model
-	listing  *openRouterListing
-	keys     *routing.KeyView // nil only where tests read a projection with no key: then no preset narrows it
+	audience   billing.Audience
+	snap       *catalog.Snapshot
+	allowed    map[catalog.ModelID]struct{} // nil: every model
+	listing    *openRouterListing
+	keys       *routing.KeyView // nil for a visitor without a key (publicView): the build's public models, no preset
+	hidePrices bool             // the visitor's site keeps its prices to members
 }
 
 // modelRoutes adds the model list and the single model. The list under /api/v1 is OpenRouter's shape and the one under /v1
-// is OpenAI's and Anthropic's (openrouter.go), so a client is not handed the other protocol's members; the single model
-// follows its prefix's list.
+// is OpenAI's and Anthropic's with OpenRouter's members beside them (openrouter.go); the single model follows its
+// prefix's list.
 func (h *Handler) modelRoutes(prefix string) {
 	list, one := h.listModels, h.retrieveModel
 	if prefix == "/api/v1" {
@@ -63,9 +74,10 @@ func (h *Handler) modelRoutes(prefix string) {
 }
 
 // listModels answers GET /v1/models in the shape of OpenAI's and of Anthropic's at once, so every client reads its own
-// members. A key sees the models it may call and that have an endpoint, by the permission a call is judged with, and a
-// model is listed by its catalog name and, when that name resolves to the same model, by its maker's own: Claude Code
-// takes only the entries whose ID holds "claude" or "anthropic".
+// members, with OpenRouter's beside them for a model the build lists. A key sees the models it may call and that have
+// an endpoint, by the permission a call is judged with, and a visitor without a key sees the site's public ones
+// (publicView); a model is listed by its catalog name and, when that name resolves to the same model, by its maker's
+// own: Claude Code takes only the entries whose ID holds "claude" or "anthropic".
 func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -73,7 +85,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	v, err := h.visible(r)
+	v, err := h.readable(r)
 	var l *listing
 	if err == nil {
 		l, err = h.listingFor(v.snap)
@@ -82,7 +94,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, format, err)
 		return
 	}
-	writeBody(w, l.encode(v)) // no-store: the list is this key's, not a shared cache's
+	writeBody(w, l.encode(v)) // no-store: a key's list is its own, not a shared cache's
 }
 
 // retrieveModel answers GET /v1/models/{model}: the entry the list shows for the name, resolved as a call resolves it,
@@ -95,8 +107,8 @@ func (h *Handler) retrieveModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	var entry modelEntry
-	v, err := h.visible(r)
+	var entry listedEntry
+	v, err := h.readable(r)
 	if err == nil {
 		entry, err = v.model(r.PathValue("model"))
 	}
@@ -104,7 +116,41 @@ func (h *Handler) retrieveModel(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, format, err)
 		return
 	}
-	writeJSON(w, entry)
+	writeBody(w, entry.appendTo(nil, v))
+}
+
+// readable is visible for the lists and the single model, which OpenRouter serves without a key: a request that
+// presents no key at all reads the site's public view, and one that presents a key, even a wrong one, is judged as
+// visible judges it, so a bad key is never quietly read as none.
+func (h *Handler) readable(r *http.Request) (visibility, error) {
+	if len(r.Header.Values("Authorization")) > 0 || len(r.Header.Values("X-Api-Key")) > 0 {
+		return h.visible(r)
+	}
+	return h.publicView(r)
+}
+
+// publicView is what a visitor without a key sees: the models of the last build that a platform endpoint serves, at
+// the price the site's public audience pays (PublicAudience), as the website's models page shows them. It reads no
+// key and no database, so it is the same for every visitor of the site.
+func (h *Handler) publicView(r *http.Request) (visibility, error) {
+	site, err := h.apiSite(r)
+	if err != nil {
+		return visibility{}, err
+	}
+	snap, err := h.currentCatalog()
+	if err != nil {
+		return visibility{}, err
+	}
+	audience, prices := PublicAudience(site)
+	return visibility{snap: snap, listing: h.Models.published(), audience: audience, hidePrices: !prices}, nil
+}
+
+// PublicAudience is whom a visitor without a key or a session is priced as on the site, and whether the site shows
+// that price: its default tier, the price a visitor pays after registering. While a previous-release node, which cannot
+// hide prices, is live, every node keeps them public, so the same site never answers with prices on one node and
+// without on another (docs/domains/gateway.md「价格公开开关」).
+func PublicAudience(site accounts.Site) (audience billing.Audience, prices bool) {
+	return billing.Audience{Tier: site.DefaultTier}, site.ModelPricesPublic || !site.ModelPricesPublicReady
 }
 
 // formatFor is the shell a request that is not a call reads its errors in: Messages' when the client says it speaks
@@ -147,7 +193,8 @@ func (h *Handler) visible(r *http.Request) (visibility, error) {
 	}, nil
 }
 
-// shows says whether the model is for this key to see: it may call it, and its preset leaves it an endpoint.
+// shows says whether the model is for this key to see: it may call it, and its preset leaves it an endpoint. A visitor
+// without a key has no preset to ask; what it sees is the build's (openRouterListing.entry).
 func (v visibility) shows(m catalog.ModelID) bool {
 	return v.allows(m) && v.keys.Serves(m)
 }
@@ -194,26 +241,33 @@ func (h *Handler) authoriseWith(admit func(context.Context, accounts.Caller, acc
 // model resolves the public base name and checks model visibility. Discovery does not apply a call's request-level
 // checks: :thinking describes the base model even when a call would need a reasoning request to serve it, and :exacto
 // is a callable route of the same model. Unknown, retired, unserved and key-hidden models are all model_not_found,
-// never 403.
-func (v visibility) model(name string) (modelEntry, error) {
+// never 403. The entry carries OpenRouter's members when the build lists the model for v; a visitor without a key sees
+// only those models.
+func (v visibility) model(name string) (listedEntry, error) {
 	parsed, ref := parseModelName(name)
 	if ref != nil {
-		return modelEntry{}, ref
+		return listedEntry{}, ref
 	}
 	resolved, err := v.snap.ResolvePublic(parsed.base)
 	if err != nil {
-		return modelEntry{}, err
+		return listedEntry{}, err
 	}
 	m, ok := v.snap.Model(resolved.Model)
-	if !ok || !v.shows(m.ID) {
-		return modelEntry{}, errNoModel
+	if !ok || v.keys != nil && !v.shows(m.ID) {
+		return listedEntry{}, errNoModel
 	}
-	author, display, _ := strings.Cut(m.Slug, "/")
-	return newModelEntry(name, author, display), nil
+	var or *orEntry
+	if e := v.listing.entryOf(v, m.ID); e != nil {
+		or = &e.orEntry
+	} else if v.keys == nil {
+		return listedEntry{}, errNoModel
+	}
+	return encodeEntry(newModelEntry(name, m, or))
 }
 
-// modelEntry is one model as OpenAI's and as Anthropic's clients read it: the members both need, under the name that
-// was asked for.
+// modelEntry is one model as OpenAI's and as Anthropic's clients read it, under the name that was asked for, with
+// OpenRouter's object beside those members when the build has one. The object's own id and created are shadowed: the id
+// is the name asked for, and created is the same moment either way (createdOf).
 type modelEntry struct {
 	ID          string `json:"id"`
 	Object      string `json:"object"`
@@ -222,17 +276,21 @@ type modelEntry struct {
 	OwnedBy     string `json:"owned_by"`
 	Created     int64  `json:"created"`
 	CreatedAt   string `json:"created_at"`
+	*orEntry           // nil: only the members above
 }
 
-func newModelEntry(id, author, display string) modelEntry {
+func newModelEntry(id string, m catalog.Model, or *orEntry) modelEntry {
+	author, display, _ := strings.Cut(m.Slug, "/")
+	created := createdOf(m.ID)
 	return modelEntry{
 		ID: id, Object: "model", Type: "model", DisplayName: display, OwnedBy: author,
-		Created: createdUnix, CreatedAt: createdAt,
+		Created: created, CreatedAt: time.Unix(created, 0).UTC().Format(time.RFC3339), orEntry: or,
 	}
 }
 
 // listing is the catalog's models as the list shows them, encoded once per catalog snapshot: what a request pays is
 // choosing which of the encoded entries its key sees and copying them out, not building and encoding each one again.
+// Its entries lack OpenRouter's members: they serve the models a key sees that the build does not list (entries).
 type listing struct {
 	snap   *catalog.Snapshot
 	models []modelEntries // in the snapshot's order
@@ -245,9 +303,16 @@ type modelEntries struct {
 	size    int // the bytes of its entries and the commas between them
 }
 
-// listedEntry is an entry as JSON, and its ID as a JSON string, which first_id and last_id repeat.
+// listedEntry is an entry as JSON, its ID as a JSON string, which first_id and last_id repeat, and where its pricing
+// lies, for a visitor who may not read it.
 type listedEntry struct {
 	id, body []byte
+	pricing  span
+}
+
+// appendTo appends the entry as v may read it.
+func (e listedEntry) appendTo(buf []byte, v visibility) []byte {
+	return appendObject(buf, e.body, e.pricing, v.hidePrices)
 }
 
 // listingFor is the encoded list of the snapshot, built when the catalog's snapshot is not the one it was built for. A
@@ -264,23 +329,13 @@ func (h *Handler) listingFor(snap *catalog.Snapshot) (*listing, error) {
 	return l, nil
 }
 
-// newListing lists each model of the snapshot by the names that resolve to it: its catalog name, and its maker's own
-// when that is a public name of the same model.
+// newListing lists each model of the snapshot by the names that resolve to it.
 func newListing(snap *catalog.Snapshot) (*listing, error) {
 	l := &listing{snap: snap}
 	for m := range snap.Models() {
-		author, name, _ := strings.Cut(m.Slug, "/")
-		lm := modelEntries{id: m.ID}
-		for _, id := range []string{m.Slug, name} {
-			if r, err := snap.ResolvePublic(id); err != nil || r.Model != m.ID {
-				continue
-			}
-			e, err := encodeEntry(newModelEntry(id, author, name))
-			if err != nil {
-				return nil, err
-			}
-			lm.entries = append(lm.entries, e)
-			lm.size += len(e.body) + 1
+		lm, err := encodeEntries(snap, m, nil)
+		if err != nil {
+			return nil, err
 		}
 		if len(lm.entries) > 0 {
 			l.models = append(l.models, lm)
@@ -289,42 +344,62 @@ func newListing(snap *catalog.Snapshot) (*listing, error) {
 	return l, nil
 }
 
+// encodeEntries are the model's entries, with OpenRouter's object or beside them, under each name the list shows it by:
+// its catalog name, and its maker's own when that is a public name of the same model.
+func encodeEntries(snap *catalog.Snapshot, m catalog.Model, or *orEntry) (modelEntries, error) {
+	_, name, _ := strings.Cut(m.Slug, "/")
+	lm := modelEntries{id: m.ID}
+	for _, id := range []string{m.Slug, name} {
+		if r, err := snap.ResolvePublic(id); err != nil || r.Model != m.ID {
+			continue
+		}
+		e, err := encodeEntry(newModelEntry(id, m, or))
+		if err != nil {
+			return modelEntries{}, err
+		}
+		lm.entries = append(lm.entries, e)
+		lm.size += len(e.body) + 1
+	}
+	return lm, nil
+}
+
 func encodeEntry(m modelEntry) (listedEntry, error) {
 	body, err := jsonx.MarshalCanonical(m)
 	if err != nil {
 		return listedEntry{}, err
 	}
 	id, err := jsonx.MarshalCanonical(m.ID)
-	return listedEntry{id: id, body: body}, err
+	return listedEntry{id: id, body: body, pricing: pricingIn(body)}, err
 }
 
 // idsRoom is what the buffer is given beyond the entries: the list's own members and the two IDs they repeat.
 const idsRoom = 512
 
-// encode is the list as the key sees it, in the canonical form writeJSON would give it (members in key order), made in
-// one buffer sized for the entries it holds. It counts first so a key that sees few models does not pay for the
-// catalog; a model whose route appears or goes between the two passes only makes the count a little off.
+// encode is the list as v sees it, in the canonical form writeJSON would give it (members in key order), made in one
+// buffer sized for the entries it holds. It counts first so a key that sees few models does not pay for the catalog; a
+// model whose route appears or goes between the two passes only makes the count a little off.
 func (l *listing) encode(v visibility) []byte {
 	size := idsRoom
 	for i := range l.models {
-		if v.shows(l.models[i].id) {
-			size += l.models[i].size
+		if lm := l.entries(v, i); lm != nil {
+			size += lm.size
 		}
 	}
 	buf := append(make([]byte, 0, size), `{"data":[`...)
 	var first, last []byte
 	for i := range l.models {
-		if !v.shows(l.models[i].id) {
+		lm := l.entries(v, i)
+		if lm == nil {
 			continue
 		}
-		for _, e := range l.models[i].entries {
+		for _, e := range lm.entries {
 			if first != nil {
 				buf = append(buf, ',')
 			} else {
 				first = e.id
 			}
 			last = e.id
-			buf = append(buf, e.body...)
+			buf = e.appendTo(buf, v)
 		}
 	}
 	buf = append(buf, ']')
@@ -336,4 +411,21 @@ func (l *listing) encode(v visibility) []byte {
 		buf = append(append(buf, `,"last_id":`...), last...)
 	}
 	return append(buf, `,"object":"list"}`...)
+}
+
+// entries is model i as v sees it, nil when v does not: with OpenRouter's members when the build lists it for v (the
+// build's encoding, so the price is the one routing charges), and without them when only what the build does not list
+// serves it to a key, such as an account's own endpoint. A visitor without a key sees the build's models alone.
+func (l *listing) entries(v visibility, i int) *modelEntries {
+	lm := &l.models[i]
+	if v.keys != nil && !v.shows(lm.id) {
+		return nil
+	}
+	if e := v.listing.entryOf(v, lm.id); e != nil && len(e.v1.entries) > 0 {
+		return &e.v1
+	}
+	if v.keys == nil {
+		return nil
+	}
+	return lm
 }

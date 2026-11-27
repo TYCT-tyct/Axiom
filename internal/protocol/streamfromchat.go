@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"fmt"
+	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -40,6 +41,7 @@ type chatToNative struct {
 type chatOutput struct {
 	kind, id, name  string
 	responseID      string
+	custom          bool   // a Responses custom tool's call, whose arguments wrap its input (customFunction)
 	text            []byte // JSON string contents, with escapes intact
 	sent            int
 	started, closed bool
@@ -58,9 +60,10 @@ type nativeChatChoice struct {
 }
 
 type nativeChatTool struct {
-	Index    int64
-	ID, Type string
-	Function nativeChatFunction
+	Index     int64
+	ID, Type  string
+	Function  nativeChatFunction
+	Signature string // Gemini's thought signature (thoughtsignature.go)
 }
 
 type nativeChatFunction struct {
@@ -208,7 +211,7 @@ func (s *chatToNative) choice(choice nativeChatChoice) error {
 		if call.Type != "" && call.Type != "function" {
 			return fmt.Errorf("%w: non-function Chat tool", ErrUpstream)
 		}
-		if err := s.toolDelta(call.Index, call.ID, call.Function.Name, call.Function.Arguments); err != nil {
+		if err := s.toolDelta(call.Index, call.ID, call.Signature, call.Function.Name, call.Function.Arguments); err != nil {
 			return err
 		}
 	}
@@ -249,6 +252,7 @@ func (s *chatToNative) addOutput(kind, id, name string) (int, error) {
 	item := chatOutput{kind: kind, id: id, name: name}
 	if s.client == Responses {
 		item.responseID = s.o.ID + "_" + strconv.Itoa(len(items))
+		item.custom = kind == "tool_use" && slices.Contains(s.o.CustomTools, name)
 	}
 	s.items = append(items, item)
 	return len(s.items) - 1, nil
@@ -267,20 +271,20 @@ func (s *chatToNative) textDelta(kind string, v jsontext.Value) error {
 	return s.appendDelta(i, v)
 }
 
-func (s *chatToNative) toolDelta(index int64, id, name string, v jsontext.Value) error {
+func (s *chatToNative) toolDelta(index int64, id, signature, name string, v jsontext.Value) error {
 	i, exists := s.tools[index]
 	if !exists {
 		if index != int64(len(s.tools)) || id == "" || name == "" || s.toolIDs[id] {
 			return fmt.Errorf("%w: Chat tool starts without consecutive index, id or name", ErrUpstream)
 		}
 		var err error
-		i, err = s.addOutput("tool_use", id, name)
+		i, err = s.addOutput("tool_use", withSignature(id, signature), name)
 		if err != nil {
 			return err
 		}
 		s.tools[index] = i
 		s.toolIDs[id] = true
-	} else if id != "" && id != s.items[i].id || name != "" && name != s.items[i].name {
+	} else if id != "" && withSignature(id, signature) != s.items[i].id && id != s.items[i].id || name != "" && name != s.items[i].name {
 		return fmt.Errorf("%w: Chat tool changed identity", ErrUpstream)
 	}
 	s.active = i

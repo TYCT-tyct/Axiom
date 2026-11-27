@@ -20,14 +20,16 @@
 | Anthropic Messages | `POST /v1/messages`、`/v1/messages/count_tokens` | Claude Code |
 | Embeddings、Rerank | `POST /v1/embeddings`、`/v1/rerank` | RAG |
 | 旧版补全 | `POST /v1/completions` | 旧 SDK |
+| Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent?alt=sse`、`:countTokens` | Gemini SDK、Gemini CLI |
 | 模型列表 | `GET /v1/models`、`/v1/models/{model}` | 所有客户端 |
 
 - **前缀**：所有路径同时以 `/v1` 和 `/api/v1` 提供，只挂在公开监听上，在控制台和网站之前截走（不经控制台的压缩和 404）；路由快照可用前节点不报就绪（[运维](operations.md#部署与节点管理)）。调用路径上的 WebSocket 升级回 400 `invalid_request`。
+- **Gemini**：key 取 `x-goog-api-key`、`?key=` 或 bearer；请求在入口换成 Chat 调用（`protocol.GeminiToChat`，按标准档），路由、预留、计费同 Chat，回复、用量和拒绝（含流中错误）在出口写成 Gemini 的形状，错误是 `{"error":{code,message,status}}`，统一错误类型在 `details` 的 `ErrorInfo.reason`。不转换的成员（`cachedContent`、Google 自己的工具、多候选等）点名 400，`safetySettings` 忽略。`countTokens` 收 `contents` 或包着整个请求的 `generateContentRequest`，同 `count_tokens` 估算，回 `{"totalTokens":n}`。公开监听器把 `/v1beta/` 和 `/v1/`、`/api/v1/` 一样挂给网关。流的每个候选都带非空的 parts，最后一个事件同时带候选的最后一段内容、结束原因和用量，同 Google 自己的流（Google 的 SDK 拒收没有内容的候选）。
 - **直接格式**（embeddings、rerank）：上游回一份 JSON，`stream:true` 回 400；只路由到 `formats` 写了该格式的端点，不做转换。
 - **旧版补全**：只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转；上游一律流式并强制 `stream_options.include_usage:true`，非流式由网关按序聚合每个 choice 的 `text` 和四个 `logprobs` 数组。`prompt` 的数组是一次请求里的多份补全：输入按整批（含 `suffix`）预留、暂估、分档，上下文按最长一份（含 `suffix`）检查，输出按 `n × prompt 数 × 上限` 一次预留、不分段（[计费](billing.md#预留与结算)）。`best_of > 1` 准入前 400；超过报价上限的 `max_tokens` 按上限发；`max_tokens: 0` 是零输出，只带结束原因的空 choice 是正常回答。`echo` 回显算交付文字（决定提交点和空响应）而不算生成输出，无用量时只按回显之后的文字暂估输出，token 数组按每 token 4 字节估。
 - **格式声明**：适配器推不出的格式由管理接口模型映射的 `formats` 声明（省略不改、`[]` 清除、未知 422），与适配器格式取并集，同步不覆盖。
-- **`GET /v1/models`**：OpenAI 与 Anthropic 合一的形状，只列 key 能调用、有端点的模型（权限与调用同一判断）；不能用、没端点和不存在的都回 404 `model_not_found`。Anthropic 模型另列厂商原生名（Claude Code 只认含 `claude`/`anthropic` 的 ID，启动探测 3 秒超时、跳转算失败）。单模型按调用的方式解析别名，`id` 是请求里的名字。没端点（没接供应商、缺规格或售价）的不列，满载、熔断、暂停、预算用尽不让模型少列。`/v1` 下的 `models/count`、`models/user`、`models/{author}/{slug}/endpoints` 回 404 `not_found`。响应带 `Cache-Control: no-store`。`/embeddings/models` 不提供。
-- **`count_tokens`**：返回本地估算的 `{"input_tokens": n}`，不转发、不收费、不记录，只收调用 key，频率池与调用分开。
+- **`GET /v1/models`**：OpenAI 与 Anthropic 合一的形状，同次构建列出的模型旁边另带 OpenRouter 模型对象的成员（`id`、`created` 取本形状的，见下文模型对象）；只列 key 能调用、有端点的模型（权限与调用同一判断），不带 key 时同 `/api/v1/models` 的公开视图；不能用、没端点和不存在的都回 404 `model_not_found`。Anthropic 模型另列厂商原生名（Claude Code 只认含 `claude`/`anthropic` 的 ID，启动探测 3 秒超时、跳转算失败）。单模型按调用的方式解析别名，`id` 是请求里的名字。没端点（没接供应商、缺规格或售价）的不列，满载、熔断、暂停、预算用尽不让模型少列。`/v1` 下的 `models/count`、`models/user`、`models/{author}/{slug}/endpoints` 回 404 `not_found`。响应带 `Cache-Control: no-store`。`/embeddings/models` 不提供。
+- **`count_tokens`**：转给调用会走的路由里第一个原生 Messages 的端点（模型换成端点的名字，只带 `model`、`messages`、`system`、`tools`、`tool_choice`、`thinking`），回它的数；没有这样的端点、云平台端点、出错、3 秒没答或答得不对，回本地估算。不收费、不记录，失败不让凭证或端点冷却，只收调用 key，频率池与调用分开。
 - **鉴权**：`Authorization: Bearer` 或 `x-api-key`；key 只能在所属站点登记的 API 域名上用（[API key](accounts.md#api-key)）；只凭域名和请求头认 key，认出前不读请求体，认不出立即 401 并关连接。浏览器跨域默认不允许，站点可为指定来源开放。
 - **限制**：下表是代码默认值（`gateway.DefaultConfig`），各项关系启动时校验，不满足不启动。
 
@@ -48,13 +50,14 @@
 
 - **同一次构建**：`/api/v1` 的列表、计数、端点、供应商投影与路由快照一起构建、一起发布，失败或迟到都不换，所以列表价就是收费价，一次响应的计数、本页和下一页链接一致。响应数据只读内存，鉴权仍走准入事务（实时查停用、过期、IP、模型权限）。
 - **过滤**：模型列表按 key 的路由预设过滤硬条件，价格取预设下最便宜的端点，预设不可用回 503 `preset_unavailable`；只列有公共端点（Owner 为零）和售价的模型，私有端点不进投影。端点列表不按 key 过滤。
+- **不带 key**（同 OpenRouter）：请求既没有 `Authorization` 也没有 `x-api-key` 时，列表、单模型和计数回公开视图：本次构建的公共模型，按站点默认等级定价，与网站匿名模型页同一判断（`gateway.PublicAudience`），不读库、对所有访客相同，仍占每 IP 名额。带了 key 但不对仍是 401，不降为匿名。`/models/user`、endpoints、providers 仍要 key。
 
 模型对象（`/api/v1/models`、`/{model}`、`/user`）：
 
 | 成员 | 值 |
 |---|---|
 | `id`、`canonical_slug` | 公开标准 ID `author/slug`（去掉内部版本后缀）；解析不回本模型的不列 |
-| `name`、`created` | 去掉作者的部分；0 |
+| `name`、`created` | 去掉作者的部分；模型加入目录的时刻（Unix 秒），取自模型 ID（`catalog.model` 默认 `uuidv7()`），不另存列；`/v1` 的 `created_at` 是同一时刻 |
 | `links.details` | 指向本 API 的 endpoints 路径 |
 | `pricing` | 账户当前等级的主站售价里，可服务且预设留下的最便宜端点；标准服务等级、第一档，精确十进制字符串（token 项美元/token，`web_search` 每次，`image`/`image_output` 每张）。没有的单位（`request`、`input_audio_cache`、`discount`、`overrides`、无按张价的图片项）省略；`image_token` 只给收图片的，`internal_reasoning` 只给会推理的 |
 | `context_length`、`top_provider` | 规格的上下文和输出上限；`is_moderated` false；`per_request_limits` null |
@@ -62,19 +65,19 @@
 | `supported_parameters`、`reasoning` | 按能力与方言推导；手动思考预算给 `supports_max_tokens:true`；`mandatory` 和 effort 列表省略（有意偏离：未知不写 false） |
 | `default_parameters`、`supported_voices` | null；`description` 等目录没有的数据省略 |
 
-- **列表查询**：`offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`（美元/百万 token）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`；`sort` 为 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`。无分页参数返回全量，只给 `offset` 时 `limit` 为 500。其余官方参数（`category`、`providers`、`zdr`、`use_rss` 等）按名字 400 并说明缺什么；非官方参数忽略；查询串解不开（`%ZZ`、`;`）回 400，免得丢掉的过滤变成全量。`links.next` 只在后面还有模型时给。
-- **单模型**返回 `{data: 模型对象}`，`id` 是标准 ID。**`/models/user`** 复用 key 的权限和同一列表，不假装按供应商偏好、隐私或护栏过滤。**`/models/count`** 是本 key 可见的公共模型数，`output_modalities` 同列表（默认 text，`all` 不限），非法值和重复参数 400。
+- **列表查询**：`offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`（美元/百万 token）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`；`sort` 为 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`、`newest`（`created` 新的在前，同一秒按模型 ID 新的在前）。无分页参数返回全量，只给 `offset` 时 `limit` 为 500。其余官方参数（`category`、`providers`、`zdr`、`use_rss` 等）按名字 400 并说明缺什么；非官方参数忽略；查询串解不开（`%ZZ`、`;`）回 400，免得丢掉的过滤变成全量。`links.next` 只在后面还有模型时给。
+- **单模型**返回 `{data: 模型对象}`，`id` 是标准 ID。**`/models/user`** 复用 key 的权限和同一列表，不假装按供应商偏好、隐私或护栏过滤。**`/models/count`** 是本 key（不带 key 时公开视图）可见的公共模型数，`output_modalities` 同列表（默认 text，`all` 不限），非法值和重复参数 400。
 - **`/models/{author}/{slug}/endpoints`**：公开投影（页面注明可能不适用于当前 key）。`tag` 是供应商分组的持久代号（`g` 加 8 位 base32），首次选用时随机分配、不再改、跨模型相同、不从供应商数据派生，也是 `provider.only`/`ignore` 和平台预设顺序认的身份；中转分组的 `provider_name` 是 Axiom，官方直连接入后用真名；不给内部 UUID。上下文与输出上限取各原生格式实测值的下限，参数取逐格式实测的交集（[端点评估](quality.md#实测的能力与上限)），`pricing` 是端点自己的价，`quantization` 是管理员记录值或 null；`uptime_last_*`（百分比）、`latency_last_30m`（毫秒）、`throughput_last_30m` 取[端点评估的近期表现](quality.md#质量分吞吐与延迟)，未知为 null，OpenRouter 只对登录者给延迟和吞吐，这里谁都给（不含供应商信息）；没有数据的成员为 null 或省略，不把未知写成 false（官方必填的几项是有意偏离）。实时状态不影响结果。`/api/v1/providers` 有可见端点时只有 Axiom/`axiom` 一项，否则空数组。
 
 **网站和控制台的模型与价格**是同一次构建的另一份投影：`GET /api/console/v1/models` 匿名、按站点默认等级；`/models/account` 要登录、按账户等级。含已发布有价的公共模型（ID、名字、厂商、上下文、最大输出、流式、能力、`catalog.ScheduleView` 的逐项单价）和它的每个端点（代号、限制、能力、量化、是否验证、该受众的价；无价的端点不列），模型价取最便宜端点；单价带 `headline` 和 `display_amount`/`display_per`（[目录的「决策与理由」](catalog.md#决策与理由)）。不返回供应商、成本或价格来源；缺 `endpoints` 或价格时页面显示不可用，不当免费。
 
-**价格公开开关** `model_prices_public`（`accounts.site_settings`，NULL 为公开）：关闭时匿名 `/models` 省略模型和端点的 `pricing`，`/models/account` 照常；匿名答案不认会话，对所有访客相同；有列表无价时页面显示「价格仅对登录用户可见」。只有所有存活节点的心跳都声明 `supports_model_prices_public`（`platform.model_prices_public_readiness`）时关闭才生效，否则匿名照常带价、管理接口拒绝关闭，旧节点重新加入时回退为公开；旧管理页省略字段时保留原值，新管理页核对 PUT 的返回、字段缺席提示未保存，且只在节点 `defaults` 带此字段时显示它。
+**价格公开开关** `model_prices_public`（`accounts.site_settings`，NULL 为公开）：关闭时匿名 `/models` 省略模型和端点的 `pricing`，网关不带 key 的模型列表、单模型同样省略 `pricing`，并对按价过滤和排序回 400（否则能试出价格）；`/models/account` 和带 key 的照常；匿名答案不认会话，对所有访客相同；有列表无价时页面显示「价格仅对登录用户可见」。只有所有存活节点的心跳都声明 `supports_model_prices_public`（`platform.model_prices_public_readiness`）时关闭才生效，否则匿名照常带价、管理接口拒绝关闭，旧节点重新加入时回退为公开；旧管理页省略字段时保留原值，新管理页核对 PUT 的返回、字段缺席提示未保存，且只在节点 `defaults` 带此字段时显示它。
 
 ### 转发规则
 
 依据 Claude Code 的网关兼容指南。
 
-- **请求头白名单**（`internal/gateway/headers.go`）：Messages 端点收 `anthropic-beta`（不筛值）、`anthropic-version`；Responses 端点收 `x-codex-turn-state`；Responses、Chat、旧版补全端点收会话头 `session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`，值换成派生值。其余（`Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`User-Agent`、归因头 `HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）不转发，归因头记入调用记录（[记录](observability.md#写入时记全)）。
+- **请求头白名单**（`internal/gateway/headers.go`）：Messages 端点收 `anthropic-beta`（不筛值；发往 Vertex AI 和 Bedrock 时只留它们接受的）、`anthropic-version`；Responses 端点收 `x-codex-turn-state`；Responses、Chat、旧版补全端点收会话头 `session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`，值换成派生值。其余（`Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`User-Agent`、归因头 `HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）不转发，归因头记入调用记录（[记录](observability.md#写入时记全)）。
 - **派生标识**：`prompt_cache_key`、会话头、`metadata.user_id` 换成用账户密钥派生的不透明值（[会话粘性](routing.md#会话粘性)）。`metadata.user_id` 写成 JSON 串 `{"device_id":"…","account_uuid":"","session_id":"…"}`，`device_id` 每账户固定，空白的写空串；`user`、`safety_identifier` 换成哈希。
 - **上游一律流式**，非流式由网关聚合，所以交付前失败仍可换端点、各次尝试不混。
 - **只改必须改的**：`model` 换成端点的名字，标识派生，路由参数和 `axiom` 扩展删除；同格式时缓存标记、块状 system 和 Chat 的方言成员（`reasoning`、`cache_control`、回传的 `reasoning_content` 等）原样发。
@@ -123,7 +126,7 @@
 
 ### 错误
 
-- **外壳**：Messages 用 Anthropic 的；其余用 OpenAI 的 `error` 对象（`message`、`type`、`param`、`code`），`type` 用下面 Messages `type` 的词，`param` 缺省为空串，`code` 是与状态行相同的数字。统一的 `error_type` 在 Chat 的 `error.metadata.error_type`、Messages 的 `error.error_type`、Responses `response.failed` 的顶层；Responses 流开始前出错用 Chat 外壳，原生事件用字符串 `code`。
+- **外壳**：Messages 用 Anthropic 的；其余用 OpenAI 的 `error` 对象（`message`、`type`、`param`、`code`），`type` 用下面 Messages `type` 的词，`param` 缺省为空串，`code` 是与状态行相同的数字。统一的 `error_type` 在 Chat 的 `error.metadata.error_type`、Messages 的 `error.error_type`、Responses `response.failed` 的顶层；Responses 流开始前出错用 Chat 外壳，原生事件用字符串 `code`；Gemini 路径用 Google 的（见「路径与格式」）。请求 ID 在每个回答的 `X-Request-ID` 头，Messages 的错误体另带顶层 `request_id`，同 Anthropic。
 - **上游拒绝请求本身时给原话**（Claude Code 靠它恢复）：交出 `message`、`type`、`param`，上游 code 放 `metadata.provider_code`（Responses 原生流在 `response.error.code`），先去掉网址、本站的凭证、形似凭证的串（`sk-`、`ak-`、`Bearer`、`api_key=`）、供应商域名及其各级上级域名、new-api 的 `(request id: …)` 和 new-api/one-api/sub2api 的名字；每项最多 2 KiB，流内超长的整项省略；中转软件自己的 `type` 和 code 不传。原话只进这次回复，不进日志和表。
 - **其余错误**（本站的、上游 429 和 5xx）用统一说法。非法 JSON 回 400 “Invalid request: invalid JSON request body”，类型错的值用 JSON 指针指出。
 - **Messages 的 `type`**：400 `invalid_request_error`、401 `authentication_error`、402 和预算 403 `billing_error`、其余 403 `permission_error`、404 `not_found_error`、408 `timeout_error`、413 `request_too_large`、429 `rate_limit_error`、502 和 `billing_unavailable` `api_error`、其余 503 `overloaded_error`。
@@ -167,7 +170,7 @@ OpenRouter 付费模型没有平台级速率上限；Axiom 对付费调用也施
 
 - **接受**（语义与组合见[请求覆盖](routing.md#请求覆盖)和[请求覆盖与组合](routing.md#请求覆盖与组合)，都不能放宽 key 的预设）：`provider` 对象（`only`、`ignore`、`order`、`allow_fallbacks`、`require_parameters`、`data_collection`、`zdr`、`sort`、`max_price`、性能偏好、`quantizations`）；`models` 备选，Messages 也认 `fallbacks: [{model}]`（[命名预设](routing.md#命名预设)）；模型名变体；`@preset/名称`、`model@preset/名称`、`preset`（账户的命名请求配置）；`session_id`、`x-session-id` 头、`prompt_cache_key`（体优先，最多 256 字符）；`user`。
 - **要点**：`only`/`ignore`/`order` 用分组公开代号精确匹配（区分大小写），未知的 `only`、关闭回退时未知的 `order` 回 404，空列表和 `null` 不加限制。`sort` 收 `price`/`throughput`/`latency` 或 `{by, partition}`。`max_price.prompt`/`completion` 按本站货币每百万 token、`request` 按每个生成请求，只收可精确表示的十进制，非美元站点不声称美元上限。性能偏好的数字按 EWMA、分位对象按滚动五分钟窗口，不满足的排后不排除。`quantizations` 匹配管理员记录的级别。`require_parameters: true` 按端点实际调用格式的有效参数清单（含实测）过滤，请求里出现的能力参数才算需要。
-- **偏离**：无法兑现的在预留前回 400 `invalid_request` 并点名 `provider` 成员。
+- **偏离**：认识的成员取值无法兑现时在预留前回 400 `invalid_request` 并点名；不认识的成员（`enforce_distillable_text`、`options` 等）忽略，同 OpenRouter。
 
 | 参数 | 这里与理由 | 支持还需要 |
 |---|---|---|
@@ -270,7 +273,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | 决策 | 理由 |
 |---|---|
 | 同时提供 `/v1` 和 `/api/v1` | OpenRouter 的客户端只改地址就能接入。 |
-| 请求头白名单，`anthropic-beta` 不筛值 | 筛值会让新功能失效；客户端凭证和身份不能流向上游。 |
+| 请求头白名单，`anthropic-beta` 不筛值（Vertex AI、Bedrock 除外） | 筛值会让新功能失效；客户端凭证和身份不能流向上游。 |
 | 标识换成派生值 | 删除让上游缓存失效，原样转发会串租户。 |
 | 上游一律流式，强制 `include_usage`，输出上限写在端点读的成员里 | 计量要靠上游用量，端点忽略的上限罩不住预留。 |
 | 能同格式就不转换 | 转换会拒绝表达不了的成员。 |
@@ -289,6 +292,8 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | `/key` 只投影已有策略和计数 | 不造 ID，不引入第二份资金事实。 |
 | 发现与价格页复用路由构建的投影 | 页面价、列表价和扣费出自同一份发布。 |
 | 端点 `tag` 用持久分组代号 | 它就是路由认的值，跨模型不变且不泄露货源。 |
+| 模型列表不带 key 可读，带错 key 仍 401 | 同 OpenRouter 公开 `/models`；错 key 降为匿名会掩盖配置错误。 |
+| `created` 取模型 ID 的 UUIDv7 时间 | 就是加入目录的时刻，`sort=newest` 有了依据，不加列。 |
 | 价格用 `ScheduleView` | 折成每百万 token 会让按次和分档的价显示错。 |
 | 价格默认公开，等全部节点就绪才可关 | 与 OpenRouter 一致；有旧节点时会一半隐藏一半泄露。 |
 | 发现接口保留实时准入 | 缓存身份会放行已撤销的 key。 |
@@ -306,7 +311,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | `completions` 编号追加在末尾 | 已存的 `embeddings`、`rerank` 编号不变。 |
 | 推不出的格式由模型映射声明 | 按渠道类型猜会误标；直接改同步表会被覆盖。 |
 | compact 只换 `usage` | 每次调用都要返回用量和费用。批准：2026-10-28，#309。 |
-| `count_tokens` 本地估算 | 转发要占端点名额；文件按固定页数可能偏低，不承诺不超窗口。 |
+| `count_tokens` 先问上游、答不了才估算 | 上游用自己的分词器，估算对文件按固定页数可能偏低；只走调用会走的路由，正文不去调用去不了的地方；中转站常没有这条路由，所以失败不算凭证和端点的错。 |
 | `/credits`、`/key` 也收管理 key | 与 OpenRouter 一致，保留中转站常用的调用 key。批准：2026-10-28，#309。 |
 | 提供两种余额接口 | new-api 查 OpenAI 类渠道用旧版接口，OpenRouter 格式服务兼容工具。 |
 | 内容接口不给内容，`activity` 不给端点 | 产品不让人查看内容，货源不公开。 |

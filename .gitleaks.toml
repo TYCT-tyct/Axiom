@@ -90,3 +90,13 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^web/console/src/pages/usage-props\.ts$''']
 regexes = ['''^p\.chips\.keyOpts0\.length$''']
+
+# The deploy rehearsal's stub admin API answers the two-step setup with a fixed TOTP secret, the base32 of "1234567890",
+# so the rehearsal can compute its codes. It reaches no server but the stub, and it is already in pushed commit
+# c4de9d09, which cannot be rewritten. Allow that exact value in that file only; any other value there still fails.
+[[allowlists]]
+description = "fixed TOTP secret of the deploy rehearsal's stub admin API"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^scripts/test_release_deploy\.py$''']
+regexes = ['''^GEZDGNBVGY3TQOJQ$''']

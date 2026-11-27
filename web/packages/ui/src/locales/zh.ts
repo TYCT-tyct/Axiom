@@ -45,6 +45,8 @@ const codes = {
   preset_in_use: "还有默认值在用这个路由预设，先改默认值。",
   preset_quota: "这个账户的路由预设已达上限，改一个现有的吧。",
   presets_suspended: "平台暂停了路由预设，现在不能改预设、默认值或 key 的预设，恢复后再试。",
+  code_reused: "这个验证码已经用过，请用验证器显示的下一个。",
+  email_unavailable: "本站没有配置邮件，这一步要发邮件到你的邮箱，暂时不能完成。请联系站点管理员。",
 } satisfies Record<ErrorCode, string>;
 
 // Messages the shared components show, in Chinese: the source every other language follows.

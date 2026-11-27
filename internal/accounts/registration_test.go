@@ -379,7 +379,7 @@ func TestOpenRegistrationWithoutMailRefuses(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: "no-mail@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrBusy) {
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: "no-mail@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrMailDisabled) {
 		t.Fatalf("without mail: %v", err)
 	}
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests"); got != 0 {
@@ -446,5 +446,39 @@ func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	}
 	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client); err != nil {
 		t.Fatalf("verify after the deny was removed: %v", err)
+	}
+}
+
+// TestVerificationJoinsTheDefaultTierOfTheClick: the account a verified registration makes joins the site's default
+// tier as it is when the link is clicked, so a default changed while the link was pending, and a tier disabled since,
+// is never the new account's.
+func TestVerificationJoinsTheDefaultTierOfTheClick(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 100, 1000)
+	const email = "late-tier@example.com"
+	x.registerPending(t, console, email)
+	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
+		t.Fatal(err)
+	}
+	old := x.defaultTier(t, accounts.SiteID(s1))
+	disable := true
+	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		pro, err := x.s.CreateTier(t.Context(), tx, system, accounts.SiteID(s1), "Pro", "a new default")
+		if err != nil {
+			return err
+		}
+		if err := x.s.SetDefaultTier(t.Context(), tx, system, pro.ID, "promote"); err != nil {
+			return err
+		}
+		_, err = x.s.UpdateTier(t.Context(), tx, system, old, accounts.TierChange{Disabled: &disable}, "retire")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	x.verifyAt(t, console, x.token(t, email))
+	if got := texts(t, x.db, platform, "SELECT t.name FROM accounts.users u JOIN accounts.accounts a ON a.id = u.account_id "+
+		"JOIN accounts.tiers t ON t.id = a.tier_id WHERE u.email = '"+email+"'"); got[0] != "Pro" {
+		t.Errorf("the new account joined %v, want the default at the click, Pro", got)
 	}
 }

@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "path": "/api/v1/model-plaza",
+ "status": 404,
+ "header": {},
+ "body": {
+  "code": 404,
+  "message": "Model plaza is not enabled"
+ }
+}

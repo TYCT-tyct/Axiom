@@ -14,6 +14,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"axiom/internal/catalog"
@@ -266,4 +267,19 @@ func Post(ctx context.Context, url string, body []byte, h http.Header) (*http.Re
 	maps.Copy(req.Header, h)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
+}
+
+// Betas is the features of the anthropic-beta header values that the platform takes, each by the name the platform
+// knows it (accepted maps a feature to that name), once each in the client's order; nil for none. A platform answers a
+// feature it does not know with an error that fails the whole call, so what accepted lacks does not go on.
+func Betas(values []string, accepted map[string]string) []string {
+	var out []string
+	for _, v := range values {
+		for f := range strings.SplitSeq(v, ",") {
+			if name, ok := accepted[strings.TrimSpace(f)]; ok && !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }

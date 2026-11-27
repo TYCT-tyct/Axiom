@@ -51,6 +51,8 @@ const (
 	codePresetInUse           errorCode = "preset_in_use"
 	codePresetQuota           errorCode = "preset_quota"
 	codePresetsSuspended      errorCode = "presets_suspended"
+	codeCodeReused            errorCode = "code_reused"
+	codeEmailUnavailable      errorCode = "email_unavailable"
 )
 
 // errorField is one part of a request that broke a constraint: a JSON pointer into the body, or the name of a query

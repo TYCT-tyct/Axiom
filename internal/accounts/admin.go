@@ -18,8 +18,10 @@ import (
 
 // Tier is a tier of a site.
 type Tier struct {
-	ID   TierID
-	Name string
+	ID       TierID
+	Name     string
+	Disabled bool // no account, sign-up or default moves onto it any more
+	Default  bool // the tier new accounts join
 }
 
 // SiteSettings are a site's own values for the sessions and keys its users get, and how public its model prices are.
@@ -262,7 +264,7 @@ func (s *Service) Tiers(ctx context.Context, tx pg.Tx, site SiteID) ([]Tier, err
 	}
 	tiers := make([]Tier, len(rows))
 	for i, r := range rows {
-		tiers[i] = Tier{TierID(r.ID), r.Name}
+		tiers[i] = Tier{ID: TierID(r.ID), Name: r.Name, Disabled: r.Disabled, Default: r.IsDefault}
 	}
 	return tiers, nil
 }
@@ -318,7 +320,7 @@ func (s *Service) Users(ctx context.Context, tx pg.Tx, q UserQuery) (users []Use
 	for i, r := range rows {
 		users[i] = UserSummary{
 			ID: UserID(r.ID), Account: AccountID(r.AccountID), Site: SiteID(r.SiteID), Email: r.Email, Status: r.Status,
-			Tier: Tier{TierID(r.TierID), r.TierName}, MFA: r.Mfa, CreatedAt: r.CreatedAt.Time,
+			Tier: Tier{ID: TierID(r.TierID), Name: r.TierName}, MFA: r.Mfa, CreatedAt: r.CreatedAt.Time,
 		}
 	}
 	return users, more, nil
@@ -351,7 +353,7 @@ func (s *Service) Account(ctx context.Context, tx pg.Tx, id AccountID) (AccountD
 	r := rows[0]
 	a := AccountDetail{
 		ID: AccountID(r.ID), Site: SiteID(r.SiteID), Name: r.Name, Kind: r.Kind, Status: r.Status,
-		Tier: Tier{TierID(r.TierID), r.TierName}, CreatedAt: r.CreatedAt.Time,
+		Tier: Tier{ID: TierID(r.TierID), Name: r.TierName}, CreatedAt: r.CreatedAt.Time,
 	}
 	a.Owner.ID, a.Owner.Email, a.Owner.SignInDisabled = UserID(r.OwnerID), r.OwnerEmail, r.OwnerStatus == "disabled"
 	return a, nil

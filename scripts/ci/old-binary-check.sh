@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# The rolling release's other half: build the program the deployment replaces, migrate a database with this tree's
-# migrations, start that program against the schema and wait for its readiness probe. The Go test only freezes the
+# The rolling release's other half: build the program the deployment replaces, migrate a database with its migrations
+# and write a site and a user with its command line, migrate that database forward with this tree's migrations, start
+# the old program against the schema, wait for its readiness probe and sign the user in. The Go test only freezes the
 # previous release's startup audit of the checksum table; this starts the old binary itself.
 #
-# The old program is the release this deployment replaces: BASE for a train (the commit the train was assembled on),
-# the base named by a main landing's Train trailer, or HEAD^ for a plain main commit. Older releases are not required
+# The old program is the release this deployment replaces: AXIOM_PRODUCTION_RELEASE, the commit production runs, once
+# there is one; otherwise BASE for a train (the commit the train was assembled on), the base named by a main landing's
+# Train trailer, or HEAD^ for a plain main commit. Older releases are not required
 # to start: a release may make a one-way change while no production node exists, and billing's
 # removal of the former fallback markup field is one (docs/domains/billing.md「决策与理由」). Such a change makes this check fail;
 # whether to accept that is a release decision.
@@ -15,7 +17,7 @@
 #
 # usage: old-binary-check.sh --current-image IMAGE [--old-ref REF]
 #   --current-image   the image built from this tree, used to run the migrations; it must already be pulled
-#   --old-ref         the release to start; default BASE, the tip's Train base, or HEAD^
+#   --old-ref         the release to start; default AXIOM_PRODUCTION_RELEASE, BASE, the tip's Train base, or HEAD^
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -35,7 +37,9 @@ if [ -z "$current_image" ]; then
   exit 2
 fi
 if [ -z "$old_ref" ]; then
-  if [ -n "${BASE:-}" ]; then
+  if [ -n "${AXIOM_PRODUCTION_RELEASE:-}" ]; then
+    old_ref="$AXIOM_PRODUCTION_RELEASE"
+  elif [ -n "${BASE:-}" ]; then
     old_ref="$BASE"
   else
     # A push to main lands a whole train at once. The tip's trailer names the base the train was assembled on, so the
@@ -161,7 +165,16 @@ fi
 migrator_url="postgres://axiom_migrator:$migrator_password@127.0.0.1:$database_port/axiom?sslmode=disable"
 app_url="postgres://axiom_app:$app_password@127.0.0.1:$database_port/axiom?sslmode=disable"
 
-echo "migrating a database to this tree"
+# The database as the replaced release leaves it: its own migrations, then a site and a user its own command line
+# made, as a deployment's users would have. This tree's migrations then carry it forward, as a release does.
+old() { env -i PATH="$PATH" AXIOM_DATABASE_URL="$app_url" "$work/old-axiom" "$@"; }
+echo "migrating a database to the old release and writing its data"
+env -i PATH="$PATH" AXIOM_MIGRATE_DATABASE_URL="$migrator_url" AXIOM_MIGRATE_CONNECT_TIMEOUT=10s AXIOM_MIGRATE_TIMEOUT=5m \
+  "$work/old-axiom" migrate
+old site init --name "Old release" --currency USD --console localhost --api api.old.example > /dev/null
+user_password="$(openssl rand -hex 16)"
+printf '%s\n' "$user_password" | old user create --email old@example.com > /dev/null
+echo "migrating it forward to this tree"
 docker run --rm --network host \
   -e "AXIOM_MIGRATE_DATABASE_URL=$migrator_url" \
   -e AXIOM_MIGRATE_CONNECT_TIMEOUT=10s -e AXIOM_MIGRATE_TIMEOUT=5m \
@@ -173,7 +186,9 @@ umask 077
 for key in master hash identity; do
   printf '1:%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')" > "$work/keys/$key"
 done
-probe_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+probe_port="$(free_port)"
+public_port="$(free_port)"
 echo "starting the old release $old_commit"
 (
   cd "$work/run"
@@ -182,7 +197,7 @@ echo "starting the old release $old_commit"
     AXIOM_MASTER_KEY_FILE="$work/keys/master" \
     AXIOM_KEY_HASH_FILE="$work/keys/hash" \
     AXIOM_IDENTITY_KEY_FILE="$work/keys/identity" \
-    AXIOM_PUBLIC_ADDR=127.0.0.1:0 AXIOM_ADMIN_ADDR=127.0.0.1:0 \
+    AXIOM_PUBLIC_ADDR="127.0.0.1:$public_port" AXIOM_ADMIN_ADDR=127.0.0.1:0 \
     AXIOM_PROBES_ADDR="127.0.0.1:$probe_port" \
     AXIOM_STARTUP_TIMEOUT=60s AXIOM_SHUTDOWN_TIMEOUT=5s \
     "$work/old-axiom" serve
@@ -208,3 +223,14 @@ if [ "$ready" != true ]; then
   exit 1
 fi
 echo "the old release $old_commit serves /readyz against the schema migrated from this tree"
+
+# A rollback keeps the new schema (docs/ops/release.md), so the old release must still serve the users it had.
+status="$(jq -cn --arg password "$user_password" '{email:"old@example.com", password:$password}' |
+  curl --silent --max-time 10 --output /dev/null --write-out '%{http_code}' -H 'Host: localhost' -H 'Origin: http://localhost' \
+    -H 'Content-Type: application/json' --data-binary @- "http://127.0.0.1:$public_port/api/console/v1/auth/sign-in" || true)"
+if [ "$status" != 200 ]; then
+  echo "::error::the old release $old_commit does not sign in the user it made, after the migration forward: $status" >&2
+  tail -100 "$work/old.log" >&2 || true
+  exit 1
+fi
+echo "the old release $old_commit signs in the user it made before the migration forward"

@@ -204,7 +204,7 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor,
 	models *gateway.ModelList,
 ) (callNode, error) {
-	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
+	memory, outstanding, up := protocol.NewMemory(nodeMemory), gateway.NewOutstanding(), gateway.NewUpstreams(upstreams)
 	var (
 		cache *gateway.ResponseCache
 		err   error
@@ -216,7 +216,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		}
 	}
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
-		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
+		Router: router, Upstreams: up, Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
 		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search, Cache: cache,
 	})
@@ -225,7 +225,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
+		Memory: memory, Run: executor.Run, Upstreams: up, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 		Outstanding: outstanding, Search: d.search, Parser: d.fileParser, Records: d.records,
 	})
 	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache, health: health, router: router}, err

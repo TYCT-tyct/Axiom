@@ -6,7 +6,7 @@
 
 | 场景 | 执行 |
 |---|---|
-| PR | `static`、按路径选择的 `web` 和 `boards`；Go 道选中时跑四片 Go 测试，e2e 道选中时跑四个 e2e 分片，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
+| PR | `static`、按路径选择的 `web` 和 `boards`；Go 道选中时跑四片 Go 测试，e2e 道选中时跑四个 e2e 分片，改到 `web/`、`cmd/axiom/`、`internal/{gateway,billing,accounts}/` 时跑 `journey`，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
 | 列车 | 按整班车相对 `base` 的路径选择，Go 道、e2e 道与 PR 同一规则，另跑 `journey`、`bench`、`deploy`、`signing`；不跑 `vitals` 和 `boards`；失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
 | `main` | 每次推送选择全部作业，Go 测试带竞态检测和覆盖率；同一提交、同一树已有成功列车构建时，复用其中实际通过的作业（Go 测试除外），其他作业照跑；无证据则全量。main 失败最先修 |
 | 轻量 PR / 列车 | 按受管的 `[lanes] light` 排除 `[lanes] code`，包括纯 Markdown；`static` 跑 `just md-checks scope`（含脚本测试），列车再跑 `secrets` |
@@ -20,7 +20,7 @@
 - `vitals`：独立串行页面计时；只在 main 上跑，PR 和列车都不跑；相同构建通过后可命中内容缓存。目标与实际门禁见[前端](../frontend.md#实测)。
 - `e2e`：四个按耗时分配的分片（`scripts/ci/playwright.py e2e i/4`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
 - `boards`：四个按耗时分配的分片，各两个 worker，独立运行 `playwright.boards.config.ts`，不启动产品 Go 服务。PR 按画板包、转换脚本、证明及设计工具、Playwright 配置、锁文件、固定字体数据、CI 脚本和 setup action 的路径选择，路径比较失败也跑；列车不跑；main 总是选择。每片按单板内容和选中的测试集合复用通过结果，只有未命中的比较进入 Playwright；整个选中集合通过才记通过标记。失败保留截图、diff 和 trace，不反复序列化大型整板 DOM；单例上限三分钟，分片上限 30 分钟。
-- `journey`：只在列车和 main 上跑；浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
+- `journey`：主流程的端到端测试。PR 改到 `web/`、`cmd/axiom/`、`internal/{gateway,billing,accounts}/` 时跑（作业里的 `lane` 步骤比较差异，只有「没有差异」才跳过，比较失败照跑），列车和 main 都跑；约 5 分钟，短于同一 PR 必跑的 go-test 与 e2e 分片，不拉长墙钟。浏览器对真实 Axiom、PostgreSQL、Valkey 走注册、两步验证登录、建 key、充值、三种格式整份与流式调用、余额对账到停用 key，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
 - `bench`：列车用 base 的 `tools/benchgate` 比分配，门禁或其模块依赖变化时再用当前版本比，两次都须过；main 用 `bench-once` 带竞态每项一次。基准不混进 `test`；非轻量改动仅纯 Markdown 或纯 `web/` 可跳过基准。
 - `deploy`：只有每个改动文件都明确不影响容器时跳过。排除 Markdown、Go 测试、testdata、`.github/`、轻量脚本、web e2e/journey 与其 Playwright 配置；生产 Go、模块文件、应用源码、迁移、deploy、Dockerfile、justfile 都触发。签名检查也在列车和 main 执行。
 
@@ -100,8 +100,9 @@ Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时�
 `deploy-check.sh` 为每个 runner 与工作区哈希生成独立 compose 项目、镜像、卷和空闲端口；前后清自身资源，失败先输出日志。数据库镜像每作业只构建一次，列车复用已构建镜像，防止标签或 provenance 变化重建正在服务的库。
 
 - Compose 不另加命令墙钟期限或 `--wait-timeout`；步骤上限 20 分钟、作业上限 22 分钟，健康等待由健康条件控制，数据库 `start_period` 2 分钟；down 最多 5 秒，CI 容器无重启策略。
+- 全新部署从空卷起栈（`scripts/ops/up.sh`，与生产入口同一条路径），再用命令行建站点、第一个管理员（`user create` 加 `user grant-platform`），第一个管理员在管理监听上用密码登录时还打不开平台页面，开启两步验证后能读用户列表；节点的健康检查（镜像的 `HEALTHCHECK`）此时为 healthy。
 - 旧迁移角色升级先停节点，再改数据库环境并启动，避免旧进程丢会话锁退出时被误算为新启动。
-- `old-binary-check.sh` 用当前二进制迁移独立库，再启动上一版本并等 readyz；不在 compose 栈里的遗留库按 `axiom.ci.old-binary-check` 和 40 分钟年龄清理。
+- `old-binary-check.sh` 先用上一版本迁移独立库并写入站点和用户，再用当前二进制向前迁移，启动上一版本、等 readyz 并让该用户登录；不在 compose 栈里的遗留库按 `axiom.ci.old-binary-check` 和 40 分钟年龄清理。
 - 下一作业清理自身旧栈，任意 runner 的部署检查也清理带本脚本标签、名以 `axiom-ci-` 开头且创建超过 40 分钟的遗留栈，不碰其他容器。
 - Compose 的 `x-hardened` 将 `${AXIOM_TEST_CGROUP_PARENT:-}` 传给 PG、Valkey、Axiom、迁移与密钥初始化；空值省略。启动后、删除前 inspect 全部容器（包括退出的一次性服务），非空则核对父级；默认父级由 Docker 决定。隔离后可并行、不用文件锁；本地 just up 仍用 `axiom`、`axiom:local` 与 8080/8082。
 

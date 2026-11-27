@@ -18,6 +18,7 @@ export const zh = {
     mismatch: "两次输入的新密码不一致。",
     same: "新密码不能与当前密码相同。",
     wrongCurrent: "当前密码不对。",
+    noMail: "本站没有配置发信，改密码需要给你的邮箱发安全通知，所以暂时不能修改。请联系站点管理员。",
     submit: "保存新密码",
     saved: "密码已修改，其他设备需要重新登录。",
   },
@@ -144,6 +145,8 @@ export const en: Messages<typeof zh> = {
     mismatch: "The two new passwords do not match.",
     same: "New password must be different from your current password.",
     wrongCurrent: "Current password is incorrect.",
+    noMail:
+      "This site sends no email, and a password change must email you a security notice, so the password cannot be changed for now. Contact the site's administrator.",
     submit: "Save password",
     saved: "Password changed. Other devices have been signed out.",
   },
