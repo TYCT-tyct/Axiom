@@ -61,6 +61,20 @@ test.describe("open registration", () => {
     await expect(page.getByLabel("邮箱")).toBeFocused();
   });
 
+  test("an invite link on an open site carries its code into the request", async ({ page }) => {
+    const state = await mockConsole(page);
+    openSite(state);
+    const sent: unknown[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/auth/register")) sent.push(request.postDataJSON());
+    });
+    await page.goto(`/console/register?invite=${goodInvite}`);
+    await page.getByLabel("邮箱").fill("invited.person@example.com");
+    await page.getByRole("button", { name: "发送验证链接" }).click();
+    await expect(heading(page, "查收验证邮件")).toBeFocused();
+    expect(sent).toEqual([expect.objectContaining({ invite_code: goodInvite })]);
+  });
+
   test("an address the server does not take is said at the field, until the field is edited", async ({ page }) => {
     const state = await mockConsole(page);
     openSite(state);
