@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -31,30 +32,64 @@ func ReadCosts(ctx context.Context, tx pg.Tx, id uuid.UUID) (Costs, error) {
 	if err != nil {
 		return Costs{}, fmt.Errorf("persist: the state of supplier %s: %w", id, err)
 	}
+	return costsOf(st), nil
+}
+
+// LockCosts is ReadCosts of the state locked for a change of its bases, made if there is none yet: ConfirmBases, in the
+// same transaction, then writes over exactly what was read.
+func LockCosts(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) (Costs, error) {
+	q := store.New()
+	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
+		return Costs{}, fmt.Errorf("persist: make the state of supplier %s: %w", id, err)
+	}
+	row, err := q.LockSyncState(ctx, tx, id)
+	if err != nil {
+		return Costs{}, fmt.Errorf("persist: lock the state of supplier %s: %w", id, err)
+	}
+	st, err := decode(row.Version, row.Format, row.State)
+	if err != nil {
+		return Costs{}, fmt.Errorf("persist: the state of supplier %s: %w", id, err)
+	}
+	return costsOf(st), nil
+}
+
+func costsOf(st syncer.State) Costs {
 	c := Costs{st: st, models: map[syncer.BaseKey]syncer.ModelSnap{}}
 	for _, g := range st.Groups {
 		for _, m := range g.Models {
 			c.models[syncer.BaseKey{GroupRef: g.Ref, Model: m.Name}] = m
 		}
 	}
-	return c, nil
+	return c
 }
 
-// Reason is why the sync has no cost plan of the name in the group for model, the catalog model it maps to; "" when it
-// has one or has not read the name. A plan made of a base confirmed for another model is none for this one, as the
-// projection puts it in force (projector.planOf): only a base for this model can price it.
+// Unpublished reports whether the sync read the name in the group and the supplier states no price for it: the only
+// model a base can price.
+func (c Costs) Unpublished(groupRef, name string) bool {
+	m, ok := c.models[syncer.BaseKey{GroupRef: groupRef, Model: name}]
+	return ok && !m.Published
+}
+
+// Reason is why the cost of the name in the group is unknown for model, the catalog model it maps to; "" when it is
+// known or the sync has not read the name. It is worked out from the bases now, not carried over from the round: a
+// model whose supplier states no price is unpriced unless a base for this very model priced it, as the projection puts
+// a plan in force (projector.planOf), or the last round found that base past the unit price limit.
 func (c Costs) Reason(groupRef, name string, model uuid.UUID) syncer.CostReason {
 	key := syncer.BaseKey{GroupRef: groupRef, Model: name}
 	m, ok := c.models[key]
-	switch {
+	switch base, confirmed := c.st.Base(key); {
 	case !ok:
 		return ""
+	case m.Published && m.Plan == "":
+		return syncer.Unexpressible
+	case m.Published:
+		return ""
+	case !confirmed || base.For != model.String():
+		return syncer.Unpriced
+	case m.Plan == "" && m.CostReason == syncer.OverLimit:
+		return syncer.OverLimit
 	case m.Plan == "":
-		return m.CostReason
-	case m.Confirmed:
-		if base, ok := c.st.Base(key); !ok || base.For != model.String() {
-			return syncer.Unpriced
-		}
+		return syncer.Unpriced // confirmed since the last round, which has not priced it yet
 	}
 	return ""
 }

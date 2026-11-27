@@ -5242,8 +5242,10 @@ paths:
         it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name
         the group does not list is 404; one not mapped to a model yet, a model with no official price in the
         settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier
-        whose unit value is not confirmed, or that is not a relay, is 409 `conflict`, and an item whose `model_id` is
-        not the model its name maps to now is 409 `stale_revision`. At most 500 models.
+        whose unit value is not confirmed, or that is not a relay, and a name the supplier now states a price for or
+        the sync has not read, are 409 `conflict`; an item whose `model_id` is not the model its name maps to now, an
+        alias at its current revision included, is 409 `stale_revision`. Both are checked against the sync's state as
+        locked for the change. At most 500 models.
       security:
         - session: []
           csrf: []

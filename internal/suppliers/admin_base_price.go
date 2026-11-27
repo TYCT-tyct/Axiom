@@ -35,6 +35,9 @@ var (
 	// ErrModelChanged is an upstream name that maps to another model than the one the person confirmed it for: the
 	// mapping changed since it was read, and the base would price a model nobody looked at.
 	ErrModelChanged = errors.New("suppliers: the name maps to another model since it was read")
+	// ErrNotUnpriced is a model the supplier states a price for, or one the sync has not read: a base stands in only for
+	// a price the supplier does not state, as the state says when the base is confirmed.
+	ErrNotUnpriced = errors.New("suppliers: the supplier states a price for the model, or the sync has not read it")
 	// ErrNoUnitValue is a supplier whose unit value is not confirmed, which a base price is converted with.
 	ErrNoUnitValue = errors.New("suppliers: confirm the supplier's unit value first")
 	// ErrNoOfficialPrice is a model given no price that has no official price in the settlement currency to default to.
@@ -72,14 +75,17 @@ func readCostReasons(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (costRea
 
 // of is why the cost of the name in the group, for the model it maps to, is unknown; "" when it is not. state and
 // stored are its endpoint's cost state and the reason the row keeps, nil without an endpoint.
+// The state's unpriced comes first: an endpoint reconciliation took down whose supplier now states no price is one a
+// base can price, which the endpoint's old verdict does not say.
 func (r costReasons) of(groupRef, name string, model uuid.UUID, state, stored *string) CostReason {
-	switch {
-	case state != nil && *state != "unknown":
+	if state != nil && *state != "unknown" {
 		return ""
-	case stored != nil && *stored == string(UnderEstimated):
+	}
+	why := CostReason(r.costs.Reason(groupRef, name, model))
+	if why != Unpriced && stored != nil && *stored == string(UnderEstimated) {
 		return UnderEstimated
 	}
-	return CostReason(r.costs.Reason(groupRef, name, model))
+	return why
 }
 
 // MaxBasePrices is the most models one change names.
@@ -119,12 +125,14 @@ func (a *Admin) ConfirmBasePrices(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err != nil {
 		return nil, err
 	}
-	if s.UnitValue == "" {
-		return nil, ErrNoUnitValue
+	perUnit, err := unitValueOf(s)
+	if err != nil {
+		return nil, err
 	}
-	perUnit, ok := new(big.Rat).SetString(s.UnitValue)
-	if !ok || perUnit.Sign() <= 0 {
-		return nil, fmt.Errorf("suppliers: the unit value %q", s.UnitValue)
+	// The state is locked before the names are read, so what a base is checked against is what it is saved over.
+	costs, err := persist.LockCosts(ctx, tx, supplier, a.now())
+	if err != nil {
+		return nil, err
 	}
 	models := make([]BaseModel, len(items))
 	for i, it := range items {
@@ -137,6 +145,9 @@ func (a *Admin) ConfirmBasePrices(ctx context.Context, tx pg.Tx, actor audit.Act
 	set, out, detail := make([]syncer.ConfirmedBase, len(items)), make([]BasePrice, len(items)), make([]map[string]any, len(items))
 	for i, it := range items {
 		n := names[it.BaseModel]
+		if err := stillUnpriced(it, n, costs); err != nil {
+			return nil, err
+		}
 		base, source, err := baseOf(it, n, s.SettlementCurrency, perUnit, official)
 		if err != nil {
 			return nil, err
@@ -159,6 +170,18 @@ func (a *Admin) ConfirmBasePrices(ctx context.Context, tx pg.Tx, actor audit.Act
 		return nil, err
 	}
 	return out, nil
+}
+
+// unitValueOf is what one unit of the supplier is worth in its settlement currency, which a base is converted with.
+func unitValueOf(s Supplier) (*big.Rat, error) {
+	if s.UnitValue == "" {
+		return nil, ErrNoUnitValue
+	}
+	perUnit, ok := new(big.Rat).SetString(s.UnitValue)
+	if !ok || perUnit.Sign() <= 0 {
+		return nil, fmt.Errorf("suppliers: the unit value %q", s.UnitValue)
+	}
+	return perUnit, nil
 }
 
 // ClearBasePrices takes the confirmed base of each model away; at the next catalog round a model the supplier states no
@@ -219,22 +242,30 @@ func (a *Admin) afterBases(ctx context.Context, tx pg.Tx, actor audit.Actor, sup
 	return a.record(ctx, tx, actor, action, supplier, reason, map[string]any{"items": items})
 }
 
-// baseOf is the base of one item in the supplier's own unit, and where its price came from: the item's, or the official
-// price of the model its name maps to.
+// stillUnpriced checks an item against the name's mapping now, aliases at their current revision included, and the locked
+// state: the model the person saw, and a price the supplier still does not state.
+func stillUnpriced(it BasePriceItem, n store.ModelNamesOfRow, costs persist.Costs) error {
+	switch {
+	case it.Expect != nil && (n.ModelID == nil || *n.ModelID != *it.Expect):
+		return fmt.Errorf("%w: %s", ErrModelChanged, it.Name)
+	case n.ModelID == nil:
+		return fmt.Errorf("%w: %s", ErrNameNotMapped, it.Name)
+	case !costs.Unpublished(n.UpstreamRef, it.Name):
+		return fmt.Errorf("%w: %s", ErrNotUnpriced, it.Name)
+	}
+	return nil
+}
+
+// baseOf is the base of one item in the supplier's own unit, and where its price came from: "entered" for the item's,
+// or the source of the catalog's reference price of the model its name maps to.
 func baseOf(it BasePriceItem, n store.ModelNamesOfRow, currency string, perUnit *big.Rat, official OfficialPrices) (catalog.Schedule, string, error) {
-	if it.Expect != nil && (n.ModelID == nil || *n.ModelID != *it.Expect) {
-		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrModelChanged, it.Name)
-	}
-	if n.ModelID == nil {
-		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrNameNotMapped, it.Name)
-	}
 	price, source := it.Price, "entered"
 	if price == nil {
 		ref, ok := official.ReferencePrice(catalog.ModelID(*n.ModelID), currency)
 		if !ok {
 			return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrNoOfficialPrice, it.Name)
 		}
-		price, source = &ref.Schedule, "official"
+		price, source = &ref.Schedule, string(ref.Source)
 	}
 	base, err := nativeBase(*price, currency, perUnit)
 	if err != nil {

@@ -31,6 +31,8 @@ func TestAnUnknownCostSaysWhy(t *testing.T) {
 		{"a price the table cannot express", syncer.ModelSnap{Published: true, CostReason: syncer.Unexpressible}, "", "unknown", nil, Unexpressible},
 		{"a base past the unit price limit", syncer.ModelSnap{CostReason: syncer.OverLimit}, model.String(), "unknown", nil, OverLimit},
 		{"reconciliation found it under-estimated", syncer.ModelSnap{Plan: "f1", Published: true}, "", "unknown", stored("under_estimated"), UnderEstimated},
+		{"a base past the limit, the name mapped to another model since", syncer.ModelSnap{CostReason: syncer.OverLimit}, uuid.NewV7().String(), "unknown", nil, Unpriced},
+		{"taken down by reconciliation, and no price published now", syncer.ModelSnap{CostReason: syncer.Unpriced}, "", "unknown", stored("under_estimated"), Unpriced},
 		{"a base confirmed for another model", syncer.ModelSnap{Plan: "f1", Confirmed: true}, uuid.NewV7().String(), "unknown", nil, Unpriced},
 		{"a base for this model, the endpoint out for another reason", syncer.ModelSnap{Plan: "f1", Confirmed: true}, model.String(), "unknown", stored(string(syncer.NotTaken)), ""},
 	} {

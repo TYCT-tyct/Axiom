@@ -48,8 +48,18 @@ FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name
 
 -- name: ModelNamesOf :many
 -- The models a supplier's groups list, among (group, name) pairs, with the group's ref the sync knows it by and the
--- catalog model the name maps to now (NULL while it waits to be mapped).
-SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref, m.model_id
+-- catalog model the name maps to now (NULL while it waits to be mapped): an alias at its current revision, the group's
+-- before the supplier's, as the projection maps it, before the mapping the last projection wrote.
+SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref,
+    COALESCE((
+        SELECT COALESCE(r.model_id, a.model_id) FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (
+            SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1
+        ) r ON true
+        WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
+          AND (a.supplier_group_id = m.supplier_group_id OR a.supplier_group_id IS NULL)
+        ORDER BY a.supplier_group_id NULLS LAST LIMIT 1
+    ), m.model_id) AS model_id
 FROM suppliers.supplier_models m JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 WHERE m.supplier_id = @supplier_id
   AND (m.supplier_group_id, m.upstream_name) IN (SELECT unnest(@groups::uuid[]), unnest(@names::text[]));

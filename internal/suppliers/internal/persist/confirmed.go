@@ -50,6 +50,21 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set []syncer.Conf
 	return cleared, nil
 }
 
+// dropBasePlan takes away the plan a base made of the model of key, and the round's verdict on it: a base for another
+// model replaces the whole plan, so no step that commits before the next catalog round can price the new model with
+// the old one's plan (projector.planOf matches the model only, not the plan).
+func dropBasePlan(st *syncer.State, key syncer.BaseKey) {
+	for gi, g := range st.Groups {
+		for mi, m := range g.Models {
+			if g.Ref != key.GroupRef || m.Name != key.Model || m.Published {
+				continue
+			}
+			st.Groups[gi].Models[mi].Plan, st.Groups[gi].Models[mi].Confirmed, st.Groups[gi].Models[mi].CostReason = "", false, ""
+			delete(st.Plans, key)
+		}
+	}
+}
+
 // changeBases takes the bases of clear out of the state and puts those of set in, keeping them sorted and one a key, and
 // answers the ones it took out.
 func changeBases(st *syncer.State, set []syncer.ConfirmedBase, clear []syncer.BaseKey) []syncer.ConfirmedBase {
@@ -61,6 +76,9 @@ func changeBases(st *syncer.State, set []syncer.ConfirmedBase, clear []syncer.Ba
 		}
 	}
 	for _, b := range set {
+		if old, ok := st.Base(b.BaseKey); !ok || old.For != b.For {
+			dropBasePlan(st, b.BaseKey)
+		}
 		st.Confirmed = slices.DeleteFunc(st.Confirmed, func(c syncer.ConfirmedBase) bool { return c.BaseKey == b.BaseKey })
 		st.Confirmed = append(st.Confirmed, b)
 	}
