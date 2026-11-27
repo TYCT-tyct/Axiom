@@ -176,23 +176,35 @@ func TestRefusalOfAnError(t *testing.T) {
 
 // TestAnInsufficientNamesItsSource: limit_source is a map lookup, so a source nobody named writes an empty string and no
 // error. Every source billing reports is pinned, including the plan window, which is Axiom's own name because
-// OpenRouter has no plans.
+// OpenRouter has no plans. A key's or workspace's own limit says which one and what to do, under the same code.
 func TestAnInsufficientNamesItsSource(t *testing.T) {
 	t.Parallel()
+	generic := messages["credits_insufficient"]
 	for name, tc := range map[string]struct {
-		source billing.Source
-		limit  string
-		status int
+		source  billing.Source
+		limit   string
+		status  int
+		message string
 	}{
-		"the balance":          {billing.SourceBalance, "balance", 402},
-		"a second-level site":  {billing.SourceSiteBalance, "balance", 402},
-		"the workspace budget": {billing.SourceWorkspace, "openrouter_workspace_budget", 403},
-		"the key limit":        {billing.SourceKey, "openrouter_key_limit", 403},
-		"the plan window":      {billing.SourceSubscription, "subscription", 402},
+		"the balance":          {billing.SourceBalance, "balance", 402, generic},
+		"a second-level site":  {billing.SourceSiteBalance, "balance", 402, generic},
+		"the workspace budget": {billing.SourceWorkspace, "openrouter_workspace_budget", 403, "This workspace has reached its budget. Raise the workspace budget, or use a key of another workspace."},
+		"the key limit":        {billing.SourceKey, "openrouter_key_limit", 403, "This API key has reached its own spend limit. Raise or reset the key's limit, or use another key."},
+		"the plan window":      {billing.SourceSubscription, "subscription", 402, generic},
 	} {
 		r := insufficient(&billing.Insufficient{Source: tc.source})
-		if r.Status != tc.status || r.Details["limit_source"] != tc.limit {
-			t.Errorf("%s: %d %v, want %d %q", name, r.Status, r.Details["limit_source"], tc.status, tc.limit)
+		if r.Status != tc.status || r.Code != "credits_insufficient" || r.Details["limit_source"] != tc.limit {
+			t.Errorf("%s: %d %s %v, want %d %q", name, r.Status, r.Code, r.Details["limit_source"], tc.status, tc.limit)
+		}
+		rec := httptest.NewRecorder()
+		writeRefusal(rec, protocol.Chat, r)
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error.Message != tc.message {
+			t.Errorf("%s: message %q (%v), want %q", name, body.Error.Message, err, tc.message)
 		}
 		if r.RetryAfter != 0 {
 			t.Errorf("%s: Retry-After %d for a refusal billing did not mark transient", name, r.RetryAfter)

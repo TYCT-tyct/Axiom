@@ -136,7 +136,7 @@
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` |
 | 账户暂停调用 | 403 `permission_denied` |
 | 余额不够（含在途请求占满） | 402 `credits_insufficient`，`limit_source: balance` |
-| 工作区预算、key 上限不够 | 403 `credits_insufficient`，`openrouter_workspace_budget`/`openrouter_key_limit`，会重置的带 `Retry-After: 60` |
+| 工作区预算、key 上限不够 | 403 `credits_insufficient`，`openrouter_workspace_budget`/`openrouter_key_limit`，会重置的带 `Retry-After: 60`；message 说明是哪一项上限、怎样调高或换 key |
 | 套餐不够 | 402，`subscription`；流中追加时为 `balance`（[订阅套餐](billing.md#订阅套餐)） |
 | 追加预留时数据库出错 | 503 `billing_unavailable` |
 | 限流（key 节点保护、账户与 key 业务速率、IP 或账户在途上限、账户资金操作排队超 5 秒）；端点满载且排队满或超时；凭证占满 | 429 `rate_limited`，排队的带估计等待，凭证占满为 1 |
