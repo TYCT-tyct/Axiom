@@ -102,6 +102,7 @@ export default {
     markup: "Cost plus {{percent}}%",
     margin: "{{percent}}% margin",
     reference: "{{multiplier}}× the reference price",
+    tiered: "{{multiplier}}× the price for all accounts",
     fixed: "Fixed price ({{currency}})",
   },
   rule: {
