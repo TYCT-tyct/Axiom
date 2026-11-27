@@ -165,6 +165,7 @@ export default {
   "supplier_group.connect": "Connected a channel group",
   "supplier_group.select": "Selected a channel group",
   "supplier_group.unselect": "Stopped using a channel group",
+  "supplier_key.revoke": "Revoked a spare upstream key",
   "targets.update": "Changed the business targets",
   "unknown_item.clear": "Cleared an unknown billing item",
   "user.billing_preference": "Changed the billing order",

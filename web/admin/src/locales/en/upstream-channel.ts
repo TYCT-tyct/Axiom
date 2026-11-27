@@ -84,6 +84,7 @@ export default {
     key: "This group's token",
     keyMissing: "Paste a whole token",
     done: "Taken in; traffic starts once the quality check passes",
+    requested: "Requested; the group connects once the sync has made its key",
   },
   stopGroup: {
     title: "Stop this group",

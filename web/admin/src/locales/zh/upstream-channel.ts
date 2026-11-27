@@ -81,6 +81,7 @@ export default {
     key: "这个分组的令牌",
     keyMissing: "贴一把完整的令牌",
     done: "已经接入，等质量检测通过后开始接流量",
+    requested: "已请求，同步建好令牌后自动接入",
   },
   stopGroup: {
     title: "停掉这个分组",
