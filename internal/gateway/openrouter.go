@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -234,37 +233,6 @@ func (l *openRouterListing) modelOf(m catalog.Model, prices map[catalog.ModelID]
 	}
 	e.sold, e.served, e.serving, e.pageEndpoints = sold, servedIDs, serving, pageEndpoints
 	return e, true, nil
-}
-
-// publicEndpointsOf keeps the audience-independent attributes of a model's served endpoints for the public page. The
-// codename is the public identity and cannot repeat within a model, so it gives the page one stable order that an
-// internal id never influences.
-func publicEndpointsOf(endpoints []routing.Endpoint) []publicEndpoint {
-	page := make([]publicEndpoint, len(endpoints))
-	for i, e := range endpoints {
-		context, maxOutput := e.Context, e.MaxOutput
-		var abilities []string
-		if len(e.Specs) > 0 {
-			surface := e.Surface()
-			context, maxOutput, abilities = surface.Context, surface.MaxOutput, abilityNames(surface.Caps)
-		}
-		page[i] = publicEndpoint{
-			id: uuid.UUID(e.ID), name: e.Codename, contextLength: context, maxOutput: maxOutput,
-			streams: e.Streams, abilities: abilities, quantization: string(e.Quantization), verified: e.Verified,
-			class: string(e.Class), score: measuredScore(e), recent: e.Recent,
-		}
-	}
-	slices.SortFunc(page, func(a, b publicEndpoint) int { return strings.Compare(a.name, b.name) })
-	return page
-}
-
-// measuredScore is e's product score, nil when no run counts for it: the confidence says whether there is one, and a
-// valid run can score 0.
-func measuredScore(e routing.Endpoint) *float64 {
-	if e.ScoreConfidence <= 0 {
-		return nil
-	}
-	return &e.Score
 }
 
 // publicID is the name the model is served and fetched under: its standard ID, the slug without the internal version
