@@ -10,6 +10,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
@@ -131,9 +132,20 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 	return priceAudit(ctx, tx, actor, site, "price_policy.update", reason, map[string]any{"before": old, "after": in})
 }
 
+// PriceInputs are what a price refresh reads besides the database: the catalog, the endpoints' costs and the exchange
+// rates, priced in the site's currency.
+type PriceInputs struct {
+	Currency platform.Currency
+	Snapshot *catalog.Snapshot
+	Costs    []PriceCost
+	Rates    []platform.ExchangeRate
+}
+
 // PublishPrice confirms exactly the proposal and head the administrator read. The HTTP idempotency transaction
 // handles acknowledgement loss. An override uses the rule's requested price and is scoped to this evidence alone.
-func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, model catalog.ModelID, candidate uuid.UUID, current *uuid.UUID, confirmed, override bool, reason string) (uuid.UUID, error) {
+// Confirming a price for all accounts refreshes the site's prices from in within the same transaction, so every tier
+// that scales it is published with it: no reader ever sees the new price for all beside a tier's old one.
+func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, model catalog.ModelID, candidate uuid.UUID, current *uuid.UUID, confirmed, override bool, reason string, in PriceInputs) (uuid.UUID, error) {
 	if err := priceReason(reason); err != nil {
 		return uuid.Nil(), err
 	}
@@ -167,7 +179,20 @@ func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UU
 	if err := publicationSignal(ctx, tx, site, p, true, ""); err != nil {
 		return uuid.Nil(), err
 	}
-	return sold.Version, persistPublication(ctx, tx, site, p)
+	return sold.Version, persistConfirmed(ctx, tx, site, p, in)
+}
+
+// persistConfirmed stores a confirmed publication and, for a price for all accounts, refreshes the site's prices in the
+// same transaction: a tier that scales the price for all is republished with it, never after.
+func persistConfirmed(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication, in PriceInputs) error {
+	if err := persistPublication(ctx, tx, site, p); err != nil {
+		return err
+	}
+	if p.Audience.Kind == "account" || p.Audience.Kind == "tier" {
+		return nil
+	}
+	_, err := RefreshPrices(ctx, tx, site, in.Currency, in.Snapshot, in.Costs, in.Rates...)
+	return err
 }
 
 func samePriceHead(a, b *uuid.UUID) bool {

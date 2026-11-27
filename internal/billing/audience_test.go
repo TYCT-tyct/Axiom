@@ -349,7 +349,8 @@ func TestDefaultMultiplierScalesThePriceForAll(t *testing.T) {
 
 // TestTierPaysThePublishedPriceTimesItsMultiplier pins the invariant of a default multiplier: every item of the tier's
 // price is the price for all accounts as published, the site floor and default prices already in it, times the
-// multiplier. A price for all that waits for confirmation moves the tier only once it is published.
+// multiplier. A price for all that waits for confirmation moves the tier only once it is published, and then in the
+// same transaction as the confirmation, with no refresh between.
 func TestTierPaysThePublishedPriceTimesItsMultiplier(t *testing.T) {
 	t.Parallel()
 	f := newPrices(t)
@@ -381,7 +382,6 @@ func TestTierPaysThePublishedPriceTimesItsMultiplier(t *testing.T) {
 	if err := f.publish(pending, true, false); err != nil {
 		t.Fatal(err)
 	}
-	f.refresh()
 	f.checkScaled(tier, multiplier, "0.000002")
 }
 
