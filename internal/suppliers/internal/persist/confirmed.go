@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 	"uuid"
 
@@ -31,19 +32,7 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set map[string]st
 	if err != nil {
 		return nil, fmt.Errorf("persist: the state of supplier %s: %w", id, err)
 	}
-	if st.Confirmed == nil {
-		st.Confirmed = map[string]string{}
-	}
-	cleared := map[string]string{}
-	for _, key := range clear {
-		if base, ok := st.Confirmed[key]; ok {
-			cleared[key] = base
-			delete(st.Confirmed, key)
-		}
-	}
-	for key, base := range set {
-		st.Confirmed[key] = base
-	}
+	cleared := changeBases(&st, set, clear)
 	if task := &st.Tasks[syncer.TaskCatalog]; st.Status == syncer.Normal && !task.Halted && task.Due.After(now) {
 		task.Due = now
 	}
@@ -58,4 +47,20 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set map[string]st
 		return nil, fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
 	}
 	return cleared, nil
+}
+
+// changeBases takes the bases of clear out of the state and puts those of set in, answering what each cleared key held.
+func changeBases(st *syncer.State, set map[string]string, clear []string) map[string]string {
+	if st.Confirmed == nil {
+		st.Confirmed = map[string]string{}
+	}
+	cleared := map[string]string{}
+	for _, key := range clear {
+		if base, ok := st.Confirmed[key]; ok {
+			cleared[key] = base
+			delete(st.Confirmed, key)
+		}
+	}
+	maps.Copy(st.Confirmed, set)
+	return cleared
 }

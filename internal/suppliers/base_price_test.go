@@ -41,19 +41,22 @@ type unpriced struct {
 	group, ratio, model string
 }
 
-func (u unpriced) Account(context.Context) (adapter.Account, error) { return adapter.Account{}, nil }
+func (unpriced) Account(context.Context) (adapter.Account, error) { return adapter.Account{}, nil }
 func (u unpriced) Offer(context.Context, adapter.Listing) (adapter.Page[adapter.Group], error) {
 	return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
 		Ref: u.group, Name: u.group, Ratio: adapter.Amount(u.ratio), Facts: adapter.GroupFacts(`{}`),
 		Models: []adapter.Model{{UpstreamName: u.model}},
 	}}}, nil
 }
+
 func (unpriced) Keys(context.Context, adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 	return adapter.Page[adapter.KeyState]{Done: true}, nil
 }
+
 func (unpriced) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
 	return secret.Secret{}, nil
 }
+
 func (unpriced) Charges(context.Context, adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 	return adapter.ChargePage{}, nil, nil
 }
@@ -87,19 +90,9 @@ func TestConfirmedBaseIsWhatACallIsCharged(t *testing.T) {
 	}
 	w.priceWith(st.plans[0])
 
-	a, err := w.svc.Acquire(w.endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt := a.Done()
-	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 1000, catalog.ItemOutput: 777}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, receipt.currency)
 	// (1000 × 1.5 × 1.37 + 777 × 7.5 × 1.37) quota × 2 USD = (2055 + 7983.675) × 2 = 20077.35 USD, in billionths.
-	if err != nil || !known || got != 20_077_350_000_000 {
-		t.Errorf("charged %d (%v, %v), want 20077350000000 billionths", got, known, err)
+	if got := w.charged(map[catalog.Item]int64{catalog.ItemInput: 1000, catalog.ItemOutput: 777}); got != 20_077_350_000_000 {
+		t.Errorf("charged %d billionths, want 20077350000000", got)
 	}
 	cost := w.endpointCost()
 	for _, l := range cost.Lines {
@@ -162,6 +155,25 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	same(t, "the changes audited", "2 1", w.query(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_confirm')::text || ' ' ||
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_clear')::text`))
+}
+
+// charged is what an attempt on the world's endpoint of these counts is charged, in billionths of its currency.
+func (w *world) charged(counts map[catalog.Item]int64) int64 {
+	w.t.Helper()
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	receipt := a.Done()
+	u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, receipt.currency)
+	if err != nil || !known {
+		w.t.Fatalf("Credits: %v, known %t", err, known)
+	}
+	return got
 }
 
 // mustParse is a schedule from its JSON.

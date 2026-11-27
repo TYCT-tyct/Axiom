@@ -97,8 +97,13 @@ func startLive(t *testing.T) *live {
 	for _, acc := range []struct {
 		name, platform string
 		groups         []string
-	}{{"upstream-anthropic", "anthropic", []string{"claude-1", "claude-15", "claude-code"}}, {"upstream-openai", "openai", []string{"gpt-1"}},
-		{"upstream-kimi", "kimi", []string{"kimi-1"}}, {"upstream-zhipu", "zhipu", []string{"glm-1"}}, {"upstream-gemini", "gemini", []string{"gemini-1"}}} {
+	}{
+		{"upstream-anthropic", "anthropic", []string{"claude-1", "claude-15", "claude-code"}},
+		{"upstream-openai", "openai", []string{"gpt-1"}},
+		{"upstream-kimi", "kimi", []string{"kimi-1"}},
+		{"upstream-zhipu", "zhipu", []string{"glm-1"}},
+		{"upstream-gemini", "gemini", []string{"gemini-1"}},
+	} {
 		l.createAccount(acc.name, acc.platform, reach.UpstreamURL(up), acc.groups)
 	}
 	l.call(http.MethodPost, "/api/v1/admin/users", l.admin, map[string]any{"email": liveUserMail, "password": livePassword, "balance": 10, "concurrency": 5})
