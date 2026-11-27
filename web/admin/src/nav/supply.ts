@@ -11,6 +11,7 @@ export const supply: readonly NavEntry[] = [
       { to: "/suppliers?tab=models", label: "upstreamModels" },
       { to: "/suppliers?tab=inbox", label: "inbox" },
       { to: "/suppliers?tab=keys", label: "upstreamKeys" },
+      { to: "/suppliers/egress-proxies", label: "egressProxies" },
     ],
   },
   {

@@ -62,7 +62,23 @@ const (
 // PriceEntry is a price list a type may be connected at: an address and the currency of the list that holds there,
 // one value, since the same model's yuan and dollar prices are separate lists, not an exchange rate apart
 // (docs/domains/catalog.md「目录基线」). A request picks an entry by its ID, never a currency; one origin may have two.
-type PriceEntry struct{ ID, Origin, Currency string }
+// Account names, in the vendor's words, the account whose keys belong at the entry, for a vendor whose account and
+// not the address decides the price list (Alibaba Cloud's China and international sites); empty otherwise. Unpriced
+// marks an entry whose price list the catalog does not hold (its prices in the currency are another region's): a line
+// there is connected and lists its models, but none has a catalog price, so each costs unknown until one exists.
+type PriceEntry struct {
+	ID, Origin, Currency, Account string
+	Unpriced                      bool
+}
+
+// ServesAt is Serves for a line connected at origin in currency: none at an entry whose price list the catalog does not
+// hold, so the catalog prices nothing there.
+func (t Type) ServesAt(origin, currency string) []string {
+	if slices.ContainsFunc(t.Entries, func(e PriceEntry) bool { return e.Origin == origin && e.Currency == currency && e.Unpriced }) {
+		return nil
+	}
+	return t.Serves
+}
 
 // Form is one shape of a credential: the fields it is made of.
 type Form struct {

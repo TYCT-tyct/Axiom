@@ -47,6 +47,7 @@ it("loads complete deferred copy before returning a page and preserves both lang
     import("../pages/audit"),
     import("../pages/plugins"),
     import("../pages/me"),
+    import("../egress/page"),
   ]) {
     await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
   }
