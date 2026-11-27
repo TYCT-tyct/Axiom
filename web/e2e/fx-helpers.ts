@@ -23,6 +23,10 @@ export const setHidden = (page: Page, hidden: boolean) =>
 
 export const pause = (page: Page) => page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
 
+// The website's frame (Site.dc.html's .tr), which carries the entrance's and the departure's state: a div, for the
+// questions' picture draws a path of the same class.
+export const seaFrame = (page: Page) => page.locator("div.tr");
+
 export async function open(page: Page) {
   await mockConsole(page);
   await page.goto(apps[0].url);
@@ -50,15 +54,20 @@ export const sections = (page: Page) =>
   page.locator(".under [data-place]").evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.place)));
 export const scrollTo = (page: Page, sec: number) =>
   place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
-// a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
-export const shown = (page: Page, sec: number) =>
-  expect
-    .poll(() =>
-      place(page, sec)
-        .locator(".hfm")
-        .evaluate((el) => getComputedStyle(el).opacity),
-    )
-    .toBe("1");
+// settled waits for the CSS transitions and animations on an element to end. A transition's value moves only with the
+// frames the browser draws, which a busy machine draws seconds apart: read before its end, a value is still the one it
+// starts from, however long a poll of it waits.
+export const settled = (element: Locator) =>
+  element.evaluate((el) => Promise.all(el.getAnimations().map((animation) => animation.finished)));
+
+// a screen has faded in once it is seen (the board's .hfm.in) and its fade has ended: a screen at its faint start would
+// pass a visibility check, and a pointer aimed at it then would land where it is still rising from
+export async function shown(page: Page, sec: number) {
+  const screen = place(page, sec).locator(".hfm");
+  await expect(screen).toHaveClass(/\bin\b/);
+  await settled(screen);
+  expect(await screen.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+}
 
 // Pauses the clock a moment ahead of the page's, which runs on meanwhile: a busy machine may pass that moment before
 // the pause lands, and Playwright refuses to move the clock back, so aim again.
@@ -100,4 +109,23 @@ export async function expectMovingNow(page: Page, ...canvases: Locator[]) {
   const after = await Promise.all(canvases.map(canvasHash));
   for (const [i, hash] of after.entries())
     expect(hash, `canvas ${i} drew the same picture a second later`).not.toBe(before[i]);
+}
+
+// the whale's canvas has something on it: the shadow, or the whale
+export const painted = (page: Page) =>
+  page.locator(".tr > canvas.wh").evaluate((canvas: HTMLCanvasElement) => {
+    const g = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+    return g.getImageData(0, 0, canvas.width, canvas.height).data.some((value, i) => i % 4 === 3 && value > 0);
+  });
+
+// The whale's first pixels come after about 1.3 s of its own time, and its step is capped at 0.05 s, so a machine
+// drawing under 20 frames a second stretches that past any wall-clock wait. The page's clock drives it instead, a
+// tenth of a second at a time, for at most `within` ms of the page's time: the case no longer depends on how busy the
+// machine is. The caller has installed the clock.
+export async function whaleShows(page: Page, within = 5000) {
+  for (let seen = 0; !(await painted(page).catch(() => false)); seen += 100) {
+    expect(seen, `the whale drew within ${within} ms of the page's time`).toBeLessThan(within);
+    await page.clock.runFor(100);
+    await page.waitForTimeout(20);
+  }
 }

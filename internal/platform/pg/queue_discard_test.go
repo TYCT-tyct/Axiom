@@ -134,6 +134,66 @@ func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 	stopDiscardQueue(t, q2)
 }
 
+// TestAScanBehindAnotherDoesNotReportItsDiscardAgain: a scan that starts while another has claimed an old discard,
+// deleted it with its claim and not yet committed must not report the job again once that scan commits (#914).
+func TestAScanBehindAnotherDoesNotReportItsDiscardAgain(t *testing.T) {
+	t.Parallel()
+	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job
+			(kind, args, state, queue, max_attempts, attempt, attempted_at, finalized_at)
+			VALUES ('test.old', '{}', 'discarded', 'default', 1, 1, now() - interval '25 hours',
+				now() - interval '25 hours')`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logs := &telemetrytest.Buffer{}
+	q := newDiscardQueue(db, sdkmetric.NewManualReader(), logs) // not started: no periodic scan joins in
+	second := make(chan error, 1)
+	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		if err := q.ScanDiscardedTx(t.Context(), tx); err != nil {
+			return err
+		}
+		var pid int32
+		if err := tx.QueryRow(t.Context(), "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+			return err
+		}
+		go func() { second <- q.ScanDiscarded(t.Context()) }()
+		eventually(t, "the second scan to wait for the first", func() bool { return waitsOn(t, db, pid) })
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(logs.String(), "queue.job_discarded"); got != 1 {
+		t.Errorf("the two scans logged the discard %d times, want 1: %s", got, logs.String())
+	}
+}
+
+// waitsOn reports whether some session waits for a lock that the session pid holds.
+func waitsOn(t *testing.T, db *pg.DB, pid int32) bool {
+	t.Helper()
+	var waits bool
+	err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(),
+			"SELECT EXISTS (SELECT FROM pg_stat_activity a WHERE $1::int = ANY (pg_blocking_pids(a.pid)))", pid).Scan(&waits)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return waits
+}
+
 // newDiscardQueue makes a queue whose logs and counter the test can read.
 func newDiscardQueue(db *pg.DB, reader *sdkmetric.ManualReader, logs *telemetrytest.Buffer) *pg.Queue {
 	logger := slog.New(slog.NewJSONHandler(logs, nil))

@@ -121,10 +121,10 @@
 
 ### 迁移
 
-- 各模块从 `00049_baseline.sql` 独立递增，后续只增不改（`just migrations <base>`）。基线直接建最终结构，开发库需重建；CI static 对照冻结历史验证结构、初始数据和角色（[方法](pg/README.md#验证)）。
+- 各模块从 `00049_baseline.sql` 独立递增，只增不改（`just migrations <base>`）。基线直接建最终结构，开发库需重建；CI static 对照冻结历史验证结构、初始数据和角色（[方法](pg/README.md#验证)）。
 - `pg.Module` 在 `cmd/axiom` 的 `modules()` 注册，交给 `pg.Migrate`、`DB.Check`；platform 先执行，其余按[依赖表](../../docs/architecture.md#模块之间的依赖)，名单外或重复即失败。
-- `axiom_owner` 在平台范围持会话锁迁移，SHA-256 与版本同事务记录；[期限与校验](pg/README.md#迁移执行与校验)。
-- River 表在 schema `river`，由 `migrate` 迁移并授权 `axiom_app`；启动检查核对版本。
+- `axiom_owner` 持会话锁迁移，SHA-256 与版本同事务记录，有无效索引即停；[期限与校验](pg/README.md#迁移执行与校验)。
+- River 表在 schema `river`，由 `migrate` 迁移、授权 `axiom_app`；启动检查核对版本。
 
 ### 任务队列
 

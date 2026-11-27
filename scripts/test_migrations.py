@@ -22,6 +22,7 @@ class Migrations(unittest.TestCase):
             ("duplicate version", {"a/migrations/00001_duplicate.sql": "SELECT 1;\n"}, "HEAD~1", True),
             ("independent module", {"b/migrations/00001_first.sql": "SELECT 1;\n"}, "HEAD~1", False),
             ("a migration added", {NEW: "CREATE TABLE a.new ();\n"}, "HEAD~1", False),
+            ("an added migration unsafe on a populated table", {NEW: "-- +goose Up\nCREATE INDEX old_x ON a.old (x);\n"}, "HEAD~1", True),
             ("other files changed", {"README.md": "y\n", "a/other.sql": "SELECT 1;\n"}, "HEAD~1", False),
             ("a migration changed", {OLD: "CREATE TABLE a.old (x int);\n"}, "HEAD~1", True),
             ("a migration deleted", {OLD: None}, "HEAD~1", True),
