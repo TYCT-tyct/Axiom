@@ -39,11 +39,10 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 		if len(st.plans) == 1 {
 			basis = st.plans[0].Basis
 		}
-		if basis != c.basis || len(st.plans) > 1 || st.state.Tasks[TaskCatalog].Failures != 0 {
-			t.Errorf("%s: plans %+v, catalog task %+v; want one plan of basis %q", c.name, st.plans, st.state.Tasks[TaskCatalog], c.basis)
-		}
-		if why := st.state.Groups[0].Models[0].CostReason; why != c.why {
-			t.Errorf("%s: the cost is unknown for %q, want %q", c.name, why, c.why)
+		why := st.state.Groups[0].Models[0].CostReason
+		if basis != c.basis || why != c.why || len(st.plans) > 1 || st.state.Tasks[TaskCatalog].Failures != 0 {
+			t.Errorf("%s: plans %+v, unknown for %q, catalog task %+v; want one plan of basis %q or unknown for %q",
+				c.name, st.plans, why, st.state.Tasks[TaskCatalog], c.basis, c.why)
 		}
 	}
 
@@ -78,8 +77,9 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 				basis = p.Basis
 			}
 		}
-		if why := st.state.Groups[0].Models[0].CostReason; basis != c.basis || why != c.why {
-			t.Errorf("%s: the plan after a round that read no models is %q, unknown for %q; want %q, %q", c.name, basis, why, c.basis, c.why)
+		got, want := [2]string{basis, string(st.state.Groups[0].Models[0].CostReason)}, [2]string{c.basis, string(c.why)}
+		if got != want {
+			t.Errorf("%s: the plan after a round that read no models, and why the cost is unknown: %q, want %q", c.name, got, want)
 		}
 	}
 }
