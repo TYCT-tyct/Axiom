@@ -32,19 +32,11 @@
 
 ## 凭证加密
 
-- `secret.LoadMaster` 在启动时读一次 `AXIOM_MASTER_KEY_FILE`，同一快照给出 `Keyring()`、`LoginKey()`、`DeriveKey(label)`；`secret.LoadMAC` 读 API key 的 HMAC 密钥 `AXIOM_KEY_HASH_FILE`；`secret.LoadSecret` 读 `AXIOM_IDENTITY_KEY_FILE`，用最新一把派生发往上游的会话和用户标识。缺一或不合法就不启动；文件的生成与 `AXIOM_KEYRING_GENERATE` 见[生产入口](../../docs/ops/backup-restore.md#生产入口)。
-- 文件格式：每行 `版本号:base64密钥`（无前导零的正 uint32；解码后 32 字节），允许 LF/CRLF，不许空行、注释、空白、BOM、重复版本或密钥。
-- `Keyring.Seal(Secret, Location)` 每次用独立的 AES-256-GCM 数据密钥加密，再用写版本包裹它；`Open` 失败不返回明文。`Location{Table, RowID, Purpose}` 由包编码进 AAD（字段为空 panic），读取时从预期位置重建，记录移位或字段被换都认证失败。一把主密钥合计最多包裹 2³² 个数据密钥，轮换要用新的随机密钥。
-- 写版本记在 `platform.key_versions`（只存摘要，不存材料）。`axiom keyring add|activate|rewrap|retire|check` 管理它，步骤见[主密钥轮换](../../docs/ops/backup-restore.md#主密钥轮换)。节点每 10 秒原子替换密钥环并在心跳里报告已核对的版本；全部在线节点报告后自动激活，按 100 个一批重包裹，零引用且所有节点写出新版本满 30 秒后退役；退役与信封写由一把 advisory 锁和 `platform.key_retirements` 互斥，迟到的旧版本写被拒。
-- 信封表登记在 `cmd/axiom` 的 `secret.Rotation`、挂退役触发器，缺则不启动；未登记列不挡服务，只挡退役和重包裹收尾。
+密钥文件、信封格式、主密钥轮换与退役见 [secret](secret/README.md)。
 
 ## 出站 HTTP
 
-- `egress.New(egress.Direct)` 并发安全，`Via` 经 http(s)、socks5 代理；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
-- DNS 结果全部合格才拨号，直连按 IP 拨，Host 和 SNI 保留原主机；拒绝私网、回环、链路本地、特殊用途段、非 `2000::/3` 的 IPv6、NAT64 知名与本地前缀、Azure 的 `168.63.129.16`，以及 URL 里的映射 IPv6、非常规 IPv4 写法和 zone。
-- 连接合计 10 秒（候选 IP 平分），TLS 握手 10 秒，空闲 90 秒，响应头至多 1 MiB；其余只受调用方期限约束。
-- 部署前提：出站网络没有转向内网的自选 NAT64 前缀。
-- 测试：`egresstest.Policy` 放行回环（含 mail 测试）；`Route(host, at)` 把固定公网域名转到本机假服务，Host 和证书不变，目标仍过策略。生产策略不转发。
+拨号的地址策略、期限、代理和测试放行见 [egress](egress/README.md)。
 
 ## 监听
 
@@ -110,9 +102,7 @@
 
 ### 连接池
 
-- 每节点连接预算 N = `(max_connections − 服务器预留槽位 − pg.OperationsReserve) ÷ AXIOM_CORE_NODES − pg.OutsidePoolConns`，最多 `pg.PoolSize`；`pool_max_conns` 只能在份额内覆盖。其中 R（`AXIOM_DB_COMPLETION_RESERVE`，默认 `pg.CompletionReserve`）条只给 gateway 的追加、结算和孤儿结算（`pg.CompletionContext`），其余进普通池；要求 0 < R < N，装不下就不启动（错误和启动日志列出全部输入）。
-- 两个池互不借用，其余事务（含 River、`TenantTx`）都走普通池；gateway 的许可数取自 `db.MaxConns()`、`db.CompletionConns()`（[gateway](../gateway/README.md#并发背压与共享状态)）。
-- 池外连接三条：名字锁 `Hold`、River 的 LISTEN、持有者心跳与回收的 `pg.DB.Dedicated`（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
+每节点的连接预算、完成类预留和池外连接见 [pg 的「连接池」](pg/README.md#连接池)。
 
 ### 范围
 

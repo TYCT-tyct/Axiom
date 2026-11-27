@@ -1,6 +1,6 @@
 # pg
 
-连接池、事务与角色的公开接口见 [platform](../README.md#范围)。本文件负责迁移执行与校验、行级安全策略的表达式和查询计划；租户数据分类以[安全文档](../../../docs/security.md#租户隔离)为准。
+事务与角色的公开接口见 [platform](../README.md#范围)。本文件负责连接池、迁移执行与校验、行级安全策略的表达式和查询计划；租户数据分类以[安全文档](../../../docs/security.md#租户隔离)为准。
 
 ## 不变量
 
@@ -52,6 +52,12 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 范围的逐行成本与极低估计由策略 InitPlan 统一处理；账本条件自身的相关性由读取入口的事务内排序设置处理。
 
 基线迁移 `00049_baseline.sql` 直接创建 InitPlan 范围策略，包括 observability 父表和每个初始分区；基线在空库的一个事务内执行，不再重放历史范围改写。
+
+## 连接池
+
+- 每节点连接预算 N = `(max_connections − 服务器预留槽位 − pg.OperationsReserve) ÷ AXIOM_CORE_NODES − pg.OutsidePoolConns`，最多 `pg.PoolSize`；`pool_max_conns` 只能在份额内覆盖。其中 R（`AXIOM_DB_COMPLETION_RESERVE`，默认 `pg.CompletionReserve`）条只给 gateway 的追加、结算和孤儿结算（`pg.CompletionContext`），其余进普通池；要求 0 < R < N，装不下就不启动（错误和启动日志列出全部输入）。
+- 两个池互不借用，其余事务（含 River、`TenantTx`）都走普通池；gateway 的许可数取自 `db.MaxConns()`、`db.CompletionConns()`（[gateway](../../gateway/README.md#并发背压与共享状态)）。
+- 池外连接三条：名字锁 `Hold`、River 的 LISTEN、持有者心跳与回收的 `pg.DB.Dedicated`（[计费的「持有者与截止时间」](../../../docs/domains/billing.md#持有者与截止时间)）。
 
 ## 迁移执行与校验
 
