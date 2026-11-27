@@ -129,7 +129,7 @@ func TestProposalsSelectRules(t *testing.T) {
 		{"overflow", []Rule{makeRule(Selector{Kind: "all"}, multiplied("1000000000000")), broad}, "", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p, err := proposePrice(defaultPricePolicy(), c.rules, model, snap, usd, []PriceCost{priceCost(t, id, "0.0000005")}, fallbacks{})
+			p, err := proposePrice(defaultPricePolicy(), c.rules, nil, model, snap, usd, []PriceCost{priceCost(t, id, "0.0000005")}, fallbacks{})
 			if err != nil {
 				t.Fatal(err)
 			}

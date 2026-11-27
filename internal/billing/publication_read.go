@@ -88,7 +88,8 @@ func publishedLayer(row ReadPublicationsRow, policy PricePolicy) (AudiencePrice,
 		return AudiencePrice{}, err
 	}
 	var basis struct {
-		Rule *Rule `json:"rule"`
+		Rule   *Rule           `json:"rule"`
+		Scales *scaledEvidence `json:"scales"`
 	}
 	raw := proposal.Basis
 	// A pending proposal must not change precedence before its price version is confirmed.
@@ -110,6 +111,9 @@ func publishedLayer(row ReadPublicationsRow, policy PricePolicy) (AudiencePrice,
 		return AudiencePrice{}, err
 	}
 	price := AudiencePrice{Audience: audience, Target: basis.Rule.Target}
+	if basis.Scales != nil {
+		price.Target = basis.Scales.Target
+	}
 	if row.CurrentID != nil && (row.Status == "published" || row.Status == "pending") {
 		price.Sold, err = readPublishedPrice(row, policy)
 	}

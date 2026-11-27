@@ -76,6 +76,13 @@ function Facts({ apiKey }: { apiKey: Key }) {
     : t("routingPresets.key.notDefault");
   const facts: { name: string; value: ReactNode }[] = [
     { name: t("keys.board.text"), value: maskedKey(apiKey) },
+    {
+      name: t("keys.board.kind"),
+      value:
+        apiKey.kind === "management"
+          ? `${t("keys.board.managementKey")} · ${t("keys.board.managementHint")}`
+          : t("keys.board.callKey"),
+    },
     ...(apiKey.kind === "management"
       ? []
       : [

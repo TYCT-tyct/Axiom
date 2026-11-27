@@ -47,6 +47,11 @@ func (f *priceFixture) reprice(price string) {
 	f.costs[0].Endpoint = endpoint
 }
 
+// inputs are what a refresh prices the fixture from, as a node reads them.
+func (f *priceFixture) inputs() PriceInputs {
+	return PriceInputs{Currency: usd, Snapshot: f.catalog.snapshot(), Costs: f.costs}
+}
+
 func (f *priceFixture) refresh() map[catalog.ModelID]Sold {
 	f.t.Helper()
 	var sold map[catalog.ModelID]Sold
@@ -99,7 +104,7 @@ func (f *priceFixture) method(m Method) {
 
 func (f *priceFixture) publish(p Publication, confirmed, override bool) error {
 	return f.tx(func(tx pg.Tx) error {
-		_, err := PublishPrice(f.t.Context(), tx, system, f.site, f.model, p.Candidate, p.Current, confirmed, override, "explicit decision")
+		_, err := PublishPrice(f.t.Context(), tx, system, f.site, f.model, p.Candidate, p.Current, confirmed, override, "explicit decision", f.inputs())
 		return err
 	})
 }
@@ -196,7 +201,7 @@ func TestPublicationIsAtomicAndConcurrent(t *testing.T) {
 	p := f.state()
 	rollback := errors.New("rollback")
 	if err := f.tx(func(tx pg.Tx) error {
-		if _, err := PublishPrice(t.Context(), tx, system, f.site, f.model, p.Candidate, p.Current, true, true, "rollback"); err != nil {
+		if _, err := PublishPrice(t.Context(), tx, system, f.site, f.model, p.Candidate, p.Current, true, true, "rollback", f.inputs()); err != nil {
 			return err
 		}
 		return rollback

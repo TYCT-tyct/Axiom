@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"runtime"
 	"sync"
@@ -18,6 +19,10 @@ var (
 	ErrTooManyAttempts = errors.New("accounts: too many attempts, wait and try again")
 	// ErrBusy is a password hash that waited longer than the node allows for a turn to compute it.
 	ErrBusy = errors.New("accounts: busy, try again shortly")
+	// ErrMailDisabled is a flow that must send mail on a node that has no SMTP settings: a reset or verification link,
+	// or the notice a password or email change sends, which must arrive (docs/security.md「账户安全」), so the change is
+	// refused rather than made without it. Waiting does not help, unlike the ErrBusy it wraps for older error tables.
+	ErrMailDisabled = fmt.Errorf("%w: this site sends no email", ErrBusy)
 )
 
 // TooManyAttempts is ErrTooManyAttempts with how long until the attempt would be let through.

@@ -216,7 +216,7 @@ func (s *Service) registrationSite(ctx context.Context, host string) (Registrati
 // registrationReady refuses an open registration when this node cannot send the verification mail.
 func (s *Service) registrationReady() error {
 	if s.registration == nil || !s.registration.mailer.Configured() {
-		return fmt.Errorf("%w: registration email", ErrBusy)
+		return ErrMailDisabled
 	}
 	return nil
 }
