@@ -41,17 +41,21 @@
 | `ark` | 火山方舟 | `ark.cn-beijing.volces.com`（CNY） | `/api/v3` | — | — |
 | `qianfan` | 百度千帆 | `qianfan.baidubce.com`（CNY） | `/v2` | — | — |
 | `minimax` | MiniMax | `api.minimax.cn`（CNY）、`api.minimax.io`（USD） | `/v1` | `/anthropic` | — |
+| `zhipu` | 智谱 | `open.bigmodel.cn`（CNY）、`api.z.ai`（USD） | `/api/paas/v4` | `/api/anthropic` | — |
+| `bailian` | 阿里云百炼 | `dashscope.aliyuncs.com`（CNY）、`dashscope-intl.aliyuncs.com`（USD） | `/compatible-mode/v1` | `/apps/anthropic` | — |
+| `openrouter` | OpenRouter | `openrouter.ai`（USD） | `/api/v1`，清单 `/api/v1/models/user` | — | — |
+| `siliconflow` | 硅基流动 | `api.siliconflow.cn`（CNY）、`api.siliconflow.com`（USD） | `/v1` | — | — |
 | `xai` | xAI | `api.x.ai`（USD） | `/v1`，含 Responses | — | — |
 | `mistral` | Mistral | `api.mistral.ai`（USD） | `/v1` | — | — |
 
-- **检测用的清单**：缺省是前缀加 `/models`，必须是要鉴权的请求：无效的 key 得到 401 才判得了 key。xAI 对无效 key 回 400，检测判为不可判定，不会放过坏 key。不能免费列模型的类型（`lists` 为假）不做定期重读，模型来自目录，key 只在加入时用一次输出上限 1 的最小生成检测，重读永远不发收费的请求。
-- **没有模型清单的不收**：智谱、百炼的文档没有 OpenAI 格式的模型清单，腾讯混元原平台已停服、迁往 TokenHub；检测读不到清单就判不了 key，这一批不收这三行。
-- **不在这一批**：聚合商（硅基流动、OpenRouter）卖多家的模型，价不是目录里的原厂官方价，要读它们自己的价目才能定成本；Perplexity 的模型清单接口未经证实会校验 key。三者这一批不收（见「待定问题」）。
+- **检测用的清单**：缺省是前缀加 `/models`，必须是要鉴权的请求：无效的 key 得到 401 才判得了 key。xAI 对无效 key 回 400，检测判为不可判定，不会放过坏 key。智谱的 `/api/paas/v4/models` 不在它的接口文档里，但两个地址对无效 key 都回 401，与百炼的 `/compatible-mode/v1/models` 一样能检测。OpenRouter 的公开 `/api/v1/models` 不校验 key，检测用要鉴权的 `/api/v1/models/user`。不能免费列模型的类型（`lists` 为假）不做定期重读，模型来自目录，key 只在加入时用一次输出上限 1 的最小生成检测，重读永远不发收费的请求。
+- **没有模型清单的不收**：腾讯混元原平台已停服、迁往 TokenHub，这一批不收。
+- **不在这一批**：Perplexity 的模型清单接口未经证实会校验 key（见「待定问题」）。
 
 - **两个调用族**：有 Anthropic 前缀的行同时说两族，`families` 是 `openai` 和 `anthropic`。Messages 按模型声明，不按厂商：行里列出厂商的 Anthropic 兼容接口服务的模型名（按厂商文档列出的名字，如 Kimi、DeepSeek、MiniMax 的；`*` 只用于厂商写明全部模型都服务的），名单里的生成模型端点同时声明 Chat 和 Messages，其余只有 Chat，Messages 请求由网关转换。Messages 发到 `<地址><Anthropic 前缀>/v1/messages`，用 `x-api-key`，与 Chat 同一把 key、同一个价；网关对 Messages 请求优先选原生的 Messages，Claude Code 这类客户端不必经过转换。Anthropic 前缀与 OpenAI 前缀在同一地址下，凭证只发往供应商自己的地址这一条不变。
 - **差异只用声明**：厂商的差异是行里的类型化字段或这一行声明的小钩子（模型清单路径、余额读法、额外的请求头），不是可配置的改写。请求体层面的差异（推理字段、`max_completion_tokens`、`stream_options`）由协议层按模型规格处理；某家确实要不同的写法，先录一份样本证明，再作为端点的类型化事实交给协议层，不在供应商一侧改请求体。每一行带一组录制的请求和回答样本，覆盖它声明的差异。
 - **币种跟着价目入口**：结算币种就是所选价目入口的币种，内置类型不能另选：同一模型的人民币价和美元价不是汇率关系（[目录基线的「币种」](catalog.md#目录基线)），另选币种就是用错价目表。只有人填地址的类型（`compatible`、Azure）给结算币种。供应商之间币种不同时，按已有的汇率换算记账（`Credits`）。读得到余额的入口在接入时核对：余额接口报的币种与入口不同，是 422。
-- **聚合商按自己的价**：卖多家模型的类型，成本只能用它自己的每模型价乘线路倍率，读不到价的模型成本未知、不进路由；不拿原厂官方价乘一个倍率去凑。
+- **聚合商按自己的价**：卖多家模型的类型（OpenRouter、硅基流动）不列作者，成本只能用它对这个名字实际收的价乘线路倍率；没有这样的价，成本未知、不进路由；不拿原厂官方价乘一个倍率去凑。不变量：聚合商的端点只按「它对这次调用会收的价」定成本，取不到就未知。两家现在都取不到，端点都未知：硅基流动的模型清单只有名字，价目只在网页上；OpenRouter 清单里的 `pricing` 是排在首位的那一家服务商的价，一个模型常有几家服务商、价可差数倍，调用按实际服务的那一家收费，按它定成本会低估。
 
 ### 凭证：形式、字段和设置
 
@@ -127,7 +131,9 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 | 类型的模型数按价目入口分别算，所有入口都为 0 才置灰 | 目录先行：没有价的模型成本未知、进不了路由；只看默认入口会把国际站有价的类型误置灰 |
 | 直连 key 定期免费重读模型清单，目录修订变了重新投影 | 厂商上新模型、目录上架后，线路不需要人重贴 key 就能卖 |
 | 只给读得到余额的厂商读余额，按 key（钱包）读，准入按标价比余额 | 预付费的国内厂商余额归零就停，不读余额只能等用户请求失败才知道；同一线路的 key 可能是不同钱包，按供应商读会让一个空钱包停掉其余；厂商按标价扣钱，折扣只影响我们的成本 |
-| 聚合商按自己的价目表定成本，没有可读价目表的不收；Bedrock 上非 Anthropic、Amazon 的模型和 `compatible` 的端点成本未知 | 聚合商和云平台给第三方模型的价不是原厂官方价，拿原厂价乘一个倍率会把成本算错，成本算低就是毛利虚高 |
+| 聚合商只按它对调用实际收的价定成本；OpenRouter、硅基流动先接入、端点成本未知；Bedrock 上非 Anthropic、Amazon 的模型和 `compatible` 的端点成本未知 | 聚合商和云平台给第三方模型的价不是原厂官方价，拿原厂价乘一个倍率会把成本算错，成本算低就是毛利虚高。OpenRouter 清单的价是首位服务商的，不是实际收的价（它的帮助文档写明按实际服务的服务商收费），按它定成本同样会低估；接入、列模型、检测 key 不依赖价，先接入，价源定下后端点在下一次投影时定价 |
+| 智谱、百炼按目录的官方价卖，用模型清单检测 | 两家的模型清单要鉴权、不收费，无效 key 回 401（四个地址都实测过）；百炼还卖 DeepSeek、Kimi、GLM 等别家的模型，价是百炼自己的，`serves` 只有 Qwen，这些端点成本未知 |
+| 硅基流动不读余额 | 国内站的 `/v1/user/info` 已停用（官方公告），余额读法目前按类型而不是按价目入口声明；端点成本未知时余额也用不上 |
 | 直连的调用面共用 `direct` 包；OpenAI 那一行同时服务 BYOK，按 `kind` 取 | 同一个 `kind` 只能有一个适配器；BYOK 与平台的 OpenAI 线路是同一个调用面 |
 | 供应商带接入方式 `mode`：`relay` 登录中转站或号池，分组是线路；`direct` 贴 key 直连，一条线路；`cloud` 云平台凭证，一条线路 | 线路、凭证、端点、成本计划和路由三种方式共用，不同的只有 key 怎么来、成本从哪来 |
 | 直连接口和云平台作为平台货源 | 负责人在 #948 定的第一版范围，#955 扩到国内外主流厂商 |
@@ -149,7 +155,9 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 ## 待定问题
 
 - Vertex 的 API key 只能调 Gemini 的 `generateContent`，不能调 Claude 的 `rawPredict`，也不能调 OpenAI 兼容的 Chat：这种形式要等网关能发 Gemini 原生格式才能开，开之前描述里不列它。
-- 聚合商（硅基流动、OpenRouter 的 `/api/v1/models` 带价）、`compatible` 接入的地址和 Bedrock 上第三方模型的价从哪来（各自的价目、AWS 的 Price List 接口，或人确认基础价；直连线路现在没有人确认价的操作），定下之前聚合商不收，后两者成本未知、不进路由；Perplexity 等它的清单接口证实会校验 key；智谱、百炼的清单接口和腾讯 TokenHub 待查证后再加。
+- 聚合商、`compatible` 接入的地址和 Bedrock 上第三方模型的价从哪来，定下之前三者的端点成本未知、不进路由。候选：人确认基础价（`confirmBasePrices` 现在只对中转站：基础价存在同步状态里、由同步按分组倍率定价，直连线路回 409，要给直连线路另存基础价并由定价函数读取）；OpenRouter 取每个模型所有服务商价的逐项最大值（`/api/v1/models/{作者}/{模型}/endpoints`，一个模型一次免费请求，成本只会高估）；或按 OpenRouter 回答里的 `usage.cost` 记实际成本（最准，要给直连线路加按回答记成本的路径）。AWS 的 Price List 接口待查。Perplexity 等它的清单接口证实会校验 key；腾讯 TokenHub 待查证后再加。
+- 智谱在分开管理 key 之前建的「兼容」key，所在账号买过编程套餐时，`/api/anthropic` 消耗套餐额度、套餐到期后拒绝调用，拒绝的状态码未见文档；新建的标准 key 按余额计费。要不要对这类 key 不走 Messages，看实测再定（#497）。
+- 余额读法按价目入口声明（硅基流动只有国际站能读余额），要与路由的「从没读到余额的 key 算付不起」一起按入口判断；等硅基流动的端点有价再做。
 - 每把 key 的余额告警（`BalanceLow`）：告警线设在哪一层、默认多少待定，定下之前只读余额、不告警。
 - 同一钱包的几把 key 各读一次余额、各自比较，若厂商的余额接口给出账户标识，可以合成一个钱包少读几次；看录制样本再定。
 - 每把 key 的花费上限、new-api 的任务类渠道（Midjourney、Suno、视频）不在这一版。

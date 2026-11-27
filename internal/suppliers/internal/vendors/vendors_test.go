@@ -43,6 +43,8 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 		{"minimax", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"MiniMax-M3", "MiniMax-M3.1-Flash"}},
 		{"zhipu", "/api/paas/v4/models", "/api/paas/v4/chat/completions", "/api/anthropic/v1/messages", []string{"glm-5.3", "glm-5.3-flash"}},
 		{"bailian", "/compatible-mode/v1/models", "/compatible-mode/v1/chat/completions", "/apps/anthropic/v1/messages", []string{"qwen3.8-flash", "qwen4-max", "text-embedding-v4"}},
+		{"openrouter", "/api/v1/models/user", "/api/v1/chat/completions", "", []string{"liquid/lfm-2.5-2.6b:free", "openai/gpt-4"}},
+		{"siliconflow", "/v1/models", "/v1/chat/completions", "", []string{"Qwen/Qwen3-Embedding-8B", "deepseek-ai/DeepSeek-V4-Pro"}},
 		{"xai", "/v1/models", "/v1/chat/completions", "", []string{"grok-420-reasoning", "grok-imagine-image", "latest"}},
 		{"mistral", "/v1/models", "/v1/chat/completions", "", []string{"mistral-large-4"}},
 	}
@@ -111,6 +113,26 @@ func row(t *testing.T, kind adapter.Kind) adapter.Adapter {
 	}
 	t.Fatalf("no row %s", kind)
 	return nil
+}
+
+// TestOnlyAnAuthorsOwnAPIIsPricedFromTheCatalog: a row sells at the catalog's official prices only the models of the
+// one author whose own API it is (its vendor); an aggregator, which sells any author's models at prices of its own,
+// names no author, so none of its endpoints is priced from the catalog (docs/domains/suppliers-direct.md「聚合商按自己的
+// 价」). OpenRouter's list does carry prices, but they are one provider's of the several a call may be routed to, not
+// what the call is charged.
+func TestOnlyAnAuthorsOwnAPIIsPricedFromTheCatalog(t *testing.T) {
+	t.Parallel()
+	aggregators := map[adapter.Kind]bool{"openrouter": true, "siliconflow": true}
+	for _, a := range vendors.New() {
+		typ := a.(adapter.Described).Type()
+		want := []string{typ.Vendor}
+		if aggregators[a.Kind()] {
+			want = nil
+		}
+		if diff := cmp.Diff(want, typ.Serves); diff != "" {
+			t.Errorf("%s serves (-want +got):\n%s", a.Kind(), diff)
+		}
+	}
 }
 
 // TestBalanceRowsReadTheirKeysWallet: the rows that say Balance (DeepSeek and Kimi, no other) read a key's balance at
