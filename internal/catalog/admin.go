@@ -284,13 +284,16 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 	})
 }
 
-// checkAddName refuses a name the catalog cannot hold, as the name table's checks do. A ~ is an alias's, and a colon is
-// only the one in a trailing :free, which names an entry that is a model of its own; a public name must also be its
-// model's standard ID, so a :free entry is named after itself and a paid model never takes a free name, and it cannot
-// end in -latest or hold an @, which a call would read as an alias or a pinned version.
+// checkAddName refuses a name the catalog cannot hold, as the name table's checks do: one that normalizes to nothing, or
+// holds a ~, which is an alias's, and a colon is only the one in a trailing :free, which names an entry that is a model
+// of its own; a public name must also be its model's standard ID, so a :free entry is named after itself and a paid
+// model never takes a free name, and it cannot end in -latest or hold an @, which a call would read as an alias or a
+// pinned version.
 func checkAddName(norm, slug string, visibility Visibility) error {
 	standard := Normalize(strings.SplitN(slug, "@", 2)[0])
 	switch {
+	case norm == "":
+		return fmt.Errorf("%w: the name has nothing left once normalized", ErrInvalid)
 	case strings.Contains(norm, "~"):
 		return fmt.Errorf("%w: a name has no ~ in it, which starts an alias", ErrInvalid)
 	case strings.Contains(norm, ":") && !freeName(norm):
