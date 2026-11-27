@@ -96,47 +96,56 @@ func TestFailoverIsTheSameInEveryFormat(t *testing.T) {
 	t.Parallel()
 	for _, f := range clientFormats {
 		for _, streamed := range []bool{false, true} {
-			for _, tc := range []struct {
-				name   string
-				status int // the first call's answer, if it answers
-				brk    breakOff
-				flag   string // the cost flag of the attempt that failed
-			}{
+			for _, tc := range []failover{
 				{"server error", http.StatusInternalServerError, answers, "no_usage"},
 				{"stall before the headers", 0, stalls, "no_usage"},
 				{"cut after the first content", 0, cutsAfterContent, "unpriced"},
 			} {
 				t.Run(fmt.Sprintf("%s streamed %v %s", f.name, streamed, tc.name), func(t *testing.T) {
 					t.Parallel()
-					w := newCallWorld(t)
-					w.seedFailover()
-					w.limits = testGatewayConfig()
-					w.limits.HeaderWait = time.Second
-					w.supplier.mu.Lock()
-					if tc.status != 0 {
-						w.supplier.failures = []int{tc.status}
-					} else {
-						w.supplier.breaks = []breakOff{tc.brk}
-					}
-					w.supplier.mu.Unlock()
-					w.price()
-					n := w.start()
-					waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
-					r := w.call(n, f.path, w.richKey, f.request(streamed))
-					if streamed && tc.brk == cutsAfterContent {
-						w.checkBrokenStream(r, f)
-						return
-					}
-					answer := f.whole
-					if streamed {
-						answer = f.streamEnd
-					}
-					w.checkFailureSuccess(r, 2, answer)
-					w.checkFailedFirst(r, tc.flag)
+					tc.check(t, f, streamed)
 				})
 			}
 		}
 	}
+}
+
+// failover is how the first call to the supplier fails.
+type failover struct {
+	name   string
+	status int // the first call's answer, if it answers
+	brk    breakOff
+	flag   string // the cost flag of the attempt that failed
+}
+
+// check makes one call in format f that fails as tc says, and checks the client got the other endpoint's answer, or the
+// format's error when the content had already reached it.
+func (tc failover) check(t *testing.T, f clientFormat, streamed bool) {
+	w := newCallWorld(t)
+	w.seedFailover()
+	w.limits = testGatewayConfig()
+	w.limits.HeaderWait = time.Second
+	w.supplier.mu.Lock()
+	if tc.status != 0 {
+		w.supplier.failures = []int{tc.status}
+	} else {
+		w.supplier.breaks = []breakOff{tc.brk}
+	}
+	w.supplier.mu.Unlock()
+	w.price()
+	n := w.start()
+	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
+	r := w.call(n, f.path, w.richKey, f.request(streamed))
+	if streamed && tc.brk == cutsAfterContent {
+		w.checkBrokenStream(r, f)
+		return
+	}
+	answer := f.whole
+	if streamed {
+		answer = f.streamEnd
+	}
+	w.checkFailureSuccess(r, 2, answer)
+	w.checkFailedFirst(r, tc.flag)
 }
 
 // checkBrokenStream: a stream that broke after its first content reached the client ends in the format's error with a

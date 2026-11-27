@@ -103,34 +103,37 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 	if err := samples.Close(); err != nil {
 		t.Fatal(err)
 	}
-	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("the fake supplier could not read a request: %v", err)
-		}
-		n, reply, status, retryAfter := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
-		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
-		if brk := f.takeBreak(); brk != answers {
-			f.breakOff(t, w, r, brk, reply)
-			return
-		}
-		if status != 0 {
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", retryAfter)
-			w.WriteHeader(status)
-		} else {
-			if reply == "" {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-		}
-		if _, err := io.WriteString(w, reply); err != nil {
-			t.Errorf("the fake supplier could not answer: %v", err)
-		}
-	}))
+	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
 	t.Cleanup(f.server.Close)
 	return f
+}
+
+// serve records a call and answers it as the supplier was told to: broken off, failed, or with its recorded reply.
+func (f *fakeSupplier) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Errorf("the fake supplier could not read a request: %v", err)
+	}
+	n, reply, status, retryAfter := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
+	w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
+	if brk := f.takeBreak(); brk != answers {
+		f.breakOff(t, w, r, brk, reply)
+		return
+	}
+	if status != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", retryAfter)
+		w.WriteHeader(status)
+	} else {
+		if reply == "" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+	}
+	if _, err := io.WriteString(w, reply); err != nil {
+		t.Errorf("the fake supplier could not answer: %v", err)
+	}
 }
 
 // record remembers a call and says how many there have been, and what it is to be answered with: nothing for a path the
