@@ -136,6 +136,8 @@ export default {
   "subscription.refund_request": "Requested a subscription refund",
   "subscription_plan.create": "Created a subscription plan",
   "subscription_plan.update": "Changed a subscription plan",
+  "supplier.base_price_clear": "Cleared endpoints' base prices",
+  "supplier.base_price_confirm": "Confirmed endpoints' base prices",
   "supplier.byok_create": "Added a direct channel",
   "supplier.byok_disable": "Disabled a direct key",
   "supplier.byok_enable": "Enabled a direct key",
