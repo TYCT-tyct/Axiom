@@ -110,6 +110,8 @@ type Service struct {
 	balanceMu  sync.Mutex // serializes background balance refreshes
 	reloadMu   sync.Mutex // one Reload at a time; no call takes it
 	generation uint64     // guarded by reloadMu; the next snapshot's generation
+	// exits are the proxies' clients the last Reload handed out; guarded by reloadMu.
+	exits map[egress.Proxy]*egress.Client
 	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.
@@ -198,6 +200,9 @@ type endpoint struct {
 	ownerSite, ownerAccount uuid.UUID
 	poolLow                 bool
 	byok, byokFallback      bool
+	// wallets says each key of the platform supplier is a wallet of its own, whose balance its type reads: the funds are
+	// the keys', not the supplier's.
+	wallets bool
 }
 
 type credential struct {
@@ -205,11 +210,18 @@ type credential struct {
 	key                             secret.Secret
 	region                          string // the cloud region it serves from; empty for every other
 	call                            string // the endpoint's model as this credential's calls name it
+	settings                        adapter.Settings
 	configuredMax, configuredMinute int32
 	max                             int32
 	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
 	expires                         *time.Time
-	rt                              *credRuntime
+	// funds is what a key that is a wallet can pay, in the plan's terms: its balance as last read times the line's
+	// ratio, rounded down; zero for one never read. nil for any other credential.
+	funds *platform.Exact
+	// exit is the client its calls go through, the direct one unless proxy names the proxy it is (exits.client).
+	exit  *egress.Client
+	proxy string
+	rt    *credRuntime
 }
 
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
@@ -233,13 +245,9 @@ func (s *Service) Reload(ctx context.Context) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	asked := s.now()
-	var rows []store.ListRoutableRow
-	err := s.cfg.DB.ReadTx(ctx, s.cfg.Scope, func(tx pg.Tx) (err error) {
-		rows, err = store.New().ListRoutable(ctx, tx)
-		return err
-	})
+	rows, exits, err := s.read(ctx)
 	if err != nil {
-		return fmt.Errorf("read the endpoints: %w", err)
+		return err
 	}
 	s.generation++
 	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked, generation: s.generation}
@@ -250,7 +258,7 @@ func (s *Service) Reload(ctx context.Context) error {
 		if _, left := unloadable[r.SupplierID]; left {
 			continue
 		}
-		if err := s.load(next, schedules, r); err != nil {
+		if err := s.load(next, schedules, exits, r); err != nil {
 			if errors.Is(err, store.ErrUnsupportedFormat) {
 				// A newer node wrote a format this one cannot serve. Leave that endpoint out, not its supplier: the
 				// supplier's other endpoints still serve, and a rolling back release must not lose the whole provider.
@@ -261,13 +269,16 @@ func (s *Service) Reload(ctx context.Context) error {
 		}
 	}
 	for id, ep := range next.endpoints {
-		if _, left := unloadable[ep.supplier]; left {
+		if _, left := unloadable[ep.supplier]; left || len(ep.creds) == 0 { // none: every credential's exit is disabled
 			delete(next.endpoints, id)
 		}
 	}
+	s.fundWallets(next)
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.applyShares(next)
 	s.snap.Store(next)
+	exits.release()
+	s.exits = exits.built
 	s.report(ctx, unloadable)
 	for id, cause := range unsupported {
 		s.cfg.Logger.Warn("suppliers: an endpoint with a format this node does not know is left out",
@@ -276,15 +287,37 @@ func (s *Service) Reload(ctx context.Context) error {
 	return nil
 }
 
-// load adds the endpoint a row belongs to, if it is not in next yet, and the row's credential to it.
-func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) error {
+// read is what a Reload builds from, read in one transaction: the credentials that can serve, and the proxies.
+func (s *Service) read(ctx context.Context) (rows []store.ListRoutableRow, e *exits, err error) {
+	err = s.cfg.DB.ReadTx(ctx, s.cfg.Scope, func(tx pg.Tx) (err error) {
+		if rows, err = store.New().ListRoutable(ctx, tx); err != nil {
+			return err
+		}
+		e, err = readExits(ctx, tx, s.cfg.Egress, s.cfg.Keys, s.exits)
+		return err
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the endpoints: %w", err)
+	}
+	return rows, e, nil
+}
+
+// load adds the row's endpoint, if next lacks it, and the row's credential, unless its exit is disabled (exits.client).
+func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, exits *exits, r store.ListRoutableRow) error {
 	ep, err := s.endpointOf(next, schedules, r)
 	if err != nil {
 		return err
 	}
-	c, err := s.credentialOf(r)
+	c, err := s.credentialOf(r, ep.wallets)
 	if err != nil {
 		return err
+	}
+	c.exit, c.proxy, err = exits.client(r.EgressID)
+	switch {
+	case errors.Is(err, errNoExit):
+		return nil
+	case err != nil:
+		return fmt.Errorf("credential %s: %w", r.CredentialID, err)
 	}
 	ep.creds = append(ep.creds, c)
 	return nil
@@ -347,12 +380,8 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if !ok {
 		return nil, fmt.Errorf("endpoint %s: no adapter of kind %q", r.EndpointID, r.Kind)
 	}
-	if _, known := schedules[r.CostScheduleID]; !known {
-		sched, err := catalog.ParseSchedule(r.Schedule)
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %s: its cost schedule %s: %w", r.EndpointID, r.CostScheduleID, err)
-		}
-		schedules[r.CostScheduleID] = &sched
+	if err := parseSchedule(schedules, r); err != nil {
+		return nil, err
 	}
 	formats, err := store.ParseFormats(r.Formats)
 	if err != nil {
@@ -374,68 +403,16 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: its supplier's native balance: %w", r.EndpointID, err)
 	}
+	wallets := r.OwnerScope == "platform" && registry.TypeOf(a).Balance
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
-		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode),
-		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback,
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode && !wallets),
+		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback, wallets: wallets,
 	}
 	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
-}
-
-// owner is the tenant a nullable column names, the zero id for an endpoint of the platform's own.
-func owner(id *uuid.UUID) uuid.UUID {
-	if id == nil {
-		return uuid.UUID{}
-	}
-	return *id
-}
-
-// optionalQuantization parses the level an admin recorded, or the empty level when none is recorded: absence is a level
-// no request matches, not a synonym for the level OpenRouter names 'unknown'.
-func optionalQuantization(r store.ListRoutableRow) (Quantization, error) {
-	if r.Quantization == nil {
-		return "", nil
-	}
-	quantization, err := ParseQuantization(*r.Quantization)
-	if err != nil {
-		return "", fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
-	}
-	return quantization, nil
-}
-
-// relayMode is the mode of a supplier Axiom logs in to: its keys draw on one account there.
-const relayMode = "relay"
-
-// upstreamAccount is the account at the supplier a credential's requests count against: a relay's keys all draw on the
-// one account Axiom logs in as, and every key pasted for a provider's own API, or a cloud region, is an account of its
-// own (docs/domains/suppliers.md「凭证」).
-func upstreamAccount(r store.ListRoutableRow) uuid.UUID {
-	if r.Mode == relayMode {
-		return r.SupplierID
-	}
-	return r.CredentialID
-}
-
-func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
-	if r.KeyVersion == nil {
-		return nil, fmt.Errorf("credential %s is active without a key", r.CredentialID)
-	}
-	at := secret.Location{Table: "suppliers.credentials", RowID: r.CredentialID.String(), Purpose: "key"}
-	key, err := s.cfg.Keys.Open(secret.Sealed{
-		Ciphertext: r.Ciphertext, Nonce: r.Nonce, WrappedDEK: r.WrappedDek,
-		KeyVersion: uint32(*r.KeyVersion), //nolint:gosec // the column holds 1 to 2³²-1
-	}, at)
-	if err != nil {
-		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
-	}
-	return &credential{
-		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
-		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
-		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, upstreamAccount(r), r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
-	}, nil
 }
 
 // SetMeasuredCancels records what quality measured for an endpoint: whether the supplier stops generating when the
@@ -481,9 +458,15 @@ func (s *Service) availableCredentials(ep *endpoint) int {
 	now := s.now()
 	n := 0
 	for _, c := range ep.creds {
-		if (c.expires == nil || now.Before(*c.expires)) && now.UnixNano() >= c.rt.restUnix.Load() {
+		if c.available(now) {
 			n++
 		}
 	}
 	return n
+}
+
+// available says the credential may be picked at now: it has not expired, is not resting, and is not a wallet the
+// provider refused for want of funds since its balance was last read.
+func (c *credential) available(now time.Time) bool {
+	return (c.expires == nil || now.Before(*c.expires)) && now.UnixNano() >= c.rt.restUnix.Load() && c.rt.broke.Load() == 0
 }

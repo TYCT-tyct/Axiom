@@ -17,12 +17,6 @@ import (
 // time, the scope (date, region, service) and the canonical request's hash; the signing key is the secret chained by
 // HMAC-SHA256 through the scope. TestSignatureMatchesAWSVectors checks it against AWS's published examples.
 
-// keys is an access key.
-type keys struct {
-	AccessKeyID     string `json:"access_key_id"`
-	SecretAccessKey string `json:"secret_access_key"`
-}
-
 const (
 	algorithm  = "AWS4-HMAC-SHA256"
 	amzDate    = "20060102T150405Z"
@@ -30,9 +24,10 @@ const (
 	terminator = "aws4_request"
 )
 
-// sign puts X-Amz-Date and Authorization on req for service in region at at, over payload, which is the body req
-// sends. Every header req carries is signed, with Host; the outbound client sets only User-Agent after, which is not.
-func sign(req *http.Request, payload []byte, k keys, region, service string, at time.Time) {
+// sign puts X-Amz-Date and Authorization on req for service in region at at with k's access key, over payload, which
+// is the body req sends. Every header req carries is signed, with Host; the outbound client sets only User-Agent
+// after, which is not.
+func sign(req *http.Request, payload []byte, k credential, region, service string, at time.Time) {
 	t := at.UTC()
 	req.Header.Set("X-Amz-Date", t.Format(amzDate))
 	names, headers := canonicalHeaders(req)

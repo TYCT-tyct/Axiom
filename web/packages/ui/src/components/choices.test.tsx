@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
-import { ChoiceCards } from "./choice-cards";
+import { afterEach, expect, it } from "vitest";
 import { DataTable } from "./data-table";
 import { Disclosure } from "./disclosure";
 import { StepList } from "./step-list";
 
-// The upstream pages' parts: the cards a way in is chosen from, a channel's checklist, a pile that reads what it holds
+// The upstream pages' parts: a channel's checklist, a pile that reads what it holds
 // only once opened, and a table row that opens in place. None has words of its own, so no translation is mounted.
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -22,25 +21,6 @@ function render(node: ReactNode) {
 }
 
 afterEach(() => document.body.replaceChildren());
-
-it("presses the chosen card and says the choice", () => {
-  const chosen = vi.fn();
-  render(
-    <ChoiceCards
-      label="Way"
-      value="key"
-      choices={[
-        { value: "relay", title: "Relay", detail: "sign in", icon: "link" },
-        { value: "key", title: "Keys", detail: "paste", icon: "keys" },
-      ]}
-      onChange={chosen}
-    />,
-  );
-  const cards = [...host.querySelectorAll("button")];
-  expect(cards.map((card) => card.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
-  act(() => cards[0]?.click());
-  expect(chosen).toHaveBeenCalledWith("relay");
-});
 
 it("ticks the steps done, marks the first not done as current and shows only its action", () => {
   const action = <button type="button">{"go"}</button>;

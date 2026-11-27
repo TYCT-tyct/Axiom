@@ -23,7 +23,7 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// Conn is one attempt's connection to a credential of an endpoint, held from Acquire to Done. *suppliers.Attempt is one.
+// Conn is one attempt's connection to a credential of an endpoint, held from AcquireWithin to Done. *suppliers.Attempt is one.
 type Conn interface {
 	Send(ctx context.Context, call suppliers.Call) (*http.Response, *suppliers.Failure)
 	Policy() suppliers.CallPolicy
@@ -33,10 +33,11 @@ type Conn interface {
 	Sanitize(protocol.Rejection) *protocol.Rejection
 }
 
-// Upstreams is the call side of suppliers as the attempts use it. Acquire returns suppliers.ErrNoEndpoint or
-// suppliers.ErrNoSlot when it has no credential to give; neither is an attempt.
+// Upstreams is the call side of suppliers as the attempts use it. AcquireWithin gives a credential of the endpoint
+// that can pay bound, the entry's routing.Entry.Bound, or returns suppliers.ErrNoEndpoint or suppliers.ErrNoSlot when
+// it has none to give; neither is an attempt.
 type Upstreams interface {
-	Acquire(id suppliers.EndpointID) (Conn, error)
+	AcquireWithin(id suppliers.EndpointID, bound platform.Exact) (Conn, error)
 }
 
 type serviceUpstreams struct{ *suppliers.Service }
@@ -44,8 +45,8 @@ type serviceUpstreams struct{ *suppliers.Service }
 // NewUpstreams is the suppliers service as Upstreams.
 func NewUpstreams(s *suppliers.Service) Upstreams { return serviceUpstreams{s} }
 
-func (u serviceUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
-	a, err := u.Service.Acquire(id)
+func (u serviceUpstreams) AcquireWithin(id suppliers.EndpointID, bound platform.Exact) (Conn, error) {
+	a, err := u.Service.AcquireWithin(id, bound)
 	if err != nil {
 		return nil, err // not a nil *Attempt inside a non-nil Conn
 	}

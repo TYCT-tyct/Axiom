@@ -15,20 +15,18 @@ import (
 // There is no login, balance or charge list to read: what can be asked is whether the credential serves in a region,
 // and which models. The sync never opens such an adapter.
 type Cloud interface {
-	// Origin is the platform's address as the supplier shows it; empty for one whose address a person gives.
-	Origin() string
-	// Regional says a credential serves by region, each checked and limited on its own; a platform that does not takes
-	// no region.
-	Regional() bool
-	// Named says a person names the models a credential serves, which the platform does not list to it (Azure
-	// OpenAI's deployments); a check of such a platform lists none, and its Offer offers none.
-	Named() bool
-	// ReadCredential reads what a person pasted, asking nothing of the platform. A *CredentialFormError is one that
-	// cannot be a credential of the platform.
-	ReadCredential(in CloudInput) (CloudCredential, error)
+	// Type describes the platform: its address (none when a person gives it), the regions field of one whose credential
+	// serves by region, each checked and limited on its own, and the deployments field of one whose models a person
+	// names, which the platform does not list to the credential (Azure OpenAI's): a check of such a platform lists none,
+	// and its Offer offers none.
+	Described
+	// ReadCredential reads the secrets of the form a person filled in, already checked against the type's fields,
+	// asking nothing of the platform. A *FieldError is one that cannot be a credential of the platform.
+	ReadCredential(form string, secrets map[string]string) (CloudCredential, error)
 	// CheckRegion asks the platform at origin, with requests it does not charge for, whether key serves in region
-	// (empty for a platform without regions) and which models. at is the time the requests are signed at.
-	CheckRegion(ctx context.Context, d Doer, origin, region string, key secret.Secret, at time.Time) CloudCheck
+	// (empty for a platform without regions) and which models. s are the credential's settings; at is the time the
+	// requests are signed at.
+	CheckRegion(ctx context.Context, d Doer, origin, region string, key secret.Secret, s Settings, at time.Time) CloudCheck
 	// Offer is the name calls name the catalog model m by, for a platform whose check lists no models: official is the
 	// name m's vendor's own API knows it by. false for a model the platform does not serve, and for every model of a
 	// platform whose check lists them.
@@ -37,12 +35,6 @@ type Cloud interface {
 	Formats(m catalog.Model) []protocol.Format
 	// Unmapped is what a name a check lists that the catalog does not map yet is listed as speaking.
 	Unmapped() []protocol.Format
-}
-
-// CloudInput is what a person pasted, by the contract's members (CloudCredentialInput). Only those of one platform are
-// set; ReadCredential refuses the others.
-type CloudInput struct {
-	ServiceAccountJSON, AccessKeyID, SecretAccessKey, APIKey string
 }
 
 // CloudCredential is a credential as read: Key is what is sealed and what calls are made with; Identity tells this
@@ -61,14 +53,6 @@ type CloudAccount struct {
 	ClientEmail    string `json:"client_email,omitempty"`
 	AccessKeyLast4 string `json:"access_key_last4,omitempty"`
 	KeyLast4       string `json:"key_last4,omitempty"`
-}
-
-// CredentialFormError is a credential that cannot be one of the platform: Member is the contract's member at fault,
-// Reason what is wrong, never any of the text pasted.
-type CredentialFormError struct{ Member, Reason string }
-
-func (e *CredentialFormError) Error() string {
-	return "adapter: the credential's " + e.Member + " " + e.Reason
 }
 
 // CloudModel is one model a region serves. Name is what the endpoint is stored by and what is shown; Call is what this
@@ -114,5 +98,6 @@ type SignedCall struct {
 	Body                  []byte
 	Header                http.Header
 	Key                   secret.Secret
+	Settings              Settings
 	At                    time.Time
 }

@@ -21,7 +21,8 @@ const (
 	FactorCacheRatio      FactorKind = "cache_ratio"
 	FactorCacheWriteRatio FactorKind = "cache_write_ratio"
 	FactorGroupRatio      FactorKind = "group_ratio"
-	FactorBasePrice       FactorKind = "base_price" // a price of the base a person confirmed
+	FactorBasePrice       FactorKind = "base_price"     // a price of the base a person confirmed
+	FactorOfficialPrice   FactorKind = "official_price" // a direct or cloud type's price, which the line's ratio scales
 )
 
 // Factor is one input of a price, as exact decimal text of at most 15 decimals (the contract's Decimal).

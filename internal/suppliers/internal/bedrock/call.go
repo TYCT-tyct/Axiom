@@ -3,6 +3,7 @@ package bedrock
 import (
 	"context"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 
@@ -21,33 +22,52 @@ const eventStream = "application/vnd.amazon.eventstream"
 
 type quirks struct{ cloud.Quirks }
 
-// invokeURL is where a call of model goes in region: InvokeModel, or InvokeModelWithResponseStream for a stream. The
-// model's ID is a path segment, its colon encoded.
-func invokeURL(region, model string, stream bool) string {
-	action := "/invoke"
-	if stream {
-		action = "/invoke-with-response-stream"
-	}
-	return "https://bedrock-runtime." + region + ".amazonaws.com/model/" + escape(model) + action
+// actions are, by call format, the runtime's actions a call goes to: the one that answers whole and the one that
+// streams. Answer tells a Converse call's answer from InvokeModel's by the action (converses).
+var actions = map[protocol.Format][2]string{
+	protocol.Messages: {"invoke", "invoke-with-response-stream"},
+	protocol.Chat:     {"converse", "converse-stream"},
 }
 
-// Sign implements adapter.Signer: the Messages body without its model and stream, which the path says, with Bedrock's
-// version, and the beta features the client asked for in anthropic-beta that Bedrock takes as the body's anthropic_beta, where
-// Bedrock reads them; signed with the region's key.
+// runtimeURL is where a call of model goes in region: the action, the streaming one for a stream. The model's ID is a
+// path segment, its colon encoded.
+func runtimeURL(region, model string, f protocol.Format, stream bool) string {
+	action := actions[f][0]
+	if stream {
+		action = actions[f][1]
+	}
+	return "https://bedrock-runtime." + region + ".amazonaws.com/model/" + escape(model) + "/" + action
+}
+
+// Sign implements adapter.Signer, authorized with the region's credential. Messages is the body without its model and
+// stream, which the path says, with Bedrock's version, and the beta features the client asked for in anthropic-beta as
+// the body's anthropic_beta, where Bedrock reads them. Chat is the body converted to Converse's.
 func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*http.Request, *adapter.Failure) {
-	k, ok := keysOf(c.Key)
-	if c.Format != protocol.Messages || !ok {
+	k, ok := credentialOf(c.Key)
+	if !ok {
 		return nil, cloud.BadBody()
 	}
-	add := []cloud.Member{{Name: "anthropic_version", Value: anthropicVersion}}
-	if beta := betas(c.Header.Values("Anthropic-Beta")); beta != nil {
-		add = append(add, cloud.Member{Name: "anthropic_beta", Value: beta})
+	var (
+		body   []byte
+		stream bool
+		err    error
+	)
+	switch c.Format {
+	case protocol.Messages:
+		add := []cloud.Member{{Name: "anthropic_version", Value: anthropicVersion}}
+		if beta := betas(c.Header.Values("Anthropic-Beta")); beta != nil {
+			add = append(add, cloud.Member{Name: "anthropic_beta", Value: beta})
+		}
+		body, stream, err = cloud.Rewrite(c.Body, []string{"model", "stream"}, add...)
+	case protocol.Chat:
+		body, stream, err = converse(c.Body)
+	case protocol.Responses, protocol.Embeddings, protocol.Rerank, protocol.Completions:
+		return nil, cloud.BadBody()
 	}
-	body, stream, err := cloud.Rewrite(c.Body, []string{"model", "stream"}, add...)
 	if err != nil {
 		return nil, cloud.BadBody()
 	}
-	req, f := cloud.Post(ctx, invokeURL(c.Region, c.Model, stream), body, nil)
+	req, f := cloud.Post(ctx, runtimeURL(c.Region, c.Model, c.Format, stream), body, nil)
 	if f != nil {
 		return nil, f
 	}
@@ -55,7 +75,7 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 	if stream {
 		req.Header.Set("Accept", eventStream)
 	}
-	sign(req, body, k, c.Region, "bedrock", c.At)
+	k.authorize(req, body, c.Region, c.At)
 	return req, nil
 }
 
@@ -98,16 +118,52 @@ func betas(values []string) []byte {
 	return b
 }
 
-// Answer implements adapter.Signer: a stream's event-stream framing becomes Anthropic's SSE as it is read.
+// Answer implements adapter.Signer: a stream's event-stream framing becomes SSE as it is read, Anthropic's for
+// InvokeModel and Chat's for Converse; Converse's whole answer becomes Chat's. InvokeModel's whole answer is Anthropic's
+// already.
 func (quirks) Answer(resp *http.Response) *http.Response {
-	if !strings.HasPrefix(resp.Header.Get("Content-Type"), eventStream) {
+	stream := strings.HasPrefix(resp.Header.Get("Content-Type"), eventStream)
+	switch converse := converses(resp); {
+	case converse && stream:
+		resp.Body = newChatSSE(resp.Body, chatHeadOf(resp))
+		resp.Header.Set("Content-Type", "text/event-stream")
+	case converse:
+		resp.Body = newChatAnswer(resp.Body, chatHeadOf(resp))
+		resp.Header.Set("Content-Type", "application/json")
+	case stream:
+		resp.Body = newSSE(resp.Body)
+		resp.Header.Set("Content-Type", "text/event-stream")
+	default:
 		return resp
 	}
-	resp.Body = newSSE(resp.Body)
-	resp.Header.Set("Content-Type", "text/event-stream")
 	resp.Header.Del("Content-Length")
 	resp.ContentLength = -1
 	return resp
+}
+
+// converses says resp answers a Converse call. Answer is given only the response, and both actions answer in the same
+// media types, so the request it answers tells: the outbound client's transport (net/http's) sets resp.Request to the
+// request Sign made, whose path ends in the action. Reading it keeps the Signer interface as it is, where marking
+// the call some other way would widen it for one platform. A response without its request is InvokeModel's, the
+// format every Bedrock call was before Converse.
+func converses(resp *http.Response) bool {
+	if resp.Request == nil {
+		return false
+	}
+	action := path.Base(resp.Request.URL.Path)
+	return action == actions[protocol.Chat][0] || action == actions[protocol.Chat][1]
+}
+
+// chatHeadOf is what each Chat answer or chunk starts with: Converse answers with none of it, so the id is Bedrock's
+// request ID, the model the one the path names and the time the response's Date. The gateway writes its own id and
+// model over them.
+func chatHeadOf(resp *http.Response) chatHead {
+	h := chatHead{ID: "chatcmpl-" + resp.Header.Get("X-Amzn-Requestid"), Object: "chat.completion"}
+	if at, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
+		h.Created = at.Unix()
+	}
+	h.Model = strings.TrimPrefix(path.Dir(resp.Request.URL.Path), "/model/")
+	return h
 }
 
 // Classify implements adapter.CallQuirks. AWS answers a key it does not know with 403 and the error type in a

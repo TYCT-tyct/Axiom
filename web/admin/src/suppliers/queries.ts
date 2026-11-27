@@ -94,6 +94,14 @@ export const endpointCostQuery = (supplierId: string, endpointId: string) =>
     retry,
   });
 
+// The channel types the node can connect (listSupplierTypes): the registry's, which change only with a release.
+export const supplierTypesQuery = queryOptions({
+  queryKey: [accountKey, "supplier-types"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/supplier-types`, { signal })),
+  staleTime: 5 * 60_000,
+  retry,
+});
+
 // The models on sale, for the view by model: every page, since the view compares them all.
 export const listedModelsQuery = infiniteQueryOptions({
   queryKey: [accountKey, "models", { status: "listed" }, "all"],

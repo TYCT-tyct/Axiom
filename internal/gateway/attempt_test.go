@@ -4,11 +4,13 @@ import (
 	"cmp"
 	"context"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -234,4 +236,23 @@ func TestProviderNoFallbackKeepsModelRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEachAttemptTakesAKeyWithinItsEntrysBound: routing admits a supplier whose keys are wallets on its richest key, so
+// the attempt must ask suppliers for a key that can pay the entry's bound, not for any key (internal/suppliers wallets).
+// The first entry fails and the second answers: each asks within its own bound.
+func TestEachAttemptTakesAKeyWithinItsEntrysBound(t *testing.T) {
+	t.Parallel()
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{entries: 2})
+		h.up.endpoint(2).script = []scripted{whole(h)}
+		want := []platform.Exact{platform.AmountExact(1), platform.AmountExact(7)}
+		for i := range want {
+			h.call.Plan.Entries[i].Bound = want[i]
+		}
+		h.run()
+		if h.w.status != http.StatusOK || !slices.Equal(h.up.bounds, want) {
+			t.Fatalf("status %d, credentials asked for within %v, want %v", h.w.status, h.up.bounds, want)
+		}
+	})
 }

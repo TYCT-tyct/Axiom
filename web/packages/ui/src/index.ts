@@ -22,7 +22,6 @@ export { BrandSwatch } from "./components/brand-swatch";
 export { Card } from "./components/card";
 export { BarChart, LineChart } from "./components/chart";
 export { ChipField } from "./components/chip-field";
-export { ChoiceCards } from "./components/choice-cards";
 export { CodeBlock } from "./components/code-block";
 export { CommandPalette, type PaletteItem, type PaletteSection } from "./components/command-palette";
 export { CopyButton } from "./components/copy-button";

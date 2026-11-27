@@ -90,6 +90,80 @@ function createSupplier({ body, state }: Ctx<"/api/admin/v1/suppliers", "post">)
   return { status: 201, json: supplier } as const;
 }
 
+type SupplierType = Schemas["SupplierType"];
+const keysForm = [{ name: "api_key", fields: [{ name: "keys", kind: "keys", required: true }] }] as const;
+const aType = (kind: string, name: string, over: Partial<SupplierType> = {}): SupplierType => ({
+  kind,
+  mode: "direct",
+  name,
+  group: "official",
+  entries: [],
+  families: ["openai"],
+  forms: [...keysForm.map((form) => ({ ...form, fields: [...form.fields] }))],
+  fields: [],
+  lists_models: true,
+  reads_balance: false,
+  ...over,
+});
+
+// The channel types of listSupplierTypes: a relay, direct APIs with and without price entries (one that sells nothing
+// yet, greyed), and a cloud platform with its own fields.
+const supplierTypes: SupplierType[] = [
+  aType("openai", "OpenAI", {
+    vendor: "openai",
+    entries: [{ id: "global", origin: "https://api.openai.com", currency: "USD", models: 12 }],
+  }),
+  aType("stepfun", "StepFun", {
+    group: "domestic",
+    vendor: "stepfun",
+    entries: [{ id: "cn", origin: "https://api.stepfun.com", currency: "CNY", models: 0 }],
+  }),
+  aType("moonshot", "Moonshot", {
+    group: "domestic",
+    vendor: "moonshot",
+    families: ["openai", "anthropic"],
+    entries: [
+      { id: "cn", origin: "https://api.moonshot.cn", currency: "CNY", models: 6 },
+      { id: "global", origin: "https://api.moonshot.ai", currency: "USD", models: 5 },
+    ],
+  }),
+  aType("compatible", "Custom API", { group: "domestic", families: ["openai", "anthropic"] }),
+  aType("azure", "Azure", {
+    mode: "cloud",
+    group: "cloud",
+    vendor: "azure",
+    forms: [{ name: "api_key", fields: [{ name: "api_key", kind: "secret", required: true }] }],
+    fields: [
+      { name: "api_version", kind: "text", required: false },
+      { name: "deployments", kind: "deployments", required: true },
+    ],
+  }),
+  aType("newapi", "New API", { mode: "relay", group: "relay", forms: [], lists_models: false }),
+];
+
+function listSupplierTypes() {
+  return ok({ data: supplierTypes });
+}
+
+// A direct API or a cloud platform connected: every key (or the one credential) passes its check.
+function createTypedSupplier({ body, params, state }: Ctx<"/api/admin/v1/supplier-types/{kind}/suppliers", "post">) {
+  const type = supplierTypes.find((t) => t.kind === params.kind && t.mode !== "relay");
+  if (!type) {
+    return fail(404, "not_found");
+  }
+  const supplier = aSupplier(state.suppliers.length + 1, {
+    name: body.name,
+    kind: type.kind,
+    mode: type.mode,
+    origin: body.origin ?? type.entries[0]?.origin ?? "https://api.example.com",
+    settlement_currency: body.settlement_currency ?? type.entries[0]?.currency ?? "USD",
+    status: "active",
+  });
+  state.suppliers.unshift({ supplier, groups: [], credentials: [], unbound_keys: [], endpoints: [] });
+  const checks = (body.keys ?? [""]).map((key, index) => ({ index, last4: key.slice(-4), outcome: "passed" as const }));
+  return { status: 201, json: { supplier, checks } } as const;
+}
+
 function setStatus({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_id}/status", "put">) {
   const detail = find(state, params.supplier_id);
   if (!detail) {
@@ -337,6 +411,8 @@ export const supplyHandlers: Handler<AdminState>[] = [
   route("get", `${base}/supplier-inbox`, reads("suppliers.view"), listInbox),
   route("get", `${base}/supplier-inbox/summary`, reads("suppliers.view"), inboxSummary),
   route("post", `${base}/supplier-inbox/{item_id}/ignore`, changes("suppliers.manage"), ignoreItem),
+  route("get", `${base}/supplier-types`, reads("suppliers.view"), listSupplierTypes),
+  route("post", `${base}/supplier-types/{kind}/suppliers`, changes("suppliers.manage"), createTypedSupplier),
   route("get", `${base}/suppliers`, reads("suppliers.view"), listSuppliers),
   route("post", `${base}/suppliers`, changes("suppliers.manage"), createSupplier),
   route("post", `${base}/suppliers/detections`, safe("suppliers.manage"), detect),

@@ -319,7 +319,7 @@ const checkPath = "/v1/models"
 
 // checkKey sends one check of key to origin. The answer's body is read only as far as the adapter needs to tell a
 // refusal's kind, and is dropped: it can hold the account's data.
-func (a *Admin) checkKey(ctx context.Context, quirks adapter.CallQuirks, origin string, key secret.Secret) KeyCheck {
+func (a *Admin) checkKey(ctx context.Context, exit *egress.Client, quirks adapter.CallQuirks, origin string, key secret.Secret) KeyCheck {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 	check := KeyCheck{Last4: hintOf(key.Reveal())}
@@ -329,7 +329,7 @@ func (a *Admin) checkKey(ctx context.Context, quirks adapter.CallQuirks, origin 
 		return check
 	}
 	req.Header.Set("Authorization", "Bearer "+key.Reveal())
-	resp, err := a.egress.Do(req)
+	resp, err := exit.Do(req)
 	check.CheckedAt = a.now()
 	if err != nil {
 		check.Outcome, check.Cause = CheckInconclusive, CauseTransport
@@ -373,11 +373,12 @@ func (a *Admin) CheckKey(ctx context.Context, r Reach, supplier uuid.UUID, key s
 	if err != nil {
 		return KeyCheck{}, err
 	}
-	return a.checkKey(ctx, sup.adapter.Calls(), sup.origin, key), nil
+	return a.checkKey(ctx, a.egress, sup.adapter.Calls(), sup.origin, key), nil
 }
 
-// CheckCredential sends one check of a stored credential with its own key. A credential that is disabled, erased or has
-// no key yet is not checked (ErrStatusLocked).
+// CheckCredential sends one check of a stored credential with its own key, through the exit its calls take. A
+// credential that is disabled, erased or has no key yet, or whose proxy is disabled with no active fallback, is not
+// checked (ErrStatusLocked).
 func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credential uuid.UUID) (KeyCheck, error) {
 	sup, err := a.supplierToReach(ctx, r, supplier)
 	if err != nil {
@@ -385,6 +386,8 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 	}
 	var key secret.Secret
 	var last4, region string
+	var settings adapter.Settings
+	var exit *egress.Client
 	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
 		rows, err := store.New().GetCredentialOf(ctx, tx, store.GetCredentialOfParams{SupplierID: supplier, ID: credential})
 		if err != nil {
@@ -396,37 +399,37 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 		if status := rows[0].Status; status == "disabled" || status == "erased" || status == "binding" {
 			return fmt.Errorf("%w: the credential is %s", ErrStatusLocked, status)
 		}
-		last4, region = deref(rows[0].Hint), deref(rows[0].Region)
+		last4, region, settings = deref(rows[0].Hint), deref(rows[0].Region), settingsOf(rows[0].Settings)
+		if exit, err = a.exitFor(ctx, tx, deref(rows[0].EgressID)); err != nil {
+			return err
+		}
 		key, err = a.openKey(ctx, tx, credential)
 		return err
 	})
 	if err != nil {
 		return KeyCheck{}, err
 	}
-	check := a.checkStored(ctx, sup, region, key)
+	check := a.checkStored(ctx, exit, sup, region, key, settings)
 	check.Credential, check.Last4 = credential, last4
 	return check, nil
 }
 
 // checkStored is one check of a stored credential the way its supplier is reached: a cloud credential in its region, a
 // direct API's key at the provider's model list with the provider's own header, a relay's key at /v1/models.
-func (a *Admin) checkStored(ctx context.Context, sup reachable, region string, key secret.Secret) KeyCheck {
+func (a *Admin) checkStored(ctx context.Context, exit *egress.Client, sup reachable, region string, key secret.Secret, s adapter.Settings) KeyCheck {
 	switch ad := sup.adapter.(type) {
 	case adapter.Cloud:
-		got := ad.CheckRegion(ctx, a.egress, sup.origin, region, key, a.now())
+		got := ad.CheckRegion(ctx, exit, sup.origin, region, key, s, a.now())
 		return checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, KeyCheck{Region: region}, a.now())
 	case adapter.Direct:
-		c, err := client.New(sup.origin, a.egress, client.NewLimiter(nil, a.now), a.now)
+		c, err := client.New(sup.origin, exit, client.NewLimiter(nil, a.now), a.now)
 		if err != nil {
 			return KeyCheck{Outcome: CheckInconclusive, Cause: CauseUnknown, CheckedAt: a.now()}
 		}
-		family := ad.Family()
-		if family == "" {
-			family = adapter.Family(sup.apiFormat)
-		}
-		return checkOf(ad.CheckKey(ctx, c, family, key), KeyCheck{}, a.now())
+		family, _ := adapter.FamilyOf(ad.Type(), adapter.Family(sup.apiFormat))
+		return checkOf(ad.CheckKey(ctx, c, family, key, s), KeyCheck{}, a.now())
 	}
-	return a.checkKey(ctx, sup.adapter.Calls(), sup.origin, key)
+	return a.checkKey(ctx, exit, sup.adapter.Calls(), sup.origin, key)
 }
 
 // openKey opens a credential's sealed key for one request. The caller sends it in one header and keeps it nowhere.
@@ -438,14 +441,19 @@ func (a *Admin) openKey(ctx context.Context, tx pg.Tx, credential uuid.UUID) (se
 	if sealed.KeyVersion == nil {
 		return secret.Secret{}, fmt.Errorf("%w: the credential holds no key", ErrStatusLocked)
 	}
-	key, err := a.keys.Open(secret.Sealed{
-		Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDEK: sealed.WrappedDek,
-		KeyVersion: uint32(*sealed.KeyVersion), //nolint:gosec // the column holds 1 to 2³²-1
-	}, keyAt(credential))
+	key, err := a.keys.Open(sealedOf(sealed.Ciphertext, sealed.Nonce, sealed.WrappedDek, *sealed.KeyVersion), keyAt(credential))
 	if err != nil {
 		return secret.Secret{}, fmt.Errorf("open the key: %w", err)
 	}
 	return key, nil
+}
+
+// sealedOf is an envelope as its four columns hold it.
+func sealedOf(ciphertext, nonce, wrapped []byte, version int64) secret.Sealed {
+	return secret.Sealed{
+		Ciphertext: ciphertext, Nonce: nonce, WrappedDEK: wrapped,
+		KeyVersion: uint32(version), //nolint:gosec // the column holds 1 to 2³²-1
+	}
 }
 
 // keyAt is where a credential's key is sealed to: its own row, so that it opens nowhere else.

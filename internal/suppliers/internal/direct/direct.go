@@ -1,35 +1,63 @@
-// Package direct is what every provider's own API shares (docs/domains/suppliers.md「直连接口」): one is reached with
-// keys a person pastes in, at an address and in call formats that are the provider's, and has no login, balance, offer
-// or charge list to read. The providers are adapters of their own, each a Provider in a package of its own listed in
-// the registry, so that removing one is deleting its package and its line; this package is not an adapter.
+// Package direct is what every provider's own API shares (docs/domains/suppliers-direct.md「直连接口」): one is reached
+// with keys a person pastes in, at an address and in call formats that are the provider's, and has no login, offer or
+// charge list to read. The providers are described by a Provider each: a row of the vendors table, or a package of its
+// own (anthropic, compatible) listed in the registry, so that removing one is deleting its row or its package and its
+// line; this package is not an adapter.
 package direct
 
 import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
 // Provider is what is particular to one provider's API.
 type Provider struct {
-	Kind adapter.Kind
-	// Family is the formats it speaks; empty for an API that speaks the family a person says (compatible).
-	Family adapter.Family
-	// Origin is its address; empty for one a person gives.
-	Origin string
-	// Currency is the currency of its official price list; empty when a person says it.
-	Currency string
+	// Type describes it; New fills in the mode, and the default key form when it names none.
+	Type adapter.Type
 	// Root is the path its OpenAI formats are served under in place of /v1, as Google serves them under
 	// /v1beta/openai; empty is /v1.
 	Root string
-	// Responses says it serves OpenAI's Responses and legacy completions besides Chat: only OpenAI's own API does. An
-	// API that only claims the OpenAI family is sent Chat, which every one of them serves, and the gateway converts.
+	// Anthropic is its Anthropic-compatible API under the same origin, for a provider of OpenAI's family that has one;
+	// nil for none.
+	Anthropic *Anthropic
+	// Responses says it serves OpenAI's Responses and legacy completions besides Chat. An API that only claims the
+	// OpenAI family is sent Chat, which every one of them serves, and the gateway converts.
 	Responses bool
+	// Models is the path its model list is read at; empty is the root's /models.
+	Models string
+	// Balance is how it tells a key's own balance; nil for a provider that does not. It is what makes the type's
+	// description say Balance.
+	Balance *Balance
 }
+
+// Balance is a provider's balance of one key: a GET of Path, which it does not charge for, with the key as for Chat,
+// whose answer Read reads. currency is the price entry's, for an answer that names none or more than one.
+type Balance struct {
+	Path string
+	Read func(body []byte, currency platform.Currency) (adapter.Money, error)
+}
+
+// Anthropic is a provider's Anthropic-compatible API: Messages at Root + /v1/messages, for the models it names. A name
+// is matched whole; "*" is every model, only for a provider that says its Anthropic API serves them all.
+type Anthropic struct {
+	Root   string
+	Models []string
+}
+
+// serves says the Anthropic-compatible API serves the model listed as name.
+func (a *Anthropic) serves(name string) bool {
+	return a != nil && (slices.Contains(a.Models, "*") || slices.Contains(a.Models, name))
+}
+
+// Keys is the form of a provider whose credential is its keys, pasted one a line.
+var Keys = adapter.Form{Name: "api_key", Fields: []adapter.Field{{Name: "keys", Required: true}}}
 
 // Adapter is one provider's adapter. It holds nothing: the key comes from the credential the call picked.
 type Adapter struct {
@@ -37,15 +65,31 @@ type Adapter struct {
 }
 
 var (
-	_ adapter.Adapter = (*Adapter)(nil)
-	_ adapter.Direct  = (*Adapter)(nil)
+	_ adapter.Adapter  = (*Adapter)(nil)
+	_ adapter.Direct   = (*Adapter)(nil)
+	_ adapter.Balancer = (*Adapter)(nil)
 )
 
 // New is the adapter of the provider.
-func New(p Provider) *Adapter { return &Adapter{p: p} }
+func New(p Provider) *Adapter {
+	p.Type.Mode, p.Type.Balance = adapter.ModeDirect, p.Balance != nil
+	if len(p.Type.Forms) == 0 {
+		p.Type.Forms = []adapter.Form{Keys}
+	}
+	if p.Root == "" {
+		p.Root = "/v1"
+	}
+	if p.Models == "" {
+		p.Models = p.Root + "/models"
+	}
+	return &Adapter{p: p}
+}
 
 // Kind implements adapter.Adapter.
-func (a *Adapter) Kind() adapter.Kind { return a.p.Kind }
+func (a *Adapter) Kind() adapter.Kind { return a.p.Type.Kind }
+
+// Type implements adapter.Described.
+func (a *Adapter) Type() adapter.Type { return a.p.Type }
 
 // Buckets implements adapter.Adapter. A key is checked once when it is pasted, and the provider limits each key by its
 // own account, which the credential's concurrency and per-minute ceiling stand for: there is no window of the provider's
@@ -65,19 +109,10 @@ func (*Adapter) Open(context.Context, adapter.Client, adapter.LoginStore) (adapt
 	return nil, errNoManagement
 }
 
-// Family implements adapter.Direct.
-func (a *Adapter) Family() adapter.Family { return a.p.Family }
-
-// Origin implements adapter.Direct.
-func (a *Adapter) Origin() string { return a.p.Origin }
-
-// Currency implements adapter.Direct.
-func (a *Adapter) Currency() string { return a.p.Currency }
-
 // Formats implements adapter.Direct, from the model's own billable items as a provider key's endpoint is
 // (docs/domains/accounts.md「自带的供应商 key」): output means it generates, input alone means it embeds. Nothing is guessed
-// from the name.
-func (a *Adapter) Formats(f adapter.Family, m catalog.Model) []protocol.Format {
+// from the name; only whether the Anthropic-compatible API serves the model is read from the name it is listed by.
+func (a *Adapter) Formats(f adapter.Family, m catalog.Model, name string) []protocol.Format {
 	_, generates := m.Serving()
 	generates = generates && m.Reportable().Items.Has(catalog.ItemOutput)
 	switch f {
@@ -86,7 +121,11 @@ func (a *Adapter) Formats(f adapter.Family, m catalog.Model) []protocol.Format {
 			return []protocol.Format{protocol.Messages}
 		}
 	case adapter.FamilyOpenAI:
-		return a.openAIFormats(m, generates)
+		formats := a.openAIFormats(m, generates)
+		if generates && a.p.Anthropic.serves(name) {
+			formats = append(formats, protocol.Messages)
+		}
+		return formats
 	case adapter.FamilyGemini:
 	}
 	return nil
@@ -127,20 +166,29 @@ func (quirks) Formats(adapter.GroupFacts) []protocol.Format { return nil }
 // request id with, and an attempt that kept one would wait for a charge that never comes and be reported unmatched.
 func (quirks) ChargeRef(http.Header) (adapter.ChargeRef, bool) { return "", false }
 
-// Path implements adapter.Wire: the OpenAI formats under the provider's root.
+// Path implements adapter.Wire: Messages under the Anthropic-compatible root of a provider that has one, as they are for
+// one of Anthropic's family, and the OpenAI formats under the provider's root.
 func (q quirks) Path(f protocol.Format, path string) string {
-	if q.p.Root == "" || f == protocol.Messages {
+	if f == protocol.Messages {
+		if q.p.Anthropic != nil {
+			return q.p.Anthropic.Root + path
+		}
 		return path
 	}
 	return q.p.Root + path[len("/v1"):]
 }
 
 // Authorize implements adapter.Wire. Anthropic's Messages take the key in x-api-key, as every API that speaks them
-// accepts it; the OpenAI formats take it as a bearer token.
-func (quirks) Authorize(h http.Header, f protocol.Format, key string) {
+// accepts it; the OpenAI formats take it as a bearer token. A setting the type sends in a header goes with every call.
+func (q quirks) Authorize(h http.Header, f protocol.Format, key string, s adapter.Settings) {
 	if f == protocol.Messages {
 		h.Set("X-Api-Key", key)
-		return
+	} else {
+		h.Set("Authorization", "Bearer "+key)
 	}
-	h.Set("Authorization", "Bearer "+key)
+	for _, field := range q.p.Type.Fields {
+		if v := s[field.Name]; field.Header != "" && v != "" {
+			h.Set(field.Header, v)
+		}
+	}
 }

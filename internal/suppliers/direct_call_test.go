@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/protocol"
@@ -18,11 +20,25 @@ import (
 )
 
 // The direct APIs of these tests are made here, not taken from the providers' packages, so that taking one of those out
-// leaves this package building (just adapters-removable): one of Anthropic's family, and one of OpenAI's under a root.
+// leaves this package building (just adapters-removable): one of Anthropic's family, one of OpenAI's under a root, and
+// one whose keys come with an organization, sent in a header.
 var (
-	messagesAPI = direct.New(direct.Provider{Kind: "messagesapi", Family: adapter.FamilyAnthropic, Origin: "https://messages.example"})
-	rootedAPI   = direct.New(direct.Provider{Kind: "rootedapi", Family: adapter.FamilyOpenAI, Origin: "https://rooted.example", Root: "/v1beta/openai"})
+	messagesAPI = direct.New(direct.Provider{Type: testType("messagesapi", adapter.FamilyAnthropic)})
+	rootedAPI   = direct.New(direct.Provider{Type: testType("rootedapi", adapter.FamilyOpenAI), Root: "/v1beta/openai"})
+	orgAPI      = direct.New(direct.Provider{Type: func() adapter.Type {
+		t := testType("orgapi", adapter.FamilyOpenAI)
+		t.Fields = []adapter.Field{{Name: "organization", Header: "OpenAI-Organization"}}
+		return t
+	}()})
 )
+
+// testType is a provider's type with one price entry, at an address of its own.
+func testType(kind string, family adapter.Family) adapter.Type {
+	return adapter.Type{
+		Kind: adapter.Kind(kind), Name: kind, Group: adapter.GroupOfficial, Families: []adapter.Family{family}, Lists: true,
+		Entries: []adapter.PriceEntry{{ID: "global", Origin: "https://" + kind + ".example", Currency: "USD"}},
+	}
+}
 
 // asDirect makes the world's supplier a provider's own API of the kind, with no balance ever read, as CreateDirect
 // leaves one, and restarts the node: a supplier's mode never changes, so a running node's state is the old mode's.
@@ -124,6 +140,50 @@ func TestDirectCallsGoTheProvidersWay(t *testing.T) {
 		}
 		if path != tc.path || apiKey != tc.apiKey || auth != tc.auth || (version != "") != tc.withAnthropicHeader || receipt.ref != "" {
 			t.Errorf("%s: sent to %s with key %q, authorization %q, version %q; kept ref %q", tc.kind, path, apiKey, auth, version, receipt.ref)
+		}
+	}
+}
+
+// TestADirectCallSendsTheKeysOwnNameAndSettings: a key that lists the endpoint's model under a name of its own is sent
+// that name, not the endpoint's, which it may not know; and a key's setting goes in the header its type sends it in. A
+// key without either sends the body as it is.
+func TestADirectCallSendsTheKeysOwnNameAndSettings(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, callNames, settings string
+		model, organization       string
+	}{
+		{"its own name", `{"gpt": "gpt-own"}`, `{"organization": "org-a"}`, "gpt-own", "org-a"},
+		{"the endpoint's", "", "", "gpt", ""},
+	} {
+		w := newWorldWith(t, 4, fakeKind{}, orgAPI)
+		w.tx(func(ctx context.Context, tx pg.Tx) error {
+			_, err := tx.Exec(ctx, "UPDATE suppliers.credentials SET call_names = NULLIF($2, '')::jsonb, settings = NULLIF($3, '')::jsonb WHERE id = $1",
+				w.credential, tc.callNames, tc.settings)
+			return err
+		})
+		w.asDirect("orgapi")
+		var model, organization string
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Model string `json:"model"`
+			}
+			raw, err := io.ReadAll(r.Body)
+			if err == nil {
+				err = jsonx.Unmarshal(raw, &body)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+			model, organization = body.Model, r.Header.Get("Openai-Organization")
+		}))
+		t.Cleanup(server.Close)
+		w.pointAt(server.URL)
+		if status, f, _ := w.send(protocol.Chat, `{"model":"gpt","messages":[]}`); status != http.StatusOK || f != nil {
+			t.Fatalf("%s: %d %v", tc.name, status, f)
+		}
+		if model != tc.model || organization != tc.organization {
+			t.Errorf("%s: sent model %q with organization %q, want %q and %q", tc.name, model, organization, tc.model, tc.organization)
 		}
 	}
 }

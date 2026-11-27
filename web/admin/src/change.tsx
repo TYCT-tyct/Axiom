@@ -53,6 +53,8 @@ type Props<Input, Out> = {
   warn?: ReactNode;
   action: string;
   danger?: boolean;
+  // Whether the change can be sent yet; false keeps the action disabled, as while the fields' choices load.
+  ready?: boolean;
   // A name the person must type before a risky change is sent.
   confirm?: string;
   // The fields of the change, besides the reason; error is the failure of the last try, to mark a field.
@@ -158,23 +160,23 @@ type FieldProblem = { message: string; field?: "reason" | "confirm" };
 type Change<Out> = ReturnType<typeof useChange<Out>>;
 
 export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
-  const { done, onClose, title, reload, verdict, action, danger } = props;
+  const { done, onClose, title, reload, verdict, action, danger, ready = true } = props;
   const { t } = useTranslation();
   const change = useChange<Out>(props.operation, useToastResult(props));
   const { attempt, mutation, lost } = change;
-  const { state } = attempt;
   const form = useChangeForm(props, change);
   const fetching = useIsFetching({ queryKey: [accountKey] }) > 0;
   const close = () => {
-    if (!mutation.isSuccess && (state === "unknown" || state === "reused")) void change.refresh();
+    if (!mutation.isSuccess && (attempt.state === "unknown" || attempt.state === "reused")) void change.refresh();
     onClose();
   };
   const moves = {
-    state,
+    state: attempt.state,
     lost,
     success: mutation.isSuccess,
     fetching,
     pending: mutation.isPending,
+    ready,
     formId: form.id,
     action,
     danger,
@@ -267,6 +269,7 @@ type Moves = {
   success: boolean;
   fetching: boolean;
   pending: boolean;
+  ready: boolean;
   formId: string;
   action: string;
   danger?: boolean;
@@ -276,7 +279,7 @@ type Moves = {
 };
 
 function next(moves: Moves, labels: { reload: string; close: string; resend: string }) {
-  const { state, lost, success, fetching, pending, formId, action, danger, reload, close } = moves;
+  const { state, lost, success, fetching, pending, ready, formId, action, danger, reload, close } = moves;
   if (!lost && state === "stale" && reload) {
     return { label: labels.reload, onClick: reload, disabled: fetching, busy: fetching };
   }
@@ -286,7 +289,7 @@ function next(moves: Moves, labels: { reload: string; close: string; resend: str
   return {
     label: state === "unknown" ? labels.resend : action,
     form: formId,
-    disabled: pending,
+    disabled: pending || !ready,
     busy: pending,
     danger: !lost && danger,
   };

@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"maps"
@@ -13,9 +14,11 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/cloud"
 	"axiom/internal/suppliers/internal/persist"
 )
 
@@ -55,8 +58,8 @@ type Call struct {
 }
 
 // AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, the unit
-// value it is costed at and the row that value came from, and the supplier's own id of the request once a response
-// header gave it. Billing passes it back unread; its fields are not for anyone else.
+// value it is costed at and the row that value came from, the exit it left by, and the supplier's own id of the request
+// once a response header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
 	exchange                                 platform.ExchangeRate
 	supplier, credential, endpoint, schedule uuid.UUID
@@ -66,10 +69,15 @@ type AttemptReceipt struct {
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
+	proxy                                    string             // the credential's exit when the attempt took it
 }
 
 // CredentialID identifies the selected key for independent health evidence.
 func (r AttemptReceipt) CredentialID() uuid.UUID { return r.credential }
+
+// Egress is the exit the attempt's requests left by, as the call log names it: the id of the proxy, its fallback's
+// while it was disabled, or "direct".
+func (r AttemptReceipt) Egress() string { return cmp.Or(r.proxy, directEgress) }
 
 // WithExchange attaches the reservation's basis, never the supplier snapshot's current rate.
 func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt {
@@ -97,7 +105,7 @@ type relayWire struct{}
 
 func (relayWire) Path(_ protocol.Format, path string) string { return path }
 
-func (relayWire) Authorize(h http.Header, _ protocol.Format, key string) {
+func (relayWire) Authorize(h http.Header, _ protocol.Format, key string, _ adapter.Settings) {
 	h.Set("Authorization", "Bearer "+key)
 }
 
@@ -129,9 +137,24 @@ type Attempt struct {
 // minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint,
 // ErrSupplierResting or ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt.
 // The slot is held until Done.
-func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false, uuid.UUID{}) }
+func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false, pick{}) }
 
-func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt, error) {
+// AcquireWithin is Acquire for a request whose native cost is at most bound, in the plan's terms (the gateway's
+// reserved cost): it passes over a key that is its own wallet (a type that reads balances) whose last balance read
+// cannot pay the request at the type's price, bound ÷ the line's ratio, since the provider charges its own price. When
+// no key can, it is ErrNoSlot, as for keys at their limits. Any other credential is picked as by Acquire.
+func (s *Service) AcquireWithin(id EndpointID, bound platform.Exact) (*Attempt, error) {
+	return s.acquire(id, false, pick{bound: &bound})
+}
+
+// pick is what a credential is chosen by beside its load: one to pass over while another can serve, and the request's
+// cost bound, which a key that is its own wallet must be able to pay; nil for none.
+type pick struct {
+	avoid uuid.UUID
+	bound *platform.Exact
+}
+
+func (s *Service) acquire(id EndpointID, probe bool, p pick) (*Attempt, error) {
 	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
 		snap := s.snap.Load()
 		ep, ok := snap.endpoints[id]
@@ -148,7 +171,7 @@ func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt,
 			ep.funds.state.mu.Unlock()
 		}
 		now := s.now() // the credential may have rested or expired since the last look
-		best, n := leastBusy(ep, now, avoid)
+		best, n := leastBusy(ep, now, p)
 		if best == nil {
 			return nil, ErrNoSlot
 		}
@@ -182,20 +205,20 @@ func (c *Capacity) Full() bool {
 	if !ok {
 		return false
 	}
-	best, _ := leastBusy(ep, c.s.now(), uuid.UUID{})
+	best, _ := leastBusy(ep, c.s.now(), pick{})
 	return best == nil
 }
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with. Each credential is held to its upstream account's rolling minute: a relay's
 // credentials share one, so it is counted once, and a pasted key's is its own.
-func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, bestN int32) {
+func leastBusy(ep *endpoint, now time.Time, p pick) (best *credential, bestN int32) {
 	var (
 		bestLoad float64
 		minute   accountMinute
 	)
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || minute.full(c, now) {
+		if !c.available(now) || p.bound != nil && c.funds != nil && c.funds.Cmp(*p.bound) < 0 || minute.full(c, now) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -203,7 +226,7 @@ func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, 
 			continue
 		}
 		load := float64(n) / float64(c.max)
-		if c.id == avoid {
+		if c.id == p.avoid {
 			load += 2
 		} // Every admissible load is below one; an alternative always wins over the previous key.
 		if best == nil || load < bestLoad {
@@ -277,6 +300,7 @@ func (a *Attempt) receipt() AttemptReceipt {
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
 		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
+		proxy: a.cred.proxy,
 	}
 }
 
@@ -317,9 +341,9 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 	case cloud && call.Count:
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	case cloud:
-		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
+		req, f = signer.Sign(ctx, a.cred.exit, adapter.SignedCall{
 			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
-			Header: call.Header, Key: a.cred.key, At: a.s.now(),
+			Header: call.Header, Key: a.cred.key, Settings: a.cred.settings, At: a.s.now(),
 		})
 	default:
 		req, f = a.request(ctx, call)
@@ -329,9 +353,9 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	resp, err := a.cred.exit.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
 	if err != nil {
-		return nil, transportFailure(wrote.Load())
+		return nil, transportFailure(wrote.Load(), a.cred.proxy != "")
 	}
 	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -370,17 +394,35 @@ func (a *Attempt) request(ctx context.Context, call Call) (*http.Request, *Failu
 	if !own {
 		wire = relayWire{}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
+	body, err := a.namedBody(call.Body)
+	if err != nil {
+		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	maps.Copy(req.Header, call.Header)
-	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal())
+	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal(), a.cred.settings)
 	req.Header.Set("Content-Type", "application/json")
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)
 	}
 	return req, nil
+}
+
+// namedBody is the body with the model as the credential's calls name it: the gateway writes the endpoint's name, and a
+// key that lists the model under a name of its own (call_names) may not know that one. Only then is the body rewritten.
+func (a *Attempt) namedBody(body []byte) ([]byte, error) {
+	if a.cred.call == a.ep.upstream {
+		return body, nil
+	}
+	model, err := jsonx.MarshalCanonical(a.cred.call)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := cloud.Rewrite(body, nil, cloud.Member{Name: "model", Value: model})
+	return out, err
 }
 
 func (a *Attempt) noteResponse(status int, h http.Header) {
@@ -393,46 +435,16 @@ func (a *Attempt) noteResponse(status int, h http.Header) {
 }
 
 // transportFailure is a failure with no usable response. Before the request was written nothing reached the supplier,
-// and the fault is in the route to it; after, it may have run.
-func transportFailure(wrote bool) *Failure {
-	if !wrote {
+// and the fault is in the route to it; after, it may have run, and the fault is the endpoint's, or the route's when it
+// went through a proxy, which stands between the two and can drop either side.
+func transportFailure(wrote, proxied bool) *Failure {
+	switch {
+	case !wrote:
 		return &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeEgress, Cause: adapter.Transport{}}
+	case proxied:
+		return &Failure{Scope: adapter.ScopeEgress, Cause: adapter.Transport{}}
 	}
 	return &Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Transport{}}
-}
-
-// rest pauses the whole supplier on a balance refusal, and an individual credential until its stated reset or
-// configured cooldown. Other faults are for routing and quality.
-func (a *Attempt) rest(f Failure) {
-	if _, low := f.Cause.(adapter.SupplierBalanceLow); low && f.Scope == adapter.ScopeSupplier {
-		a.ep.funds.rest(a.s.now())
-		return
-	}
-	if f.Scope != adapter.ScopeCredential {
-		return
-	}
-	now := a.s.now()
-	until := now.Add(a.s.cfg.CredentialCooldown)
-	switch c := f.Cause.(type) {
-	case adapter.CredentialQuotaExhausted:
-		until = now.Add(a.s.cfg.QuotaCooldown)
-		if c.ResetAt.After(now) {
-			until = c.ResetAt
-		}
-	case adapter.RateLimited:
-		until = now.Add(max(c.RetryAfter, time.Second))
-	case adapter.CredentialRejected, adapter.Overloaded, adapter.UpstreamError, adapter.SupplierBalanceLow, adapter.NotPermitted,
-		adapter.ContextTooLong, adapter.BadRequest, adapter.ContentRejected, adapter.ModelNotFound, adapter.Unknown, adapter.Transport:
-	}
-	if _, refused := f.Cause.(adapter.CredentialRejected); refused {
-		a.s.reportRejected(a.ep.supplier, a.cred)
-	}
-	for {
-		cur := a.cred.rt.restUnix.Load()
-		if until.UnixNano() <= cur || a.cred.rt.restUnix.CompareAndSwap(cur, until.UnixNano()) {
-			return
-		}
-	}
 }
 
 // reportRejected asks the worker to mark a key the provider refused. A credential has at most one report in flight: the

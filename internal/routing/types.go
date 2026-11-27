@@ -113,6 +113,10 @@ type Entry struct {
 	Formats FormatSet
 	// Byok says the entry serves on the account's own provider key, which the reply reports as usage.is_byok.
 	Byok bool
+	// Bound is the request's native cost at the supplier's plan that its funds were held to; zero when the supplier
+	// has no funds to hold. The attempt picks a key that can pay it (suppliers.Service.AcquireWithin): a supplier
+	// whose keys are wallets is admitted on its richest key, which is not the only key the endpoint has.
+	Bound platform.Exact
 }
 
 // PriceRef is a price version of billing: its identifier and the schedule it locks.

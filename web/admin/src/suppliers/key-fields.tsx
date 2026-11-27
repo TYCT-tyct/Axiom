@@ -26,7 +26,7 @@ export function KeysField({ error }: { error?: unknown }) {
         : t("upstream.addDialog.keysCounted", { count: keys.length });
   return (
     <TextArea
-      label={t("upstream.addDialog.keys")}
+      label={t("upstream.fields.keys.label")}
       hint={hint}
       name="keys"
       rows={5}
@@ -40,25 +40,36 @@ export function KeysField({ error }: { error?: unknown }) {
   );
 }
 
-// The service account box of Vertex AI: the project and the account are read out of the key as it is pasted, and the
-// rest of it (the private key) is never shown back.
-export function ServiceAccountField({ error }: { error?: unknown }) {
+// A secret JSON document's box. A service account's key says its project and account as it is pasted; the rest of it
+// (the private key) is never shown back.
+export function JsonField({
+  name,
+  label,
+  hint,
+  maxLength,
+  error,
+}: {
+  name: string;
+  label: string;
+  hint?: string;
+  maxLength?: number;
+  error?: string;
+}) {
   const { t } = useTranslation();
-  const errors = useErrors();
   const [typed, setTyped] = useState("");
   const read = serviceAccount(typed);
   return (
     <TextArea
-      label={t("upstream.addDialog.json")}
-      hint={read ? t("upstream.addDialog.jsonRead", read) : t("upstream.addDialog.jsonHint")}
-      name="service_account_json"
+      label={label}
+      hint={read ? t("upstream.addDialog.jsonRead", read) : hint}
+      name={name}
       rows={5}
       value={typed}
       onChange={(event) => setTyped(event.target.value)}
-      placeholder={'{ "type": "service_account", "project_id": … }'}
+      maxLength={maxLength}
       autoComplete="off"
       spellCheck={false}
-      error={errors.field(error, "credential/service_account_json")}
+      error={error}
     />
   );
 }

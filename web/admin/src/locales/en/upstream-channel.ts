@@ -222,6 +222,7 @@ export default {
     body: "The new credential is checked in each region given and replaces the old one only if it works in at least one; regions where it fails are dropped.",
     action: "Check and replace",
     regionsHint: "One a line; empty keeps the regions there are.",
+    unknown: "This node no longer describes the channel's type, so its credential cannot be replaced here.",
     done: "Credential replaced",
   },
   addKeys: {

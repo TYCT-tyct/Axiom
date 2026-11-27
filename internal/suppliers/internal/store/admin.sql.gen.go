@@ -90,7 +90,7 @@ func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uu
 
 const getCredentialOf = `-- name: GetCredentialOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status, region
+    hint, source, checked_at, check_outcome, check_cause, check_status, region, settings, egress_id
 FROM suppliers.credentials WHERE supplier_id = $1 AND id = $2
 `
 
@@ -116,6 +116,8 @@ type GetCredentialOfRow struct {
 	CheckCause        *string
 	CheckStatus       *int32
 	Region            *string
+	Settings          []byte
+	EgressID          *string
 }
 
 // One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
@@ -145,6 +147,8 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 			&i.CheckCause,
 			&i.CheckStatus,
 			&i.Region,
+			&i.Settings,
+			&i.EgressID,
 		); err != nil {
 			return nil, err
 		}
@@ -453,7 +457,7 @@ func (q *Queries) InsertUnitValue(ctx context.Context, db DBTX, arg InsertUnitVa
 
 const listCredentialsOf = `-- name: ListCredentialsOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status, region
+    hint, source, checked_at, check_outcome, check_cause, check_status, region, settings, egress_id
 FROM suppliers.credentials WHERE supplier_id = $1 ORDER BY id
 `
 
@@ -474,6 +478,8 @@ type ListCredentialsOfRow struct {
 	CheckCause        *string
 	CheckStatus       *int32
 	Region            *string
+	Settings          []byte
+	EgressID          *string
 }
 
 func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListCredentialsOfRow, error) {
@@ -502,6 +508,8 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 			&i.CheckCause,
 			&i.CheckStatus,
 			&i.Region,
+			&i.Settings,
+			&i.EgressID,
 		); err != nil {
 			return nil, err
 		}

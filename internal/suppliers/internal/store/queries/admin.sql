@@ -39,7 +39,7 @@ FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id AND g.id = @
 
 -- name: ListCredentialsOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status, region
+    hint, source, checked_at, check_outcome, check_cause, check_status, region, settings, egress_id
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
 -- name: ListEndpointsOf :many
@@ -64,7 +64,7 @@ WHERE supplier_id = @supplier_id AND id = @id;
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status, region
+    hint, source, checked_at, check_outcome, check_cause, check_status, region, settings, egress_id
 FROM suppliers.credentials WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: SetCredentialLimits :execrows

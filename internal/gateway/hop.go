@@ -195,7 +195,7 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 	// Only the answering sampling's content decides what reached the client: a tool hop of a call that does not stream
 	// commits in the relay's sense without anything being delivered.
 	a.hops, a.usage, a.seen, a.content, a.obs.Delivered = nil, protocol.Usage{}, protocol.Progress{}, false, false
-	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
+	conn, err := s.x.Upstreams.AcquireWithin(uuid.UUID(a.entry.Endpoint), a.entry.Bound)
 	if err != nil {
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}

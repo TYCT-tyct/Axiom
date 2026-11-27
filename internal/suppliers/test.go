@@ -203,7 +203,7 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if prompt == "" {
 		prompt = TestPrompt
 	}
-	attempt, err := s.acquire(req.Endpoint, true, req.AvoidCredential)
+	attempt, err := s.acquire(req.Endpoint, true, pick{avoid: req.AvoidCredential})
 	if err != nil {
 		return TestResult{}, err
 	}
