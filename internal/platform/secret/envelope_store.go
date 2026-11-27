@@ -16,9 +16,8 @@ import (
 // Purpose and the qualified table name are the existing secret.Location AAD; ID is the row's primary key.
 type EnvelopeStore struct {
 	Schema, Table, ID, Prefix, Purpose string
-	// Wrapped names the wrapped-DEK column. Empty means the standard wrapped_dek. A new store that must not stop an
-	// older binary during a rolling upgrade uses a distinct name such as wrapped_key; old inventory queries only
-	// wrapped_dek, while this version registers the custom column and rotates it.
+	// Wrapped names the wrapped-DEK column: empty means the standard wrapped_dek, and the only other name the inventory
+	// recognizes is wrapped_key.
 	Wrapped string
 }
 
@@ -45,21 +44,35 @@ func envelopeSuffix(column string) (string, bool) {
 	return "", false
 }
 
-// checkInventory fails closed when a new module adds an envelope without registering its AAD.
+// ErrUnregistered reports envelope columns that no registered store matches. During a rolling upgrade an older node
+// meets a newer release's store this way, so it keeps serving; but it cannot see that store's references, so every step
+// that destroys key material or declares a rotation complete refuses with this error and leaves it to a newer binary.
+var ErrUnregistered = errors.New("keyring: envelope columns this binary does not register")
+
+// inventory lists the envelope columns no registered store matches, as schema.table.column. A registered store without
+// the retirement fence is this binary's own defect and fails closed instead. It reads pg_catalog, not
+// information_schema: the latter hides columns the connecting role holds no privilege on, and a hidden column with the
+// last reference to a version would let retirement delete its key. The suffix match is envelopeSuffix's, since a prefix
+// need not end in an underscore. Partitions are left out because their parent carries the columns.
 //
 //nolint:cyclop // one scan plus one fence check is the whole startup invariant
-func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
-	rows, err := tx.Query(ctx, `SELECT table_schema, table_name, column_name FROM information_schema.columns
-		WHERE column_name = 'wrapped_dek' OR column_name LIKE '%\_wrapped_dek' ESCAPE '\'
-		   OR column_name = 'wrapped_key' OR column_name LIKE '%\_wrapped_key' ESCAPE '\'`)
+func (r Rotation) inventory(ctx context.Context, tx pg.Tx) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT n.nspname::text, c.relname::text, a.attname::text FROM pg_catalog.pg_attribute a
+		JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+		  AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+		  AND (a.attname LIKE '%wrapped\_dek' ESCAPE '\' OR a.attname LIKE '%wrapped\_key' ESCAPE '\')
+		ORDER BY 1, 2, 3`)
 	if err != nil {
-		return fmt.Errorf("keyring: cannot inspect envelope inventory: %w", err)
+		return nil, fmt.Errorf("keyring: cannot inspect envelope inventory: %w", err)
 	}
 	defer rows.Close()
+	var unknown []string
 	for rows.Next() {
 		var schema, table, column string
 		if err := rows.Scan(&schema, &table, &column); err != nil {
-			return fmt.Errorf("keyring: cannot read envelope inventory: %w", err)
+			return nil, fmt.Errorf("keyring: cannot read envelope inventory: %w", err)
 		}
 		suffix, ok := envelopeSuffix(column)
 		if !ok {
@@ -69,11 +82,11 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 			return s.Schema == schema && s.Table == table && s.Prefix == strings.TrimSuffix(column, suffix) &&
 				s.wrapped() == suffix
 		}) {
-			return errors.New("keyring: an envelope store is not registered")
+			unknown = append(unknown, schema+"."+table+"."+column)
 		}
 	}
 	if rows.Err() != nil {
-		return fmt.Errorf("keyring: cannot read envelope inventory: %w", rows.Err())
+		return nil, fmt.Errorf("keyring: cannot read envelope inventory: %w", rows.Err())
 	}
 	// A registered store whose module migration forgot the fence would accept writes retirement cannot see. Fail at
 	// startup instead of relying on that migration being deployed correctly.
@@ -88,25 +101,34 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 			  AND t.tgfoid = 'platform.fence_envelope_key_version()'::regprocedure
 			  AND t.tgenabled IN ('O', 'A'))`,
 			store.Schema, store.Table).Scan(&fenced); err != nil {
-			return fmt.Errorf("keyring: cannot inspect retirement fences: %w", err)
+			return nil, fmt.Errorf("keyring: cannot inspect retirement fences: %w", err)
 		}
 		if !fenced {
-			return fmt.Errorf("keyring: envelope store %s has no retirement fence", store.table())
+			return nil, fmt.Errorf("keyring: envelope store %s has no retirement fence", store.table())
 		}
 	}
-	return nil
+	return unknown, nil
 }
 
-func (r Rotation) checkReferences(ctx context.Context, tx pg.Tx, ring *keySnapshot, status KeyStatus) error {
-	if err := r.checkInventory(ctx, tx); err != nil {
-		return err
+func unregistered(unknown []string) error {
+	if len(unknown) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrUnregistered, strings.Join(unknown, ", "))
+}
+
+// checkReferences checks the registered stores' versions and returns the unregistered columns, which do not stop a node.
+func (r Rotation) checkReferences(ctx context.Context, tx pg.Tx, ring *keySnapshot, status KeyStatus) ([]string, error) {
+	unknown, err := r.inventory(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
 	for _, store := range r.Stores {
 		if err := store.checkReferences(ctx, tx, ring, status); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return unknown, nil
 }
 
 func (s EnvelopeStore) checkReferences(ctx context.Context, tx pg.Tx, ring *keySnapshot, status KeyStatus) error {
@@ -137,7 +159,11 @@ func (s EnvelopeStore) checkReferences(ctx context.Context, tx pg.Tx, ring *keyS
 }
 
 func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) error {
-	if err := r.checkInventory(ctx, tx); err != nil {
+	unknown, err := r.inventory(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := unregistered(unknown); err != nil {
 		return err
 	}
 	// Retirement holds the exclusive fence lock while it runs this check, and every envelope write holds that lock
@@ -157,6 +183,46 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 	return nil
 }
 
+// retiredVersions reads the tombstoned versions in order.
+func retiredVersions(ctx context.Context, tx pg.Tx) ([]uint32, error) {
+	rows, err := tx.Query(ctx, "SELECT version FROM platform.key_versions WHERE state = 'retired' ORDER BY version")
+	if err != nil {
+		return nil, fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	retired, err := pgx.CollectRows(rows, pgx.RowTo[uint32])
+	if err != nil {
+		return nil, fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	return retired, nil
+}
+
+// pruneRetired removes tombstoned versions still present in the distribution file. It recovers the state a retirement
+// leaves when the process stops between its commit and its file edit. A version is deleted only after confirming that no
+// envelope references it: the tombstone is written by a retirement that checked the same thing, so a reference here
+// means the metadata and the stored data disagree and the key may still be the only way to read it.
+func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx, retired []uint32) error {
+	for _, version := range retired {
+		if err := r.unreferenced(ctx, tx, version); err != nil {
+			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
+		}
+		// A retired version always has a marker: the tombstone and the marker commit together, and migration
+		// 00023 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
+		// the key could then race a writer the fence never saw, so leave it in place.
+		var fenced bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_retirements WHERE version = $1)",
+			int64(version)).Scan(&fenced); err != nil {
+			return fmt.Errorf("keyring: cannot read retirement fence: %w", err)
+		}
+		if !fenced {
+			return fmt.Errorf("keyring: refusing to prune version %d: no retirement fence", version)
+		}
+		if err := removeKey(r.Path, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RewrapCursor is where one run of batches stopped: the store it was rewrapping and the last row it committed there.
 // It lives only in that command's memory; a new run starts from the zero value, which is still correct because the
 // stored key_version is the checkpoint and the rows before it were committed.
@@ -166,8 +232,9 @@ type RewrapCursor struct {
 }
 
 // RewrapBatch commits at most limit envelopes from one store and its audit entry together, continuing after cursor. A
-// zero count means no store has a remaining old version. The stored version is the checkpoint, so an interrupted run
-// needs no durable cursor: starting it from the zero value is still correct.
+// zero count means no store has a remaining old version; while an unregistered column exists that cannot be known, so
+// the call that would return it fails with ErrUnregistered instead. The stored version is the checkpoint, so an
+// interrupted run needs no durable cursor: starting it from the zero value is still correct.
 func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit int) (int, RewrapCursor, error) {
 	if limit < 1 || limit > 1000 {
 		return 0, RewrapCursor{}, errors.New("keyring: batch size must be between 1 and 1000")
@@ -179,11 +246,12 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, snapshot, 0)
+		status, err := checkVersions(ctx, tx, snapshot, nil)
 		if err != nil {
 			return err
 		}
-		if err := r.checkInventory(ctx, tx); err != nil {
+		unknown, err := r.inventory(ctx, tx)
+		if err != nil {
 			return err
 		}
 		snapshot = snapshot.withActive(status.Active)
@@ -192,6 +260,9 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 		// under the lifecycle lock; the extra pass is linear, rather than a rescan on every batch.
 		if err == nil && count == 0 && cursor != (RewrapCursor{}) {
 			count, next, err = r.rewrapStores(ctx, tx, snapshot, RewrapCursor{}, limit)
+		}
+		if err == nil && count == 0 {
+			err = unregistered(unknown)
 		}
 		return err
 	})
