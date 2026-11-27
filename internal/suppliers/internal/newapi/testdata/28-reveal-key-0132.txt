@@ -1,0 +1,7 @@
+# 28-reveal-key-0132
+POST /api/token/1/key
+> Authorization: <ALICE_ACCESS_TOKEN>
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"key":"<ALICE_KEY1_BARE>"},"message":"","success":true}

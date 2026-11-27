@@ -10493,17 +10493,19 @@ components:
         renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the
         refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes
         `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and
-        `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what
-        the kind takes.
+        `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. A new-api before 1.0 or a
+        one-api has no personal access tokens: it takes the system access token generated in the account's settings as
+        `access_token`, with `user_id`, the account's numeric id. `login_fields` lists what the kind takes.
       properties:
         email: {type: string, maxLength: 254}
         password: {type: string, maxLength: 256}
         access_token: {type: string, maxLength: 4096}
         refresh_token: {type: string, maxLength: 4096, description: "With `access_token`, so Axiom renews the login itself when the access token ends."}
         access_token_expires_at: {type: string, format: date-time}
+        user_id: {type: string, pattern: '^[1-9][0-9]{0,17}$', description: "With a system access token as `access_token`, the numeric id of the account it belongs to."}
     LoginField:
       type: string
-      enum: [email, password, access_token, refresh_token, access_token_expires_at]
+      enum: [email, password, access_token, refresh_token, access_token_expires_at, user_id]
     DetectionRequest:
       type: object
       required: [origin]

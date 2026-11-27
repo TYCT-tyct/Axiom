@@ -13,8 +13,7 @@ import (
 
 var _ adapter.Onboarding = (*Adapter)(nil)
 
-// TestNewLogin: a personal access token makes a login that reads back as it was given; anything else is a refusal that
-// names the member and holds no value.
+// TestNewLogin: a personal access token makes a login that reads back as it was given.
 func TestNewLogin(t *testing.T) {
 	t.Parallel()
 	expires := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -29,9 +28,49 @@ func TestNewLogin(t *testing.T) {
 	if never, err := New().NewLogin(adapter.Credentials{AccessToken: "pat-secret"}); err != nil || !never.ExpiresAt.IsZero() {
 		t.Errorf("a token that does not end: %+v %v", never, err)
 	}
-	_, err = New().NewLogin(adapter.Credentials{Email: "a@b.c"})
-	if loginErr, ok := errors.AsType[*adapter.LoginError](err); !ok || loginErr.Field != adapter.FieldAccessToken {
-		t.Errorf("no token: %v", err)
+}
+
+// TestNewLoginRefusals: credentials that make no login are refused naming the member, without its value.
+func TestNewLoginRefusals(t *testing.T) {
+	t.Parallel()
+	expires := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, c := range []struct {
+		name  string
+		creds adapter.Credentials
+		field adapter.LoginField
+	}{
+		{"no token", adapter.Credentials{Email: "a@b.c"}, adapter.FieldAccessToken},
+		{"a user id that is not a number", adapter.Credentials{AccessToken: "system-token", UserID: "alice"}, adapter.FieldUserID},
+		{"a system access token with an expiry", adapter.Credentials{AccessToken: "system-token", UserID: "2", AccessTokenExpiresAt: expires}, adapter.FieldAccessTokenExpiresAt},
+	} {
+		_, err := New().NewLogin(c.creds)
+		if loginErr, ok := errors.AsType[*adapter.LoginError](err); !ok || loginErr.Field != c.field || strings.Contains(err.Error(), "system-token") {
+			t.Errorf("%s: %v, want a refusal of %s", c.name, err, c.field)
+		}
+	}
+}
+
+// TestNewLegacyLogin: a system access token with the user id makes a login of its own kind, which reads back as it was
+// given and not as a personal access token.
+func TestNewLegacyLogin(t *testing.T) {
+	t.Parallel()
+	login, err := New().NewLogin(adapter.Credentials{AccessToken: "system-token", UserID: "2"})
+	if err != nil || login.Kind != LegacyLoginKind || !login.ExpiresAt.IsZero() {
+		t.Fatalf("a legacy login: %+v %v", login, err)
+	}
+	read, err := DecodeLegacyLogin(login.Plaintext)
+	if err != nil || read.AccessToken.Reveal() != "system-token" || read.UserID != "2" {
+		t.Errorf("the legacy login read back: %+v %v", read, err)
+	}
+	if _, err := DecodeLogin(login.Plaintext); err == nil {
+		t.Error("a legacy login reads as a personal access token")
+	}
+	pat, err := New().NewLogin(adapter.Credentials{AccessToken: "pat-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeLegacyLogin(pat.Plaintext); err == nil {
+		t.Error("a personal access token reads as a legacy login")
 	}
 }
 
@@ -42,7 +81,7 @@ func TestOnboardingFacts(t *testing.T) {
 		t.Errorf("the unit: %q", got)
 	}
 	for _, captcha := range []bool{false, true} {
-		if got := New().LoginFields(captcha); !slices.Equal(got, []adapter.LoginField{adapter.FieldAccessToken, adapter.FieldAccessTokenExpiresAt}) {
+		if got := New().LoginFields(captcha); !slices.Equal(got, []adapter.LoginField{adapter.FieldAccessToken, adapter.FieldAccessTokenExpiresAt, adapter.FieldUserID}) {
 			t.Errorf("the login fields (captcha %v): %v", captcha, got)
 		}
 	}

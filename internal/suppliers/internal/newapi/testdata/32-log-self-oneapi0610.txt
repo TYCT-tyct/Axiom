@@ -1,0 +1,7 @@
+# 32-log-self-oneapi0610
+GET /api/log/self?type=2&p=0
+> Authorization: <ALICE_ACCESS_TOKEN>
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":[{"id":0,"user_id":2,"created_at":1795749137,"type":2,"content":"模型倍率 2.50，分组倍率 1.50，补全倍率 4.00","username":"alice","token_name":"axiom-live-default","model_name":"gpt-6-astra","quota":1125,"prompt_tokens":100,"completion_tokens":50,"channel":1}],"message":"","success":true}

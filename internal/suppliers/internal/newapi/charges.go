@@ -35,10 +35,13 @@ func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 // Everything a charge is made of is a pointer or a list that may be nil, so that a member the supplier left out can be
 // told from a zero, an empty list and a null: an answer without them is not a page with no records.
 type logPage struct {
-	Data *struct {
-		Total *int      `json:"total"`
-		Items []logItem `json:"items"`
-	} `json:"data"`
+	Data      *logData `json:"data"`
+	uncounted bool     // one-api's: a list of records without their total
+}
+
+type logData struct {
+	Total *int      `json:"total"`
+	Items []logItem `json:"items"`
 }
 
 type logItem struct {
@@ -54,7 +57,9 @@ type logItem struct {
 }
 
 // valid reports whether the answer has the structure of a page, whatever it holds.
-func (p logPage) valid() bool { return p.Data != nil && p.Data.Total != nil && p.Data.Items != nil }
+func (p logPage) valid() bool {
+	return p.Data != nil && (p.Data.Total != nil || p.uncounted) && p.Data.Items != nil
+}
 
 // Charges implements adapter.Manager: one page of the pass under way, or the start of a new one. The state it returns
 // is the one to keep with the page's records; on an error it is the state it was given, so nothing is skipped. A call
@@ -82,15 +87,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	if err := m.fundUnstated(ctx, page, charges); err != nil {
 		return adapter.ChargePage{}, scan, err
 	}
-	if s.Pass.Page == 1 {
-		s.Pass.Pages = (*page.Data.Total + logPageSize - 1) / logPageSize
-	}
-	done := len(page.Data.Items) < logPageSize
-	if done {
-		s = s.Finish(now)
-	} else {
-		s.Pass.Page++
-	}
+	s, done := m.turnPage(s, page, now)
 	state, err := s.Encode()
 	page2 := adapter.ChargePage{Charges: charges, Done: done}
 	if done {
@@ -99,7 +96,26 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	return page2, state, err
 }
 
+// turnPage moves the pass past the page it read: to its next page, or, after a short page, to its end. A pass's length
+// in pages is new-api's total; one-api states none, so the pages it read are the length.
+func (m *manager) turnPage(s scanState, page logPage, now time.Time) (scanState, bool) {
+	if s.Pass.Page == 1 && !page.uncounted {
+		s.Pass.Pages = (*page.Data.Total + logPageSize - 1) / logPageSize
+	}
+	if len(page.Data.Items) >= m.logPageSize() {
+		s.Pass.Page++
+		return s, false
+	}
+	if page.uncounted {
+		s.Pass.Pages = s.Pass.Page
+	}
+	return s.Finish(now), true
+}
+
 func (m *manager) readPage(ctx context.Context, p *pass) (logPage, error) {
+	if m.sys == oneAPI {
+		return m.oneAPILogPage(ctx, p)
+	}
 	var page logPage
 	path := "/api/log/self?type=2&page_size=" + strconv.Itoa(logPageSize) + "&p=" + strconv.Itoa(p.Page) +
 		"&start_timestamp=" + strconv.FormatInt(p.Start, 10) + "&end_timestamp=" + strconv.FormatInt(p.End, 10)
@@ -139,11 +155,16 @@ func convert(page logPage) ([]adapter.Charge, error) {
 	return charges, nil
 }
 
-// charge reads one consumption record, which must state everything a charge is made of.
+// charge reads one consumption record, which must state everything a charge is made of. A record without a request id
+// is from a release that does not log one (new-api before v0.10.8, one-api before v0.6.11): nothing ties it to the call
+// it was for, so such a supplier's charges cannot be reconciled, and the pass stops rather than guess.
 func charge(it logItem) (adapter.Charge, error) {
-	if it.RequestID == "" || it.TokenID == nil || *it.TokenID <= 0 || !it.Quota.isInteger() || it.CreatedAt == nil ||
+	if it.RequestID == "" {
+		return adapter.Charge{}, fmt.Errorf("%w: a record without a request id: this release does not log one, so its charges cannot be matched to calls", adapter.ErrUnrecognised)
+	}
+	if it.TokenID == nil || *it.TokenID <= 0 || !it.Quota.isInteger() || it.CreatedAt == nil ||
 		it.Prompt == nil || it.Output == nil || it.Other == nil {
-		return adapter.Charge{}, fmt.Errorf("%w: a record without its request id, key, time, quota, tokens or details", adapter.ErrUnrecognised)
+		return adapter.Charge{}, fmt.Errorf("%w: a record without its key, time, quota, tokens or details", adapter.ErrUnrecognised)
 	}
 	var other otherInfo
 	if jsonx.Unmarshal([]byte(*it.Other), &other) != nil {

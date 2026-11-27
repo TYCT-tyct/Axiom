@@ -1247,6 +1247,7 @@ const (
 	LoginFieldEmail                LoginField = "email"
 	LoginFieldPassword             LoginField = "password"
 	LoginFieldRefreshToken         LoginField = "refresh_token"
+	LoginFieldUserId               LoginField = "user_id"
 )
 
 // Valid indicates whether the value is a known member of the LoginField enum.
@@ -1261,6 +1262,8 @@ func (e LoginField) Valid() bool {
 	case LoginFieldPassword:
 		return true
 	case LoginFieldRefreshToken:
+		return true
+	case LoginFieldUserId:
 		return true
 	default:
 		return false
@@ -7894,7 +7897,7 @@ type SupplierConnected struct {
 type SupplierCreate struct {
 	Kind string `json:"kind"`
 
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. A new-api before 1.0 or a one-api has no personal access tokens: it takes the system access token generated in the account's settings as `access_token`, with `user_id`, the account's numeric id. `login_fields` lists what the kind takes.
 	Login  SupplierLogin `json:"login"`
 	Name   string        `json:"name"`
 	Origin string        `json:"origin"`
@@ -8193,7 +8196,7 @@ type SupplierList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
+// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. A new-api before 1.0 or a one-api has no personal access tokens: it takes the system access token generated in the account's settings as `access_token`, with `user_id`, the account's numeric id. `login_fields` lists what the kind takes.
 type SupplierLogin struct {
 	AccessToken          *string    `json:"access_token,omitempty"`
 	AccessTokenExpiresAt *time.Time `json:"access_token_expires_at,omitempty"`
@@ -8202,11 +8205,14 @@ type SupplierLogin struct {
 
 	// RefreshToken With `access_token`, so Axiom renews the login itself when the access token ends.
 	RefreshToken *string `json:"refresh_token,omitempty"`
+
+	// UserId With a system access token as `access_token`, the numeric id of the account it belongs to.
+	UserId *string `json:"user_id,omitempty"`
 }
 
 // SupplierLoginUpdate defines model for SupplierLoginUpdate.
 type SupplierLoginUpdate struct {
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. A new-api before 1.0 or a one-api has no personal access tokens: it takes the system access token generated in the account's settings as `access_token`, with `user_id`, the account's numeric id. `login_fields` lists what the kind takes.
 	Login SupplierLogin `json:"login"`
 
 	// Reason Why the person is doing this. It goes to the audit log.

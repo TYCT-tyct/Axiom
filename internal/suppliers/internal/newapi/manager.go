@@ -2,6 +2,7 @@ package newapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 type manager struct {
 	api api
 	now func() time.Time
+	sys system
 }
 
 var _ adapter.Manager = (*manager)(nil)
@@ -39,7 +41,7 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 		} `json:"data"`
 	}
 	if err := m.api.get(ctx, "/api/user/self", global, &self); err != nil {
-		return adapter.Account{}, err
+		return adapter.Account{}, m.selfRefused(err)
 	}
 	var status statusData
 	if err := m.api.get(ctx, "/api/status", global, &status); err != nil {
@@ -66,9 +68,23 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 	}, nil
 }
 
+// selfRefused is what a failed read of the account itself means. A system access token that is no good is answered
+// 200 with success false, as a failed handler is, and the read of the account fails no other way but a database error
+// there (controller/user.go GetSelf in both systems), so for a legacy login it is the login refused. The other reads
+// cannot tell it from their own failures, so only this one says so.
+func (m *manager) selfRefused(err error) error {
+	if m.sys != newAPI && errors.Is(err, errUnsuccessful) {
+		return fmt.Errorf("%w: unknown", adapter.ErrAuthRejected)
+	}
+	return err
+}
+
 // subscribed reports whether the account has an active subscription (the "subscriptions" of /api/subscription/self;
-// "all_subscriptions" holds the expired ones too).
+// "all_subscriptions" holds the expired ones too). one-api has no subscriptions.
 func (m *manager) subscribed(ctx context.Context) (bool, error) {
+	if m.sys == oneAPI {
+		return false, nil
+	}
 	var subs struct {
 		Data *struct {
 			Subscriptions []struct{} `json:"subscriptions"`
@@ -136,7 +152,7 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (adapter.Page[a
 		for i, t := range tokens {
 			items[i] = t.state
 		}
-		return items, total, len(items) < keyPageSize, err
+		return items, total, len(items) < m.keyPageSize(), err
 	}, listed, func(k listedKey) adapter.KeyRef { return k.Ref }, listedKey.state)
 }
 
@@ -147,6 +163,9 @@ type token struct {
 }
 
 func (m *manager) keyPage(ctx context.Context, page int) ([]token, int, error) {
+	if m.sys == oneAPI {
+		return m.oneAPIKeyPage(ctx, page)
+	}
 	var list struct {
 		Data *struct {
 			Total *int `json:"total"`
@@ -210,14 +229,18 @@ var keyStatus = map[int]adapter.KeyStatus{
 	1: adapter.KeyActive, 2: adapter.KeyDisabled, 3: adapter.KeyExpired, 4: adapter.KeyQuotaExhausted,
 }
 
-var keyID = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
+// decimalID is the form of new-api's ids of keys and users.
+var decimalID = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 
 // KeySecret implements adapter.Manager: the text of the key with new-api's id ref, which new-api shows without its
 // "sk-" prefix. Reading it counts in the critical bucket, which is small, so it is done once per key, when the key is
 // bound.
 func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Secret, error) {
-	if !keyID.MatchString(string(ref)) {
+	if !decimalID.MatchString(string(ref)) {
 		return secret.Secret{}, fmt.Errorf("new-api: %q is not a key id", url.PathEscape(string(ref)))
+	}
+	if m.sys == oneAPI {
+		return m.oneAPIKeySecret(ctx, ref)
 	}
 	var reveal struct {
 		Data *struct {

@@ -1,0 +1,7 @@
+# 40-self-groups-0132
+GET /api/user/self/groups
+> Authorization: <ALICE_ACCESS_TOKEN>
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"default":{"desc":"Default group","ratio":1},"premium":{"desc":"Premium group","ratio":1.5}},"message":"","success":true}

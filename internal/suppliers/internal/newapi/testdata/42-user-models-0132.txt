@@ -1,0 +1,7 @@
+# 42-user-models-0132
+GET /api/user/models
+> Authorization: <ALICE_ACCESS_TOKEN>
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":["gpt-6-astra","claude-opus-5-5"],"message":"","success":true}
