@@ -71,7 +71,23 @@ type ModelSnap struct {
 	// Confirmed is whether Plan was made of a person's base (State.Confirmed), which a kept model gives up once the
 	// base is cleared and the projection puts in force only for the model the base was confirmed for.
 	Confirmed bool `json:",omitzero"`
+	// CostReason is why the cost is unknown when Plan is empty, as this round decided it.
+	CostReason CostReason `json:",omitzero"`
 }
+
+// CostReason says why the sync could not make a model's cost plan (docs/domains/suppliers.md「确认基础价」).
+type CostReason string
+
+// The reasons.
+const (
+	// Unpriced is a model the supplier states no price for and no base is confirmed for: only a base can price it.
+	Unpriced CostReason = "unpriced"
+	// Unexpressible is a model the supplier states a price for that no schedule can express (per call, an
+	// expression): a base never takes its place.
+	Unexpressible CostReason = "unexpressible"
+	// OverLimit is a confirmed base the group's ratio takes past a unit price.
+	OverLimit CostReason = "over_limit"
+)
 
 // BaseKey names a model of a group the way a confirmed base is kept: the group's ref and the model's upstream name, as
 // two members, so that no two pairs share a key.

@@ -29,8 +29,17 @@ func endpointBody(e suppliers.Endpoint) adminapi.SupplierEndpoint {
 	return adminapi.SupplierEndpoint{
 		Id: e.ID.String(), GroupId: e.Group.String(), ModelId: e.Model.String(), UpstreamName: e.UpstreamName,
 		Formats: modelFormats(e.Formats), CostState: adminapi.SupplierEndpointCostState(e.CostState), Enabled: e.Enabled,
-		Quantization: quantizationBody(e.Quantization),
+		Quantization: quantizationBody(e.Quantization), CostReason: costReasonBody(e.CostReason),
 	}
+}
+
+// costReasonBody is why a cost is unknown, absent when nothing says.
+func costReasonBody(r suppliers.CostReason) *adminapi.SupplierCostReason {
+	if r == "" {
+		return nil
+	}
+	reason := adminapi.SupplierCostReason(r)
+	return &reason
 }
 
 // quantizationBody is the level an endpoint records, absent when it records none.

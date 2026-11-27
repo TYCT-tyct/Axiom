@@ -137,6 +137,7 @@ func supplierModelBody(m suppliers.SupplierModel) adminapi.SupplierModel {
 		id := m.Suggested.Model.String()
 		body.SuggestedModelId, body.SuggestedModelSlug = &id, &m.Suggested.Slug
 	}
+	body.CostReason = costReasonBody(m.CostReason)
 	return body
 }
 

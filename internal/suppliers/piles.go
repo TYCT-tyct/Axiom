@@ -31,7 +31,7 @@ const (
 
 // SupplierModel is one name a group of the supplier lists and the pile it is in. Model is the model it stands for, zero
 // in review and for a snapshot or a fine-tune; Suggested is the model a name in review most likely means, zero when none
-// is close.
+// is close. CostReason is why the cost of a listed name is unknown, empty when it is not.
 type SupplierModel struct {
 	Group        uuid.UUID
 	UpstreamName string
@@ -41,6 +41,7 @@ type SupplierModel struct {
 	Model        catalog.Known
 	Endpoint     *uuid.UUID
 	Suggested    catalog.Known
+	CostReason   CostReason
 }
 
 // SupplierModels sorts every name the supplier's groups list now into piles, by group and name. It reuses where a name
@@ -69,9 +70,16 @@ func (a *Admin) SupplierModels(ctx context.Context, tx pg.Tx, supplier uuid.UUID
 	if err := s.read(ctx, tx, rows); err != nil {
 		return nil, err
 	}
+	reasons, err := readCostReasons(ctx, tx, supplier)
+	if err != nil {
+		return nil, err
+	}
 	models := make([]SupplierModel, len(rows))
 	for i, r := range rows {
 		models[i] = s.sort(r)
+		if m := models[i]; m.Pile == PileListed {
+			models[i].CostReason = reasons.of(r.UpstreamRef, r.UpstreamName, uuid.UUID(m.Model.Model), r.EndpointCostState, r.EndpointCostReason)
+		}
 	}
 	return models, nil
 }

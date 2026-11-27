@@ -225,17 +225,33 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Own
 		d.Credentials = append(d.Credentials, credentialOf(credentialFacts(c)))
 	}
 	applyKeyStates(d.Groups, d.Credentials)
-	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
+	d.Endpoints, err = endpointsOf(ctx, tx, id, d.Groups)
+	return d, err
+}
+
+// endpointsOf is the supplier's endpoints, each with why its cost is unknown when it is.
+func endpointsOf(ctx context.Context, tx pg.Tx, id uuid.UUID, groups []Group) ([]Endpoint, error) {
+	rows, err := store.New().ListEndpointsOf(ctx, tx, id)
 	if err != nil {
-		return Detail{}, fmt.Errorf("read the endpoints: %w", err)
+		return nil, fmt.Errorf("read the endpoints: %w", err)
 	}
-	for _, e := range endpoints {
-		d.Endpoints = append(d.Endpoints, Endpoint{
+	reasons, err := readCostReasons(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uuid.UUID]string, len(groups))
+	for _, g := range groups {
+		refs[g.ID] = g.UpstreamRef
+	}
+	var out []Endpoint
+	for _, e := range rows {
+		out = append(out, Endpoint{
 			ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
 			CostState: e.CostState, Enabled: e.Enabled, Quantization: derefQuantization(e.Quantization),
+			CostReason: reasons.of(refs[e.SupplierGroupID], e.UpstreamName, e.ModelID, &e.CostState, e.CostStateReason),
 		})
 	}
-	return d, nil
+	return out, nil
 }
 
 // locked is the supplier's row, locked for a change: it must be there and in one of the statuses the change starts

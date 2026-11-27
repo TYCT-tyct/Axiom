@@ -71,6 +71,17 @@ func TestAStateOfTheFirstFormatIsRead(t *testing.T) {
 	}
 }
 
+// TestAStateOfTheSecondFormatIsRead: format 2 is this one without the cost reasons, which the next catalog round writes.
+func TestAStateOfTheSecondFormatIsRead(t *testing.T) {
+	t.Parallel()
+	v2 := `{"Groups":[{"Ref":"a","Name":"a","Ratio":"1","Facts":"{}","Models":[{"Name":"m","Formats":[2],"Without":0,"Plan":"f1"}]}],` +
+		`"Plans":[{"GroupRef":"a","Model":"m","Plan":"f1"}]}`
+	st, err := decode(3, 2, []byte(v2))
+	if want := (syncer.Plans{{GroupRef: "a", Model: "m"}: "f1"}); err != nil || !maps.Equal(st.Plans, want) {
+		t.Errorf("format 2 read as plans %v, %v; want %v", st.Plans, err, want)
+	}
+}
+
 func TestProjectStatus(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
