@@ -27,8 +27,10 @@ func newCloudFixture(t *testing.T) (catalogFixture, *fakeCloud) {
 	node := startAdminNodeVia(base.commandLine, base.clock, c.egress(t))
 	f := catalogFixture{node, node.owner()}
 	f.saveAuthor("anthropic")
-	m := f.send(http.MethodPost, "/models", `{"slug":"anthropic/`+directModel+`","version_basis":"dated","price_source":"manual","spec":`+directSpec+`,"reason":"a model"}`, http.StatusCreated)
-	m = f.publish(f.addName(f.addName(m, "anthropic/"+directModel), directModel), usd, nil)
+	m := f.send(http.MethodPost, "/models", `{"slug":"anthropic/`+directModel+`","version_basis":"dated","price_source":"official","spec":`+directSpec+`,"reason":"a model"}`, http.StatusCreated)
+	m = f.addName(f.addName(m, "anthropic/"+directModel), directModel)
+	// A cloud line sells a model only at its author's own official price.
+	m = f.send(http.MethodPost, "/models/"+m.Id+"/prices", `{"source":"official","schedule":`+usd+`,"evidence":`+f.officialProof("anthropic", "USD")+`,"reason":"the price"}`, http.StatusOK)
 	expectAdmin(t, "listing the model", f.setStatus(m, "listed"), http.StatusOK, "")
 	return f, c
 }

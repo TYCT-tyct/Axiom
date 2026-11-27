@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -109,15 +110,18 @@ func (w *pastedWorld) op() catalog.Op {
 	return catalog.Op{Actor: w.actor, Key: uuid.NewV7(), Reason: "test"}
 }
 
-// list puts acme's model of the name on sale at the price.
-func (w *pastedWorld) list(name, price string) {
+// list puts acme's model of the name on sale at the price, taken from acme's own price list.
+func (w *pastedWorld) list(name, price string) { w.listFrom(name, price, catalog.SourceOfficial) }
+
+// listFrom puts acme's model of the name on sale at the price, from the source.
+func (w *pastedWorld) listFrom(name, price string, source catalog.PriceSource) {
 	w.t.Helper()
 	ctx := w.t.Context()
 	if _, err := w.cat.SaveAuthor(ctx, catalog.SaveAuthorRequest{Op: w.op(), Slug: "acme", Name: "acme"}); err != nil {
 		w.t.Fatal(err)
 	}
 	made, err := w.cat.CreateModel(ctx, catalog.CreateModelRequest{
-		Op: w.op(), Slug: "acme/" + name, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(stoneSpec),
+		Op: w.op(), Slug: "acme/" + name, VersionBasis: catalog.VersionDated, PriceSource: source, Spec: jsonx.Raw(stoneSpec),
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -132,14 +136,14 @@ func (w *pastedWorld) list(name, price string) {
 			w.t.Fatal(err)
 		}
 	}
+	w.models[name] = model
 	w.price(model, price)
 	if _, err := w.cat.ListModel(ctx, catalog.ModelRequest{Op: w.op(), Model: model}); err != nil {
 		w.t.Fatal(err)
 	}
-	w.models[name] = model
 }
 
-// price publishes the model's reference price.
+// price publishes the model's USD reference price from the model's source.
 func (w *pastedWorld) price(model catalog.ModelID, price string) {
 	w.t.Helper()
 	snap := w.snap()
@@ -147,12 +151,50 @@ func (w *pastedWorld) price(model catalog.ModelID, price string) {
 	if ref, ok := snap.ReferencePrice(model, "USD"); ok {
 		base = new(ref.ID)
 	}
+	m, err := w.cat.Model(w.t.Context(), model)
+	if err != nil {
+		w.t.Fatal(err)
+	}
 	if _, err := w.cat.PublishPrice(w.t.Context(), catalog.PublishPriceRequest{
-		Op: w.op(), Model: model, Base: base, Source: catalog.SourceManual, Schedule: jsonx.Raw(price),
-		Evidence: jsonx.Raw(`{"url":"https://example.com/pricing"}`),
+		Op: w.op(), Model: model, Base: base, Source: m.PriceSource, Schedule: jsonx.Raw(price), Evidence: w.evidence(m.PriceSource, "USD"),
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// evidence is what a price from the source rests on: for acme's own price list, the current snapshot of a watched
+// page of it in the currency, as a page watch would have left it.
+func (w *pastedWorld) evidence(source catalog.PriceSource, currency string) jsonx.Raw {
+	w.t.Helper()
+	if source != catalog.SourceOfficial {
+		return jsonx.Raw(`{"url":"https://example.com/pricing"}`)
+	}
+	const text = "stone input 3 per million"
+	digest := sha256.Sum256([]byte(text))
+	var page, snapshot uuid.UUID
+	if err := w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		ctx, q := w.t.Context(), catalog.New()
+		if err := q.RegisterPageSite(ctx, tx, catalog.RegisterPageSiteParams{Origin: "https://example.com", DelaySeconds: 10}); err != nil {
+			return err
+		}
+		if page, err = q.InsertWatchedPage(ctx, tx, catalog.InsertWatchedPageParams{
+			Author: "acme", Url: "https://example.com/" + uuid.NewV7().String(), Origin: "https://example.com", Currency: currency,
+			SectionStart: "Start", SectionEnd: "End", IntervalSeconds: 3600,
+		}); err != nil {
+			return err
+		}
+		if snapshot, err = q.InsertPageSnapshot(ctx, tx, catalog.InsertPageSnapshotParams{PageID: page, ExtractorVersion: 1, Text: text, TextSha256: digest[:]}); err != nil {
+			return err
+		}
+		return q.RecordPageSuccess(ctx, tx, catalog.RecordPageSuccessParams{ID: page, CurrentSnapshotID: &snapshot, Seconds: 3600})
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	body, err := jsonx.MarshalCanonical(catalog.PageEvidence{PageID: page, SnapshotID: snapshot, Excerpts: []string{"input 3 per million"}})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return body
 }
 
 // snap is the catalog as it is now.

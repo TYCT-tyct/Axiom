@@ -78,7 +78,7 @@ func (f catalogFixture) publish(m adminapi.Model, schedule string, base *adminap
 }
 
 // officialProof is the current evidence a page watch would have left, without reaching a live vendor in API tests.
-func (f catalogFixture) officialProof(author, currency string) string {
+func (f commandLine) officialProof(author, currency string) string {
 	f.t.Helper()
 	ctx := f.t.Context()
 	var page, snapshot uuid.UUID

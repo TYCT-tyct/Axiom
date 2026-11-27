@@ -62,7 +62,9 @@ const (
 // PriceEntry is a price list a type may be connected at: an address and the currency of the list that holds there,
 // one value, since the same model's yuan and dollar prices are separate lists, not an exchange rate apart
 // (docs/domains/catalog.md「目录基线」). A request picks an entry by its ID, never a currency; one origin may have two.
-type PriceEntry struct{ ID, Origin, Currency string }
+// Account names, in the vendor's words, the account whose keys belong at the entry, for a vendor whose account and
+// not the address decides the price list (Alibaba Cloud's China and international sites); empty otherwise.
+type PriceEntry struct{ ID, Origin, Currency, Account string }
 
 // Form is one shape of a credential: the fields it is made of.
 type Form struct {

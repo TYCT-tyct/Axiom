@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -41,7 +42,7 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 		{"ark", "/api/v3/models", "/api/v3/chat/completions", "", []string{"doubao-seed-2-1-pro-260915"}},
 		{"qianfan", "/v2/models", "/v2/chat/completions", "", []string{"deepseek-v3.2"}},
 		{"minimax", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"MiniMax-M3", "MiniMax-M3.1-Flash"}},
-		{"zhipu", "/api/paas/v4/models", "/api/paas/v4/chat/completions", "/api/anthropic/v1/messages", []string{"glm-5.3", "glm-5.3-flash"}},
+		{"zhipu", "/api/paas/v4/models", "/api/paas/v4/chat/completions", "", []string{"glm-5.3", "glm-5.3-flash"}},
 		{"bailian", "/compatible-mode/v1/models", "/compatible-mode/v1/chat/completions", "/apps/anthropic/v1/messages", []string{"qwen3.8-flash", "qwen4-max", "text-embedding-v4"}},
 		{"openrouter", "/api/v1/models/user", "/api/v1/chat/completions", "", []string{"liquid/lfm-2.5-2.6b:free", "openai/gpt-4"}},
 		{"siliconflow", "/v1/models", "/v1/chat/completions", "", []string{"Qwen/Qwen3-Embedding-8B", "deepseek-ai/DeepSeek-V4-Pro"}},
@@ -132,6 +133,32 @@ func TestOnlyAnAuthorsOwnAPIIsPricedFromTheCatalog(t *testing.T) {
 		if diff := cmp.Diff(want, typ.Serves); diff != "" {
 			t.Errorf("%s serves (-want +got):\n%s", a.Kind(), diff)
 		}
+	}
+}
+
+// TestARowSpeaksMessagesOnlyWhereTheKeysBalancePaysForIt: Zhipu's Anthropic-compatible API draws an older key's coding
+// plan quota while the plan lasts and refuses the key once it ends, while the key still works for Chat
+// (docs/domains/suppliers-direct.md「决策与理由」); so Zhipu speaks OpenAI's family alone, and a Messages request reaches it
+// through the gateway's conversion.
+func TestARowSpeaksMessagesOnlyWhereTheKeysBalancePaysForIt(t *testing.T) {
+	t.Parallel()
+	if got := row(t, "zhipu").(adapter.Described).Type().Families; !slices.Equal(got, []adapter.Family{adapter.FamilyOpenAI}) {
+		t.Errorf("zhipu speaks %v, want OpenAI's family alone", got)
+	}
+}
+
+// TestBailiansEntriesAreItsAccountSites: an Alibaba Cloud account settles at its own site's prices in its site's
+// currency wherever its key is used, so Bailian's entries are the two account sites, each named for the person to pick
+// by: a China-site account in yuan at Beijing, whose prices are the China site's yuan list (its Singapore prices are
+// others), and an international-site account in dollars.
+func TestBailiansEntriesAreItsAccountSites(t *testing.T) {
+	t.Parallel()
+	want := []adapter.PriceEntry{
+		{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+		{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
+	}
+	if diff := cmp.Diff(want, row(t, "bailian").(adapter.Described).Type().Entries); diff != "" {
+		t.Errorf("entries (-want +got):\n%s", diff)
 	}
 }
 

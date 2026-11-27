@@ -101,19 +101,24 @@ var rows = []direct.Provider{
 				{ID: "cn", Origin: "https://open.bigmodel.cn", Currency: "CNY"},
 				{ID: "global", Origin: "https://api.z.ai", Currency: "USD"},
 			},
-			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
+			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
 		},
 		// The list at the root's /models is not in Zhipu's reference, but it answers a key that is not valid with a
-		// 401, as the check needs (probed 2026-11-27 at both origins).
-		Root:      "/api/paas/v4",
-		Anthropic: &direct.Anthropic{Root: "/api/anthropic", Models: []string{"glm-5.3", "glm-5.3-flash", "glm-5.2"}},
+		// 401, as the check needs (probed 2026-11-27 at both origins). Its Anthropic-compatible /api/anthropic is not
+		// used: an older key of an account that once had a coding plan draws the plan's quota there and is refused once
+		// the plan ends, though Chat still bills its balance; Messages are converted to Chat by the gateway.
+		Root: "/api/paas/v4",
 	},
 	{
 		Type: adapter.Type{
 			Kind: "bailian", Name: "阿里云百炼", Vendor: "qwen", Serves: []string{"qwen"}, Group: adapter.GroupDomestic,
+			// An account settles at its own site's prices in its site's currency wherever its key is used, which the
+			// address cannot tell: a China-site key also works at the Singapore address, at the China site's Singapore
+			// prices, which are not its yuan list (Beijing's). So the China-site entry is Beijing alone, and the person
+			// picks the entry of their account.
 			Entries: []adapter.PriceEntry{
-				{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY"},
-				{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD"},
+				{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+				{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
 			},
 			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
 		},
