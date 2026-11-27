@@ -16,7 +16,7 @@ import {
   TextArea,
   useFormat,
 } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,6 +27,7 @@ import zh from "../locales/zh/alert-configuration";
 import { formatJSON, parseJSONLossless } from "../lossless";
 import { Code, PageBody } from "../parts";
 import { alertConfigurationQuery } from "../policy-queries";
+import { suppliersQuery } from "../queries";
 import { type NumberSpec, numberOf, numberText, numberValid } from "../setting-fields";
 import { NumberSetting, SettingsCard, SwitchSetting } from "../setting-rows";
 import { SettingsSubmit, type SettingValue, useSettingDrafts } from "../settings-drafts";
@@ -42,6 +43,7 @@ type Spend = AdminSchemas["SpendDetection"];
 type ConfigInput = Omit<AdminSchemas["AlertConfigurationRequest"], "reason">;
 type Channel = AdminSchemas["AlertChannel"];
 type Rule = AdminSchemas["AlertRule"];
+type Line = AdminSchemas["LowBalanceThreshold"];
 type Edit = { kind: "configuration" | "add" } | { kind: "test"; id: string } | { kind: "secret"; channel: Channel };
 
 // The channel kinds, each named by the one destination member it sets (api/admin.yaml AlertChannel), and the secret it
@@ -215,6 +217,17 @@ function Configuration({ view }: { view: Config }) {
           <Rules rules={view.rules ?? []} />
         </SettingsCard>
         <ChannelsCard view={view} edit={setEdit} />
+        <SettingsCard
+          scope="platform"
+          title={t("alertConfig.balanceLines")}
+          actions={
+            <ActionButton size="sm" icon="pencil" onClick={() => setEdit({ kind: "configuration" })}>
+              {t("alertConfig.edit")}
+            </ActionButton>
+          }
+        >
+          <BalanceLines lines={view.low_balance_thresholds ?? []} />
+        </SettingsCard>
         {spend ? (
           <SettingsCard scope="platform" title={t("alertConfig.spend")}>
             <SwitchSetting drafts={drafts} setting="alerts.spendOn" />
@@ -266,6 +279,30 @@ function Rules({ rules }: { rules: Rule[] }) {
           </Tag>
         </SettingRow>
       ))}
+    </>
+  );
+}
+
+// BalanceLines names each supplier a line is set for by the first page of suppliers, and by its ID past it.
+function BalanceLines({ lines }: { lines: Line[] }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const suppliers = useInfiniteQuery(suppliersQuery());
+  const names = new Map((suppliers.data?.pages ?? []).flatMap((page) => page.data ?? []).map((s) => [s.id, s.name]));
+  return (
+    <>
+      {lines.map((line) => (
+        <SettingRow
+          key={line.supplier_id}
+          title={names.get(line.supplier_id) ?? line.supplier_id}
+          detail={t("alertConfig.balanceLine")}
+        >
+          <Code>{format.decimal(line.threshold)}</Code>
+        </SettingRow>
+      ))}
+      <Text size="sm" tone="faint">
+        {t("alertConfig.balanceDefault")}
+      </Text>
     </>
   );
 }
@@ -332,12 +369,14 @@ function readConfiguration(live: Config, values: Record<string, string>): Config
   try {
     const rules = parseJSONLossless(values.rules ?? "");
     const channels = parseJSONLossless(values.channels ?? "");
-    if (!Array.isArray(rules) || !Array.isArray(channels)) return undefined;
+    const lines = parseJSONLossless(values.lines ?? "");
+    if (!Array.isArray(rules) || !Array.isArray(channels) || !Array.isArray(lines)) return undefined;
     // Keep parsed numbers exact. The API validates the fields and their bounds.
     return {
       rev: live.rev ?? 1,
       rules,
       channels,
+      low_balance_thresholds: lines,
       ...(live.spend_detection ? { spend_detection: live.spend_detection } : {}),
     } as ConfigInput;
   } catch {
@@ -417,6 +456,14 @@ function Replace({ live, onClose }: { live: Config; onClose: () => void }) {
             rows={5}
             defaultValue={formatJSON(view.channels ?? [])}
             error={errors.field(error, "channels")}
+            spellCheck={false}
+          />
+          <TextArea
+            label={t("alertConfig.balanceLines")}
+            name="lines"
+            rows={4}
+            defaultValue={formatJSON(view.low_balance_thresholds ?? [])}
+            error={errors.field(error, "low_balance_thresholds")}
             spellCheck={false}
           />
         </Stack>

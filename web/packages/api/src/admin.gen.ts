@@ -4288,6 +4288,7 @@ export interface components {
             rules?: components["schemas"]["AlertRule"][];
             channels?: components["schemas"]["AlertChannel"][];
             spend_detection?: components["schemas"]["SpendDetection"];
+            low_balance_thresholds?: components["schemas"]["LowBalanceThreshold"][];
             /** @description The admin origin the last replacement came from, which the links in notifications open; absent before the first replacement. */
             admin_origin?: string;
         };
@@ -4369,7 +4370,15 @@ export interface components {
             rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
             channels: WithRequired<components["schemas"]["AlertChannel"], "id">[];
             spend_detection?: components["schemas"]["SpendDetection"];
+            /** @description Replaces every supplier's alert line; absent keeps the saved ones. */
+            low_balance_thresholds?: components["schemas"]["LowBalanceThreshold"][];
             reason: components["schemas"]["Reason"];
+        };
+        /** @description A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, at a relay's latest confirmed unit value. */
+        LowBalanceThreshold: {
+            supplier_id: components["schemas"]["Uuid"];
+            /** @description A non-negative exact decimal in text. */
+            threshold: string;
         };
         AlertTestRequest: {
             channel: string;

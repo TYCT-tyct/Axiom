@@ -3587,10 +3587,11 @@ type AlertChannel struct {
 // AlertConfiguration defines model for AlertConfiguration.
 type AlertConfiguration struct {
 	// AdminOrigin The admin origin the last replacement came from, which the links in notifications open; absent before the first replacement.
-	AdminOrigin *string         `json:"admin_origin,omitempty"`
-	Channels    *[]AlertChannel `json:"channels,omitempty"`
-	Rev         *int64          `json:"rev,omitempty"`
-	Rules       *[]AlertRule    `json:"rules,omitempty"`
+	AdminOrigin          *string                `json:"admin_origin,omitempty"`
+	Channels             *[]AlertChannel        `json:"channels,omitempty"`
+	LowBalanceThresholds *[]LowBalanceThreshold `json:"low_balance_thresholds,omitempty"`
+	Rev                  *int64                 `json:"rev,omitempty"`
+	Rules                *[]AlertRule           `json:"rules,omitempty"`
 
 	// SpendDetection Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged.
 	SpendDetection *SpendDetection `json:"spend_detection,omitempty"`
@@ -3614,6 +3615,9 @@ type AlertConfigurationRequest struct {
 		// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
 		WecomUrl *string `json:"wecom_url,omitempty"`
 	} `json:"channels"`
+
+	// LowBalanceThresholds Replaces every supplier's alert line; absent keeps the saved ones.
+	LowBalanceThresholds *[]LowBalanceThreshold `json:"low_balance_thresholds,omitempty"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
@@ -4897,6 +4901,15 @@ type LoginLimitsView struct {
 
 	// Limits Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows.
 	Limits *LoginLimits `json:"limits,omitempty"`
+}
+
+// LowBalanceThreshold A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, at a relay's latest confirmed unit value.
+type LowBalanceThreshold struct {
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId Uuid `json:"supplier_id"`
+
+	// Threshold A non-negative exact decimal in text.
+	Threshold string `json:"threshold"`
 }
 
 // MailConfigTest defines model for MailConfigTest.

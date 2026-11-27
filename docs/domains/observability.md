@@ -169,7 +169,7 @@
 - **事件**：`observability.alerts` 每分钟读最多 1000 条信号，消费与事件变更同事务。同一 `(kind, key)` 最多一个未恢复事件；反复 raise 更新次数和字段，不重复通知；恢复后再 raise 是新事件。状态 `firing → delivered → resolved`；没安排过首通知的短暂事件不发恢复通知。窗口计数类信号（安全样本、支付窗口样本、`routing.preset_refuses_all`）逐条评估，事件保留当前窗口值。
 - **规则**：种类、阈值（信号的 `value`，缺省 1）、持续秒数、最低严重度、渠道、UTC 静默起止分钟（可跨午夜，两端相同表示关闭；静默期间持久等待，恢复通知也遵守）和重复间隔（默认 0，即每次故障每渠道一次首通知）。首通知失败的事件只留 failed 恢复回执；变更规则不撤回已排入的通知；同一种类不能有两条规则指向同一渠道。
 - **默认规则**有五条，默认无渠道，管理员绑定后才发送，不猜收件人：`observability.write_lag`（待写数至少 4000，持续 60 秒）、`billing.settlement_anomaly`、`queue.discarded`、`observability.records_lost`、`observability.spend_anomaly`。其他种类都没有预置规则，管理员要自己新增规则并绑定已验证的渠道；没有规则时事件仍持久可查。
-- **来源**：写入积压（每分钟采样 spill 待写数 `records.pending`，不在 `Commit` 里发）与记录丢失（只在计数增加时上报，不可逆，管理员调查后关闭）；结算与账本自平、供应商对账差异（与业务同事务持久化，需人工调查关闭）；支付差异和验签/查询/限流窗口计数（每节点按 UTC 分钟，每个完整窗口发一次完整计数，合并键含节点身份）；账户猜凭证失败峰值与账户暂停；供应商持久事件（按 `(version, seq)` 记消费位置，由新的成功观测或明确的恢复事件恢复，信号不带上游文字）；路由 `routing.preset_refuses_all`；目录 `catalog.*`（[模型目录的「官方价格页」](catalog.md#官方价格页)）。用户通知走租户的邮件 outbox，不进平台运维事件。
+- **来源**：写入积压（每分钟采样 spill 待写数 `records.pending`，不在 `Commit` 里发）与记录丢失（只在计数增加时上报，不可逆，管理员调查后关闭）；结算与账本自平、供应商对账差异（与业务同事务持久化，需人工调查关闭）；支付差异和验签/查询/限流窗口计数（每节点按 UTC 分钟，每个完整窗口发一次完整计数，合并键含节点身份）；账户猜凭证失败峰值与账户暂停；供应商持久事件（按 `(version, seq)` 记消费位置，由新的成功观测或明确的恢复事件恢复，信号不带上游文字）；供应商余额（见下条）；路由 `routing.preset_refuses_all`；目录 `catalog.*`（[模型目录的「官方价格页」](catalog.md#官方价格页)）。用户通知走租户的邮件 outbox，不进平台运维事件。
 
 | 种类 | 合并键 | 恢复方式 |
 |---|---|---|
@@ -184,11 +184,13 @@
 | `operations.agent_alert` | `<运营凭证 UUID>/<agent 给的键>` | agent 调 `alert_resolve`，或管理员关闭（[运营的「运营接口」](operations.md#运营接口)） |
 | `routing.preset_refuses_all` | `<节点>/<预设 UUID>` | 该节点下一个路由成功过的一分钟窗口 |
 | `catalog.page_changed` / `catalog.page_failed` / `catalog.page_overdue` | 页面 UUID | 人工处理 / 取数成功或停用页面 |
-| `suppliers.login_expired` / `sync_attention` / `task_stopped` / `low_balance` / `pool_capacity` / `sources_unavailable` / `exhausted` | 供应商 UUID（任务、分组加后缀；`exhausted` 为 `all`） | 新的成功观测、明确的余额恢复、`pool_low` 行消失或可用来源重新出现 |
+| `suppliers.login_expired` / `sync_attention` / `task_stopped` / `pool_capacity` / `sources_unavailable` / `exhausted` | 供应商 UUID（任务、分组加后缀；`exhausted` 为 `all`） | 新的成功观测、`pool_low` 行消失或可用来源重新出现 |
+| `suppliers.low_balance` | 中转站为供应商 UUID，自带钱包的 key 为 `<供应商 UUID>/<凭证 UUID>` | 余额回到告警线或以上，或这把 key、这个供应商不再可用 |
 | `suppliers.reconciliation_difference` | 分类（`under_estimated`、`held`、`unmatched` 等） | 人工调查关闭 |
 | `alert.channel_unavailable` | 渠道 ID | 最新周期自测成功，或删除渠道 |
 | `observability.spend_anomaly` | `<账户 UUID>/spend/<币种>` / `/region` / `/model` | 下一轮检测中该异常消失 |
 
+- **供应商余额**：suppliers 每分钟读一遍中转站的账户余额和自带钱包的 key 的余额（只读可服务的供应商和 `active`、`quota_exhausted` 的 key），与该供应商的告警线比较，和上一次报告低的集合比，只有越线的一方才发信号：跌破发 `suppliers.low_balance`（`warning`），回到线上恢复，一直在线下或线上什么都不发。告警线在告警配置的 `low_balance_thresholds` 里按供应商设，单位是它余额的单位（中转站的原生单位 `quota` 或 `usd`，key 的钱包币种）；没设的按 5 个结算币种单位，中转站按最近确认的单位价值换成原生单位，没有确认过单位价值的中转站不告警。替换配置时不带这一项就保留已存的。字段是供应商名称和 ID、`key_hint`（`…` 加 key 的末 4 位，只有 key 才有）、`balance`、`threshold` 和 `unit`，不带 key 本身。没有预置规则：管理员为这个种类加规则、绑定渠道后，经任一渠道发送。
 - **邮件渠道**：经 `platform/mail` outbox 和 River `mail.send_tracked` 发送；回执 pending、queued、delivered（SMTP 接受，不表示已读）、failed；网络投递至少一次，最多五次尝试。
 - **Webhook 渠道**：HTTPS POST JSON，经 platform egress 的地址策略，不跟随重定向，10 秒期限，只有 2xx 算接收；JSON 在派发时冻结（通知 `id`、故障 `event_id`、`sequence`（首通知 0，重复递增，恢复 -1）、`kind/key/severity/fields`、`state`），重试不改正文、每次重签时间。`X-Axiom-Signature` 为 `t=<Unix秒>,v1=<HMAC-SHA256 十六进制>`，签名输入是时间戳、一个点和原始正文；接收端应恒定时间比较、拒绝超出正负 5 分钟的时间戳、按通知 ID 去重至少 24 小时、重复接收也返回 2xx。网络失败经 River 退避最多 5 次后记 failed；目标非法或没有签名密钥直接记 failed，不发无签名请求。签名密钥由管理员单独写入（32–512 个 UTF-8 字节），信封封存并绑定渠道和目标地址，不出现在配置、回执、审计和任务里；轮换后一小时内同时带新旧两个 `v1`。地址可能带令牌（Slack、Discord 在路径里，有的接收端在子域名里），与飞书、企业微信的地址一样封存、只回脱敏形式（见下条），但主机也隐去（`https://…/…<末尾>`）；末尾只取路径和查询的最后至多 4 个字符、不超过一半，没有路径就不显示。只在所有核心节点都认识 Webhook 后才配置。
 - **机器人渠道**：飞书或 Lark 自定义机器人（`feishu_url`，只收 `open.feishu.cn`、`open.larksuite.com`）、企业微信群机器人（`wecom_url`，只收 `qyapi.weixin.qq.com`，地址里的 key 就是凭证）、Telegram（`telegram_chat_id`，数字 ID 或 `@频道`，经 `api.telegram.org` 的 `sendMessage`）。一个渠道恰好设一个目标字段，它决定类型。飞书和企业微信的地址本身带凭证（hook 令牌、key）：保存时信封封存进 `channel_addresses`，配置里只留脱敏形式（`https://<主机>/…<末 4 位>`）和地址摘要，读回、回执、任务和页面都只见脱敏形式；原样发回脱敏形式就沿用已存的地址，用在别的渠道上则拒绝；换地址就是新目标，重新自测，旧签名密钥不再适用。都走 Webhook 的任务、出口策略、期限、重试和回执：派发时冻结纯文本（不超过 2000 字节），2xx 且对方的错误码为 0（飞书 `code` 或旧版 `StatusCode`、企业微信 `errcode`、Telegram `ok`）才算送达。飞书开了签名校验时设签名密钥，请求带 `timestamp` 和 `sign`（以「时间戳、换行、密钥」为键对空串做 HMAC-SHA256 再 base64）；Telegram 必须先设机器人令牌，没有令牌直接记 failed。两者用同一个密钥接口写入，信封封存、绑定渠道和目标，新值立即替换旧值，不返回、不进日志和任务错误（令牌在请求路径里，出错只记类别）。出口拒绝目标时回执记 failed，事件保留。
@@ -272,6 +274,7 @@
 | 监控的延迟用固定分箱，不存精确分位数 | 分箱可以相加，分钟桶合成小时、端点合成线路都不失真；精确分位数要留每条调用的值。误差小于一个箱宽，监控够用 |
 | 插件运行记在调用记录的 `plugins` 列（jsonb 数组，最多两条），没有运行时不写这个成员 | 没有插件的调用落盘字节和分配都不变（`BenchmarkEnqueue` 守住）；后台列表按它筛，用只含插件调用的部分索引 `call_log_admin_plugin_time` |
 | 看板的收入、每日收入和消费榜（billing 的 `PlatformCallMoney`）先用普通 `GROUP BY` 按 UTC 日和账户汇总窗口里的调用，再用 grouping sets 汇总这些组；不另建预汇总表 | grouping sets 的聚合不能并行，普通 `GROUP BY` 能分给并行进程，汇总后只剩「天数 × 账户数」个组。一天 100 万次调用、2000 个账户、读同样约 4 万个块：串行约 3.8 秒，两个并行进程约 1.3 秒，结果逐行相同（`EXPLAIN ANALYZE`，本机负载约 8）；还是一次读出所有数，彼此对得上。预汇总要多一张表和一个写入任务，等窗口里的调用再多一个数量级再做 |
+| 余额告警线存在告警配置里、由 suppliers 读余额并判断越线，沿用已有的 `suppliers.low_balance` 种类 | 告警线和规则、渠道一起配置、同一个修订号；余额和凭证归 suppliers，observability 不能引用它，由入口把读告警线的函数交给 suppliers。按「上次报告低的集合」比较而不是看每次读数，一次越线只通知一次，不为每次同步发信号。沿用旧种类和合并键，旧桥接为中转站开着的事件由第一次读数接着恢复，不会出现两个同义告警。与 new-api 和 sub2api 一样用账户币种里的固定金额、跌破时通知一次；不按近期花费折算天数：每把 key 的花费不在汇总表里 |
 
 ## 待定问题
 
