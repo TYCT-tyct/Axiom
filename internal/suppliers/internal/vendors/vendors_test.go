@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -41,6 +42,10 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 		{"ark", "/api/v3/models", "/api/v3/chat/completions", "", []string{"doubao-seed-2-1-pro-260915"}},
 		{"qianfan", "/v2/models", "/v2/chat/completions", "", []string{"deepseek-v3.2"}},
 		{"minimax", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"MiniMax-M3", "MiniMax-M3.1-Flash"}},
+		{"zhipu", "/api/paas/v4/models", "/api/paas/v4/chat/completions", "", []string{"glm-5.3", "glm-5.3-flash"}},
+		{"bailian", "/compatible-mode/v1/models", "/compatible-mode/v1/chat/completions", "/apps/anthropic/v1/messages", []string{"qwen3.8-flash", "qwen4-max", "text-embedding-v4"}},
+		{"openrouter", "/api/v1/models/user", "/api/v1/chat/completions", "", []string{"liquid/lfm-2.5-2.6b:free", "openai/gpt-4"}},
+		{"siliconflow", "/v1/models", "/v1/chat/completions", "", []string{"Qwen/Qwen3-Embedding-8B", "deepseek-ai/DeepSeek-V4-Pro"}},
 		{"xai", "/v1/models", "/v1/chat/completions", "", []string{"grok-420-reasoning", "grok-imagine-image", "latest"}},
 		{"mistral", "/v1/models", "/v1/chat/completions", "", []string{"mistral-large-4"}},
 	}
@@ -109,6 +114,60 @@ func row(t *testing.T, kind adapter.Kind) adapter.Adapter {
 	}
 	t.Fatalf("no row %s", kind)
 	return nil
+}
+
+// TestOnlyAnAuthorsOwnAPIIsPricedFromTheCatalog: a row sells at the catalog's official prices only the models of the
+// one author whose own API it is (its vendor); an aggregator, which sells any author's models at prices of its own,
+// names no author, so none of its endpoints is priced from the catalog (docs/domains/suppliers-direct.md「聚合商按自己的
+// 价」). OpenRouter's list does carry prices, but they are one provider's of the several a call may be routed to, not
+// what the call is charged.
+func TestOnlyAnAuthorsOwnAPIIsPricedFromTheCatalog(t *testing.T) {
+	t.Parallel()
+	aggregators := map[adapter.Kind]bool{"openrouter": true, "siliconflow": true}
+	for _, a := range vendors.New() {
+		typ := a.(adapter.Described).Type()
+		want := []string{typ.Vendor}
+		if aggregators[a.Kind()] {
+			want = nil
+		}
+		if diff := cmp.Diff(want, typ.Serves); diff != "" {
+			t.Errorf("%s serves (-want +got):\n%s", a.Kind(), diff)
+		}
+	}
+}
+
+// TestARowSpeaksMessagesOnlyWhereTheKeysBalancePaysForIt: Zhipu's Anthropic-compatible API draws an older key's coding
+// plan quota while the plan lasts and refuses the key once it ends, while the key still works for Chat
+// (docs/domains/suppliers-direct.md「决策与理由」); so Zhipu speaks OpenAI's family alone, and a Messages request reaches it
+// through the gateway's conversion.
+func TestARowSpeaksMessagesOnlyWhereTheKeysBalancePaysForIt(t *testing.T) {
+	t.Parallel()
+	if got := row(t, "zhipu").(adapter.Described).Type().Families; !slices.Equal(got, []adapter.Family{adapter.FamilyOpenAI}) {
+		t.Errorf("zhipu speaks %v, want OpenAI's family alone", got)
+	}
+}
+
+// TestBailiansEntriesAreItsAccountSites: an Alibaba Cloud account settles at its own site's prices in its site's
+// currency wherever its key is used, so Bailian's entries are named by the account the person picks by: a China-site
+// account in yuan at Beijing, whose prices are the catalog's yuan list; a China-site account in yuan at Singapore,
+// whose prices the catalog does not hold (the yuan list is Beijing's), so the line there sells nothing at a catalog
+// price and its cost is unknown; and an international-site account in dollars.
+func TestBailiansEntriesAreItsAccountSites(t *testing.T) {
+	t.Parallel()
+	want := []adapter.PriceEntry{
+		{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+		{ID: "cn-sg", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号 · 新加坡", Unpriced: true},
+		{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
+	}
+	typ := row(t, "bailian").(adapter.Described).Type()
+	if diff := cmp.Diff(want, typ.Entries); diff != "" {
+		t.Errorf("entries (-want +got):\n%s", diff)
+	}
+	for _, e := range want {
+		if serves := typ.ServesAt(e.Origin, e.Currency); (len(serves) == 0) != e.Unpriced {
+			t.Errorf("%s serves %v at its entry", e.ID, serves)
+		}
+	}
 }
 
 // TestBalanceRowsReadTheirKeysWallet: the rows that say Balance (DeepSeek and Kimi, no other) read a key's balance at

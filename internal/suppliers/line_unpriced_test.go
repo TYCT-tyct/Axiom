@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -35,6 +36,97 @@ func TestATypeOfAnyAuthorIsNotPricedFromTheCatalog(t *testing.T) {
 	}
 	if _, err := w.svc.Acquire(endpoint); !errors.Is(err, ErrNoEndpoint) {
 		t.Errorf("acquiring the endpoint: %v, want it out of routing", err)
+	}
+}
+
+// TestAnEntryWhosePricesTheCatalogLacksIsNotPriced: a line of the author's own API connected at an entry whose price
+// list the catalog does not hold (Bailian's China-site account at Singapore, whose yuan prices are not the catalog's
+// Beijing ones) sells the author's model at no catalog price: the endpoint has an unknown cost when connected, after a
+// new ratio and when projected again, and is not routed, though the catalog prices the model in the entry's currency.
+func TestAnEntryWhosePricesTheCatalogLacksIsNotPriced(t *testing.T) {
+	t.Parallel()
+	w := newPastedWorld(t)
+	w.provider.set("sk-good-key", providerKey{models: []string{"stone"}})
+	line := w.connect("regional", "", "sk-good-key")
+	for _, step := range []struct {
+		name string
+		do   func() error
+	}{
+		{"connected", func() error { return nil }},
+		{"a ratio set", func() error { return w.setRatio(line, "0.9") }},
+		{"projected again", func() error {
+			return (&lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}).reproject(t.Context())
+		}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		w.expectRouted(step.name, line, "stone", false)
+	}
+}
+
+// TestALineIsNotPricedFromAnAggregatorsPrice: a direct line of the author's own API sells the author's model at the
+// catalog's reference price unless that price came from OpenRouter's dataset (docs/domains/suppliers-direct.md「成本与线路
+// 倍率」): there it is an aggregator's selling price, for an open-weight model a third-party provider's, not the
+// author's own. The vendor's own page, LiteLLM's compilation of vendors' list prices and a person's confirmed figure
+// are the author's price. A model priced from OpenRouter has an unknown cost on the line, when connected, at a new
+// ratio and when projected again, and is not routed; the others are priced and routed.
+func TestALineIsNotPricedFromAnAggregatorsPrice(t *testing.T) {
+	t.Parallel()
+	w := newPastedWorld(t)
+	sources := []struct {
+		model  string
+		source catalog.PriceSource
+		routed bool
+	}{
+		{"stone", catalog.SourceManual, true}, // the world's model, priced by hand
+		{"basalt", catalog.SourceOfficial, true},
+		{"flint", catalog.SourceLiteLLM, true},
+		{"pebble", catalog.SourceOpenRouter, false},
+	}
+	names := make([]string, len(sources))
+	for i, s := range sources {
+		names[i] = s.model
+		if s.model != "stone" {
+			w.list(s.model, stonePrice)
+		}
+		// The price as its source would have published it; a new revision makes the catalog read it again.
+		w.sql(fmt.Sprintf("UPDATE catalog.reference_price SET source = '%s' WHERE model_id = '%s'", s.source, uuid.UUID(w.models[s.model])),
+			"UPDATE catalog.revision SET n = n + 1")
+	}
+	w.provider.set("sk-good-key", providerKey{models: names})
+	line := w.connect("pasted", "", "sk-good-key")
+	for _, step := range []struct {
+		name string
+		do   func() error
+	}{
+		{"connected", func() error { return nil }},
+		{"a ratio set", func() error { return w.setRatio(line, "0.9") }},
+		{"projected again", func() error {
+			return (&lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}).reproject(t.Context())
+		}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		for _, s := range sources {
+			w.expectRouted(step.name+", "+string(s.source), line, s.model, s.routed)
+		}
+	}
+}
+
+// expectRouted checks that the line's endpoint of the model has a known cost and is routed, or neither.
+func (w *pastedWorld) expectRouted(what string, line uuid.UUID, model string, routed bool) {
+	w.t.Helper()
+	endpoint := w.endpoint(line, model)
+	if got, want := w.text("SELECT cost_state FROM suppliers.endpoints WHERE id = $1", endpoint), map[bool]string{true: "known", false: "unknown"}[routed]; got != want {
+		w.t.Errorf("%s: %s's cost is %s, want %s", what, model, got, want)
+	}
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := w.svc.Acquire(endpoint); errors.Is(err, ErrNoEndpoint) == routed {
+		w.t.Errorf("%s: acquiring %s: %v", what, model, err)
 	}
 }
 

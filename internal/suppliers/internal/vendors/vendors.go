@@ -96,6 +96,66 @@ var rows = []direct.Provider{
 	},
 	{
 		Type: adapter.Type{
+			Kind: "zhipu", Name: "智谱", Vendor: "z-ai", Serves: []string{"z-ai"}, Group: adapter.GroupDomestic,
+			Entries: []adapter.PriceEntry{
+				{ID: "cn", Origin: "https://open.bigmodel.cn", Currency: "CNY"},
+				{ID: "global", Origin: "https://api.z.ai", Currency: "USD"},
+			},
+			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
+		},
+		// The list at the root's /models is not in Zhipu's reference, but it answers a key that is not valid with a
+		// 401, as the check needs (probed 2026-11-27 at both origins). Its Anthropic-compatible /api/anthropic is not
+		// used: an older key of an account that once had a coding plan draws the plan's quota there and is refused once
+		// the plan ends, though Chat still bills its balance; Messages are converted to Chat by the gateway.
+		Root: "/api/paas/v4",
+	},
+	{
+		Type: adapter.Type{
+			Kind: "bailian", Name: "阿里云百炼", Vendor: "qwen", Serves: []string{"qwen"}, Group: adapter.GroupDomestic,
+			// An account settles at its own site's prices in its site's currency wherever its key is used, which the
+			// address cannot tell, so the person picks the entry of their account. A China-site key at the Singapore
+			// address settles in yuan at the China site's Singapore prices, which are not the catalog's yuan list
+			// (Beijing's): that entry is connected and lists its models, but sells none at a catalog price; their cost
+			// is unknown and they are not routed until the catalog holds that list.
+			Entries: []adapter.PriceEntry{
+				{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+				{ID: "cn-sg", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号 · 新加坡", Unpriced: true},
+				{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
+			},
+			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
+		},
+		Root: "/compatible-mode/v1",
+		// Bailian also sells other authors' models (DeepSeek, Kimi, GLM) at prices of its own; they are listed and stay
+		// unpriced, since the type serves Qwen alone.
+		Anthropic: &direct.Anthropic{Root: "/apps/anthropic", Models: []string{
+			"qwen4-max", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus", "qwen-plus", "qwen-plus-latest",
+			"qwen3.8-flash", "qwen3.7-flash", "qwen3.6-flash", "qwen3.5-flash", "qwen-flash", "qwen3-coder-flash", "qwen3-vl-plus",
+		}},
+	},
+	// The aggregators sell every author's models, so they serve none by name and the catalog prices none of their
+	// endpoints: each costs what the aggregator charges for it, which neither lets a key read (suppliers-direct.md
+	// 「聚合商按自己的价」). Their endpoints' cost is unknown and they are not routed until it can be.
+	{
+		Type: adapter.Type{
+			Kind: "openrouter", Name: "OpenRouter", Vendor: "openrouter", Group: adapter.GroupOfficial,
+			Entries:  []adapter.PriceEntry{{ID: "global", Origin: "https://openrouter.ai", Currency: "USD"}},
+			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
+		},
+		// The public /models answers any key; the key's own list, filtered by its account's settings, does not.
+		Root: "/api/v1", Models: "/api/v1/models/user",
+	},
+	{
+		Type: adapter.Type{
+			Kind: "siliconflow", Name: "硅基流动", Vendor: "siliconflow", Group: adapter.GroupDomestic,
+			Entries: []adapter.PriceEntry{
+				{ID: "cn", Origin: "https://api.siliconflow.cn", Currency: "CNY"},
+				{ID: "global", Origin: "https://api.siliconflow.com", Currency: "USD"},
+			},
+			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
+		},
+	},
+	{
+		Type: adapter.Type{
 			Kind: "xai", Name: "xAI", Vendor: "x-ai", Serves: []string{"x-ai"}, Group: adapter.GroupOfficial,
 			Entries:  []adapter.PriceEntry{{ID: "global", Origin: "https://api.x.ai", Currency: "USD"}},
 			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
