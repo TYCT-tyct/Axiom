@@ -228,21 +228,11 @@ func TestKeyringUnregisteredEnvelopeStore(t *testing.T) {
 	if err != nil || !slices.Equal(status.Unregistered, []string{newer}) {
 		t.Fatalf("the older node did not start and report the newer column: %+v, %v", status, err)
 	}
-	if err := old.Add(t.Context(), 2); err != nil {
+	// Adding and activating a version destroy nothing, so the older node still moves a rotation that far.
+	if err := errors.Join(old.Add(t.Context(), 2), old.Activate(t.Context(), 2)); err != nil {
 		t.Fatal(err)
 	}
-	if err := old.Activate(t.Context(), 2); err != nil {
-		t.Fatal(err)
-	}
-	var cursor secret.RewrapCursor
-	for {
-		count, next, err := old.RewrapBatch(t.Context(), cursor, 100)
-		if err != nil || count == 0 {
-			refused("completing the rewrap", err)
-			break
-		}
-		cursor = next
-	}
+	refused("completing the rewrap", rewrapToEnd(t, old))
 	refused("retirement", old.Retire(t.Context(), 1))
 	both, err := os.ReadFile(f.path)
 	if err != nil || !bytes.Contains(both, []byte("1:")) {
@@ -259,6 +249,19 @@ func TestKeyringUnregisteredEnvelopeStore(t *testing.T) {
 	refused("pruning a retired version", err)
 	if _, _, err := f.r.Check(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// rewrapToEnd runs batches until one rewraps nothing and returns that last call's error.
+func rewrapToEnd(t *testing.T, r secret.Rotation) error {
+	t.Helper()
+	var cursor secret.RewrapCursor
+	for {
+		count, next, err := r.RewrapBatch(t.Context(), cursor, 100)
+		if err != nil || count == 0 {
+			return err
+		}
+		cursor = next
 	}
 }
 
