@@ -140,6 +140,16 @@ type GeminiReply struct {
 	calls    []geminiPart
 	args     [][]byte
 	finished bool // the relay repeats the finish reason on its usage chunk, which Gemini says once
+	// held is the event that finished the candidate, kept for the usage the relay sends after it: Google's stream ends
+	// with one event holding both, and the Google SDKs refuse a turn whose last event has no candidate.
+	held *geminiFrame
+}
+
+// geminiFrame is an event's makings: the chunk it came of, its parts and the finish reason.
+type geminiFrame struct {
+	c      chatReply
+	parts  []geminiPart
+	finish string
 }
 
 // NewGeminiReply is the reply for a request GeminiToChat converted with opts.
@@ -149,7 +159,7 @@ func NewGeminiReply(opts GeminiOptions) *GeminiReply { return &GeminiReply{opts:
 // the end marker, or a chunk that only opened a call.
 func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	if string(data) == sse.Done {
-		return nil, nil
+		return g.release(nil), nil
 	}
 	var c chatReply
 	if err := jsonx.Unmarshal(data, &c); err != nil {
@@ -169,10 +179,30 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 			parts = append(parts, g.flushCalls()...)
 		}
 	}
-	if len(parts) == 0 && finish == "" && c.Usage == nil {
+	switch {
+	case g.held != nil:
+		g.held.parts = append(g.held.parts, parts...)
+		return g.release(c.Usage), nil
+	case finish != "" && c.Usage == nil:
+		g.held = &geminiFrame{c, parts, finish}
+		return nil, nil
+	case len(parts) == 0 && finish == "" && c.Usage == nil:
 		return nil, nil
 	}
 	return geminiResponseOf(c, parts, finish), nil
+}
+
+// release gives the held finishing event with the usage, if one is held.
+func (g *GeminiReply) release(usage *chatUsageCounts) []byte {
+	h := g.held
+	if h == nil {
+		return nil
+	}
+	g.held = nil
+	if usage != nil {
+		h.c.Usage = usage
+	}
+	return geminiResponseOf(h.c, h.parts, h.finish)
 }
 
 // geminiErrorEvent is a Chat stream's error chunk as Gemini's error, at the status its code says.

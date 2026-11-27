@@ -186,10 +186,13 @@ func TestGeminiReply(t *testing.T) {
 	}
 	events := geminiEvents(t, protocol.NewGeminiReply(protocol.GeminiOptions{Thoughts: false}), chat.out)
 	all := strings.Join(events, "\n")
-	if len(events) != 3 || strings.Contains(all, "Weighing") || !strings.Contains(events[0], `{"text":"Checking."}`) ||
-		!strings.Contains(events[1], `"functionCall":{"args":{"city":"Paris"},"id":"call_r1_0","name":"get_weather"},"thoughtSignature":"c2ln"`) ||
-		strings.Count(all, `"finishReason":"STOP"`) != 1 || !strings.Contains(events[1], `"finishReason":"STOP"`) ||
-		!strings.Contains(events[2], `"usageMetadata":{"cachedContentTokenCount":4,"candidatesTokenCount":5,"promptTokenCount":10,"thoughtsTokenCount":7,"totalTokenCount":22}`) {
+	// The last event is the candidate's finish with the usage, as Google's own stream ends: a client that keeps the
+	// chat's history (the Google SDKs) refuses a turn whose last event has no candidate.
+	last := events[len(events)-1]
+	if len(events) != 2 || strings.Contains(all, "Weighing") || !strings.Contains(events[0], `{"text":"Checking."}`) ||
+		!strings.Contains(last, `"functionCall":{"args":{"city":"Paris"},"id":"call_r1_0","name":"get_weather"},"thoughtSignature":"c2ln"`) ||
+		strings.Count(all, `"finishReason":"STOP"`) != 1 || !strings.Contains(last, `"finishReason":"STOP"`) ||
+		!strings.Contains(last, `"usageMetadata":{"cachedContentTokenCount":4,"candidatesTokenCount":5,"promptTokenCount":10,"thoughtsTokenCount":7,"totalTokenCount":22}`) {
 		t.Errorf("Gemini events:\n%s", all)
 	}
 }
