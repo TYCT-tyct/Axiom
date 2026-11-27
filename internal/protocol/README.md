@@ -70,7 +70,7 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 
 ## Gemini
 
-Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同一组结构和表（`gemini.go`）：客户端用 `GeminiToChat` 和 `GeminiReply`（流按事件、整份按 `Body`、错误按 `GeminiErrorBody`），上游用 `ChatToGemini` 和 `ChatFromGemini`（把 `streamGenerateContent?alt=sse` 读成 Chat 流）。没有 ID 的调用按位置编号，结果按 ID 否则按同名最早未答的配对；思考签名在 Chat 一侧放 `extra_content.google.thought_signature`，转往 Gemini 时缺签名的首个调用写官方的跳过值；`thoughtsTokenCount` 计入输出和推理，各模态明细（音频、图片、视频，含缓存的）对应 Chat 明细的同名成员；中途的用量只把输入侧随下一个 delta 交中继，结束回答的那帧才报输出；出过内容后失败：整份回 502 带用量，流先发末段再报错。表达不了又改变回答的：入站点名拒绝，出站换端点。
+Gemini 不是路由用的格式，在边缘与 Chat 互换；两个方向读同一组结构和表，思考签名、用量明细与流的失败规则见 [gemini.md](gemini.md)。
 
 ## 读 SSE
 
@@ -85,7 +85,7 @@ Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同�
 
 ## 检查流结构
 
-`streamcheck.Messages`、`Responses`、`Chat` 按官方文档检查结构（单事件 32 MiB），违反为 `ErrInvalid`。Messages：`message_start` 一次在最前，块 `index` 连续、start 到 stop 之间只有匹配的增量，块都关闭后才有 `message_delta`。Responses：`sequence_number` 递增（不要求连续），项和部件序号连续、所指的正打开，结尾时 `output` 条数等于加入的项数。Chat：`id` 不变，`finish_reason` 后无增量，工具调用续写或恰好开始下一个，用量块在选项都结束后，`[DONE]` 是唯一正常结尾，顶层 `error` 块结束流。结尾后还有事件、结尾前结束都不合规；未列出的事件类型照常接受，厂商会不通知地加类型。
+`streamcheck` 按官方文档检查 Messages、Responses、Chat 三种流的结构，违反为 `ErrInvalid`；各格式的检查项与未知事件类型的处理见 [internal/streamcheck/README.md](internal/streamcheck/README.md)。
 
 ## 转发
 

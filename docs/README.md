@@ -22,6 +22,8 @@
 | 账户在代码里怎么认出、准入和授权：站点快照、会话、key、准入事务、公开接口 | [internal/accounts/README.md](../internal/accounts/README.md) | 实现或调用 `accounts` 之前 |
 | 模型目录在代码里怎么加载、同步和发布快照：参考价、名字解析、价目表 | [internal/catalog/README.md](../internal/catalog/README.md) | 实现或调用 `catalog` 之前 |
 | 三种调用格式的转换与透传：解析、转换、流式读写、用量 | [internal/protocol/README.md](../internal/protocol/README.md) | 实现或调用 `protocol` 之前 |
+| Gemini 格式的读写：与 Chat 互换、思考签名、用量明细、流的失败 | [internal/protocol/gemini.md](../internal/protocol/gemini.md) | 改动 `gemini.go` 或 Gemini 的读写之前 |
+| 流结构检查：Messages、Responses、Chat 三种流的事件规则与样本检查 | [internal/protocol/internal/streamcheck/README.md](../internal/protocol/internal/streamcheck/README.md) | 改动 `streamcheck` 或新增流的事件类型之前 |
 | 平台层：监听与接口约定、日志与遥测、数据库访问、加密、前端文件、配置 | [internal/platform/README.md](../internal/platform/README.md) | 改动 `platform`、`cmd/axiom` 的组装或任何跨模块的基础设施之前 |
 | 凭证加密：密钥文件、信封加密、主密钥轮换与退役 | [internal/platform/secret/README.md](../internal/platform/secret/README.md) | 改动密钥加载、信封加密或加新的信封列之前 |
 | 出站 HTTP：地址策略、期限、代理、测试放行 | [internal/platform/egress/README.md](../internal/platform/egress/README.md) | 改动出站请求或加新的出站调用方之前 |
