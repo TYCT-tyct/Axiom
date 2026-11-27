@@ -39,7 +39,7 @@ func TestNextDue(t *testing.T) {
 // TestAStateOfTheFirstFormatIsRead: format 1 kept the plans as an object keyed by the joined group and model, and no
 // confirmed bases; it is read into this format, the plans by group and model from the groups' own models (which the
 // object repeated), each of them published, since nothing else made a plan then. This format reads back what it
-// writes, and a later one is refused.
+// writes, so does format 2, which only lacks the cost reasons, and a later one is refused.
 func TestAStateOfTheFirstFormatIsRead(t *testing.T) {
 	t.Parallel()
 	v1 := `{"Groups":[{"Ref":"a","Name":"a","Ratio":"1","Facts":"{}","Models":[{"Name":"b/c","Formats":[2],"Without":0,"Plan":"f2"},` +
@@ -65,6 +65,9 @@ func TestAStateOfTheFirstFormatIsRead(t *testing.T) {
 	again, err := decode(3, format, raw)
 	if err != nil || !maps.Equal(again.Plans, want) {
 		t.Errorf("this format read back plans %v, %v; want %v", again.Plans, err, want)
+	}
+	if two, err := decode(3, 2, raw); err != nil || !maps.Equal(two.Plans, want) {
+		t.Errorf("format 2, which has no cost reasons, read back plans %v, %v; want %v", two.Plans, err, want)
 	}
 	if _, err := decode(3, format+1, raw); err == nil {
 		t.Error("a later format was read")

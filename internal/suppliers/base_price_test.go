@@ -129,6 +129,11 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	of := func(name string, price *catalog.Schedule) BasePriceItem {
 		return BasePriceItem{Group: w.group, Name: name, Price: price}
 	}
+	seen := func(name string, price *catalog.Schedule, model catalog.ModelID) BasePriceItem {
+		it := of(name, price)
+		it.Expect = (*uuid.UUID)(&model)
+		return it
+	}
 	entered := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000004","output":"0.00001"}}`)
 	cny := mustParse(t, `{"v":1,"currency":"CNY","rates":{"input":"0.00002"}}`)
 	free := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0"}}`)
@@ -142,6 +147,9 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	}{
 		{"the official price", of("gpt", nil), nil, "gpt", official1},
 		{"an entered price replaces it", of("gpt", &entered), nil, "gpt", entered1},
+		{"for the model the person saw", seen("gpt", &entered, model), nil, "gpt", entered1},
+		{"a name mapped to another model since it was seen", seen("gpt", nil, fresh), ErrModelChanged, "gpt", entered1},
+		{"a name seen mapped that maps to none now", seen("pending", &entered, model), ErrModelChanged, "pending", ""},
 		{"a price in another currency", of("gpt", &cny), ErrBasePrice, "gpt", entered1},
 		{"a price of nothing", of("gpt", &free), ErrBasePrice, "gpt", entered1},
 		{"a model with no endpoint yet", of("fresh", nil), nil, "fresh", `{"currency":"XXX","rates":{"output":"0.000005"},"v":1}`},
@@ -174,7 +182,7 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	_, stored := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: "gpt"})
 	same(t, "a base after the clear", false, stored)
 	same(t, "a second clear", 0, len(clear()))
-	same(t, "the changes audited", "3 1", w.query(`SELECT
+	same(t, "the changes audited", "4 1", w.query(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_confirm')::text || ' ' ||
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_clear')::text`))
 

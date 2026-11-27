@@ -46,6 +46,7 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrNotSynced, http.StatusConflict, codeConflict, "a direct API or a cloud supplier is not synced: its models come from its keys"},
 	{suppliers.ErrNoInboxItem, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoModelName, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrModelChanged, http.StatusConflict, codeStaleRevision, "the name maps to another model since it was read: look again"},
 	{suppliers.ErrNameNotMapped, http.StatusUnprocessableEntity, codeUnprocessable, "the name maps to no model yet: map it first"},
 	{suppliers.ErrNoUnitValue, http.StatusConflict, codeConflict, "confirm the supplier's unit value first"},
 	{suppliers.ErrNoOfficialPrice, http.StatusUnprocessableEntity, codeUnprocessable, "a model has no official price in the settlement currency: give one"},

@@ -21,13 +21,14 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 		model     adapter.Model
 		ratio     adapter.Amount
 		confirmed []ConfirmedBase
-		basis     string // the plan's; "" for none
+		basis     string     // the plan's; "" for none
+		why       CostReason // why the cost is unknown without one
 	}{
-		{"a published price wins over a base", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, "1.5", base, "published"},
-		{"a price no schedule expresses leaves the cost unknown", adapter.Model{UpstreamName: "m1", Published: true}, "1.5", base, ""},
-		{"no price stated: the base", adapter.Model{UpstreamName: "m1"}, "1.5", base, "confirmed"},
-		{"a base past a unit price", adapter.Model{UpstreamName: "m1"}, "100000000000", base, ""},
-		{"no price and no base", adapter.Model{UpstreamName: "m1"}, "1.5", nil, ""},
+		{"a published price wins over a base", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, "1.5", base, "published", ""},
+		{"a price no schedule expresses leaves the cost unknown", adapter.Model{UpstreamName: "m1", Published: true}, "1.5", base, "", Unexpressible},
+		{"no price stated: the base", adapter.Model{UpstreamName: "m1"}, "1.5", base, "confirmed", ""},
+		{"a base past a unit price", adapter.Model{UpstreamName: "m1"}, "100000000000", base, "", OverLimit},
+		{"no price and no base", adapter.Model{UpstreamName: "m1"}, "1.5", nil, "", Unpriced},
 	} {
 		m := healthy()
 		m.offer = offerOf(c.model, c.ratio)
@@ -41,6 +42,9 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 		if basis != c.basis || len(st.plans) > 1 || st.state.Tasks[TaskCatalog].Failures != 0 {
 			t.Errorf("%s: plans %+v, catalog task %+v; want one plan of basis %q", c.name, st.plans, st.state.Tasks[TaskCatalog], c.basis)
 		}
+		if why := st.state.Groups[0].Models[0].CostReason; why != c.why {
+			t.Errorf("%s: the cost is unknown for %q, want %q", c.name, why, c.why)
+		}
 	}
 
 	// A round that reads no models keeps what the last read said: a published plan stays the plan, a base confirmed
@@ -50,11 +54,12 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 		model         adapter.Model
 		before, after []ConfirmedBase // the bases of the round that reads the models, and of the one that does not
 		basis         string          // the plan's after the second round; "" for none
+		why           CostReason      // why the cost is unknown after it
 	}{
-		{"a published plan is kept", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, base, nil, "published"},
-		{"a published plan is kept over a base confirmed later", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, nil, base, "published"},
-		{"a published price no schedule expresses stays unknown", adapter.Model{UpstreamName: "m1", Published: true}, nil, base, ""},
-		{"a plan made of a cleared base is not kept", adapter.Model{UpstreamName: "m1"}, base, nil, ""},
+		{"a published plan is kept", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, base, nil, "published", ""},
+		{"a published plan is kept over a base confirmed later", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, nil, base, "published", ""},
+		{"a published price no schedule expresses stays unknown", adapter.Model{UpstreamName: "m1", Published: true}, nil, base, "", Unexpressible},
+		{"a plan made of a cleared base is not kept", adapter.Model{UpstreamName: "m1"}, base, nil, "", Unpriced},
 	} {
 		m := healthy()
 		m.offer = offerOf(c.model, "1.5")
@@ -73,8 +78,8 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 				basis = p.Basis
 			}
 		}
-		if basis != c.basis {
-			t.Errorf("%s: the plan after a round that read no models is %q, want %q", c.name, basis, c.basis)
+		if why := st.state.Groups[0].Models[0].CostReason; basis != c.basis || why != c.why {
+			t.Errorf("%s: the plan after a round that read no models is %q, unknown for %q; want %q, %q", c.name, basis, why, c.basis, c.why)
 		}
 	}
 }

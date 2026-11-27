@@ -43,7 +43,7 @@ SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_un
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
 -- name: ListEndpointsOf :many
-SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, cost_state_reason, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
 
 -- name: ModelNamesOf :many

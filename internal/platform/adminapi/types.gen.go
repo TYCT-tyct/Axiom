@@ -2749,6 +2749,30 @@ func (e SupplierNativeUnit) Valid() bool {
 	}
 }
 
+// Defines values for SupplierCostReason.
+const (
+	SupplierCostReasonOverLimit      SupplierCostReason = "over_limit"
+	SupplierCostReasonUnderEstimated SupplierCostReason = "under_estimated"
+	SupplierCostReasonUnexpressible  SupplierCostReason = "unexpressible"
+	SupplierCostReasonUnpriced       SupplierCostReason = "unpriced"
+)
+
+// Valid indicates whether the value is a known member of the SupplierCostReason enum.
+func (e SupplierCostReason) Valid() bool {
+	switch e {
+	case SupplierCostReasonOverLimit:
+		return true
+	case SupplierCostReasonUnderEstimated:
+		return true
+	case SupplierCostReasonUnexpressible:
+		return true
+	case SupplierCostReasonUnpriced:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupplierCredentialKeySource.
 const (
 	Bound  SupplierCredentialKeySource = "bound"
@@ -3858,6 +3882,9 @@ type BasePriceConfirmation struct {
 	Items []struct {
 		// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 		GroupId Uuid `json:"group_id"`
+
+		// ModelId The catalog model the person saw the name map to. When the name maps to another model now, or to none, the change is refused with 409 `stale_revision`; absent checks nothing.
+		ModelId *Uuid `json:"model_id,omitempty"`
 
 		// Price The base in the settlement currency, per unit of each item; absent takes the model's official price.
 		Price        *PriceSchedule `json:"price,omitempty"`
@@ -8101,6 +8128,9 @@ type SupplierCostRatioUpdate struct {
 	Reason Reason `json:"reason"`
 }
 
+// SupplierCostReason Why the cost is unknown, as the sync's last catalog round decided it; absent when the cost is known or nothing says. `unpriced`: the supplier publishes no price for the model and no base is confirmed for the model the name maps to, the one case `confirmSupplierBasePrices` can price; `unexpressible`: it publishes a price the price table cannot express (per call, an expression), which a base never replaces; `over_limit`: a confirmed base times the group's ratio is beyond the unit price limit; `under_estimated`: reconciliation found the supplier charging more than the plan estimated and took the endpoint down until its price changes.
+type SupplierCostReason string
+
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
 	Kind string `json:"kind"`
@@ -8191,9 +8221,11 @@ type SupplierDetail struct {
 
 // SupplierEndpoint One model in one of the supplier's groups, as the sync projected it: what testSupplierEndpoint is given. Only an enabled endpoint whose cost is `known` can be called, and so tested.
 type SupplierEndpoint struct {
-	CostState SupplierEndpointCostState `json:"cost_state"`
-	Enabled   bool                      `json:"enabled"`
-	Formats   []ModelFormat             `json:"formats"`
+	// CostReason Why the cost is unknown, as the sync's last catalog round decided it; absent when the cost is known or nothing says. `unpriced`: the supplier publishes no price for the model and no base is confirmed for the model the name maps to, the one case `confirmSupplierBasePrices` can price; `unexpressible`: it publishes a price the price table cannot express (per call, an expression), which a base never replaces; `over_limit`: a confirmed base times the group's ratio is beyond the unit price limit; `under_estimated`: reconciliation found the supplier charging more than the plan estimated and took the endpoint down until its price changes.
+	CostReason *SupplierCostReason       `json:"cost_reason,omitempty"`
+	CostState  SupplierEndpointCostState `json:"cost_state"`
+	Enabled    bool                      `json:"enabled"`
+	Formats    []ModelFormat             `json:"formats"`
 
 	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	GroupId Uuid `json:"group_id"`
@@ -8438,6 +8470,9 @@ type SupplierMode string
 
 // SupplierModel defines model for SupplierModel.
 type SupplierModel struct {
+	// CostReason `listed`: why the name's cost is unknown, with or without an endpoint; absent in the other piles.
+	CostReason *SupplierCostReason `json:"cost_reason,omitempty"`
+
 	// EndpointId The endpoint made for the name, when there is one.
 	EndpointId *Uuid `json:"endpoint_id,omitempty"`
 

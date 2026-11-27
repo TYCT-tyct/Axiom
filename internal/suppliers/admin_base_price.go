@@ -32,6 +32,9 @@ var (
 	// ErrNameNotMapped is an upstream name that maps to no model yet: a base prices a model, so the name is mapped
 	// first.
 	ErrNameNotMapped = errors.New("suppliers: the name maps to no model yet; map it first")
+	// ErrModelChanged is an upstream name that maps to another model than the one the person confirmed it for: the
+	// mapping changed since it was read, and the base would price a model nobody looked at.
+	ErrModelChanged = errors.New("suppliers: the name maps to another model since it was read")
 	// ErrNoUnitValue is a supplier whose unit value is not confirmed, which a base price is converted with.
 	ErrNoUnitValue = errors.New("suppliers: confirm the supplier's unit value first")
 	// ErrNoOfficialPrice is a model given no price that has no official price in the settlement currency to default to.
@@ -40,6 +43,44 @@ var (
 	// supplier's own unit.
 	ErrBasePrice = errors.New("suppliers: a base price is in the settlement currency, charges something, and stays within a unit price in the supplier's unit")
 )
+
+// CostReason is why the cost of a model of a group is unknown, which says whether a base can price it: only an
+// Unpriced one.
+type CostReason string
+
+// The reasons. The first three are the sync's (syncer.CostReason); UnderEstimated is reconciliation's.
+const (
+	// Unpriced is a model the supplier publishes no price for, and no base is confirmed for the model its name maps to.
+	Unpriced CostReason = CostReason(syncer.Unpriced)
+	// Unexpressible is a model the supplier publishes a price for that the price table cannot express.
+	Unexpressible CostReason = CostReason(syncer.Unexpressible)
+	// OverLimit is a confirmed base the group's ratio takes past the unit price limit.
+	OverLimit CostReason = CostReason(syncer.OverLimit)
+	// UnderEstimated is an endpoint reconciliation took down: the supplier charged more than its plan estimated.
+	UnderEstimated CostReason = "under_estimated"
+)
+
+// costReasons tells why the costs of a supplier's models are unknown, from the sync's state and the endpoints' rows.
+type costReasons struct {
+	costs persist.Costs
+}
+
+func readCostReasons(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (costReasons, error) {
+	costs, err := persist.ReadCosts(ctx, tx, supplier)
+	return costReasons{costs: costs}, err
+}
+
+// of is why the cost of the name in the group, for the model it maps to, is unknown; "" when it is not. state and
+// stored are its endpoint's cost state and the reason the row keeps, nil without an endpoint.
+func (r costReasons) of(groupRef, name string, model uuid.UUID, state, stored *string) CostReason {
+	switch {
+	case state != nil && *state != "unknown":
+		return ""
+	case stored != nil && *stored == string(UnderEstimated):
+		return UnderEstimated
+	}
+	return CostReason(r.costs.Reason(groupRef, name, model))
+}
 
 // MaxBasePrices is the most models one change names.
 const MaxBasePrices = 500
@@ -50,10 +91,12 @@ type BaseModel struct {
 	Name  string
 }
 
-// BasePriceItem is one model to confirm. Price nil takes the model's official price in the catalog.
+// BasePriceItem is one model to confirm. Price nil takes the model's official price in the catalog. Expect is the
+// catalog model the person saw the name map to, nil when they did not say: a name that maps to another now is refused.
 type BasePriceItem struct {
 	BaseModel
-	Price *catalog.Schedule
+	Price  *catalog.Schedule
+	Expect *uuid.UUID
 }
 
 // BasePrice is a model's confirmed base, in the supplier's own unit: what the group's ratio scales.
@@ -179,6 +222,9 @@ func (a *Admin) afterBases(ctx context.Context, tx pg.Tx, actor audit.Actor, sup
 // baseOf is the base of one item in the supplier's own unit, and where its price came from: the item's, or the official
 // price of the model its name maps to.
 func baseOf(it BasePriceItem, n store.ModelNamesOfRow, currency string, perUnit *big.Rat, official OfficialPrices) (catalog.Schedule, string, error) {
+	if it.Expect != nil && (n.ModelID == nil || *n.ModelID != *it.Expect) {
+		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrModelChanged, it.Name)
+	}
 	if n.ModelID == nil {
 		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrNameNotMapped, it.Name)
 	}

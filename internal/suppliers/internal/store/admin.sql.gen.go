@@ -522,7 +522,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 }
 
 const listEndpointsOf = `-- name: ListEndpointsOf :many
-SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, cost_state_reason, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = $1 ORDER BY upstream_name, id
 `
 
@@ -533,6 +533,7 @@ type ListEndpointsOfRow struct {
 	UpstreamName    string
 	Formats         []string
 	CostState       string
+	CostStateReason *string
 	Enabled         bool
 	Quantization    *string
 }
@@ -553,6 +554,7 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 			&i.UpstreamName,
 			&i.Formats,
 			&i.CostState,
+			&i.CostStateReason,
 			&i.Enabled,
 			&i.Quantization,
 		); err != nil {
