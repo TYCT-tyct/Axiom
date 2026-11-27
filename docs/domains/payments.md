@@ -30,7 +30,7 @@
 - **卡号不经过我们**：信用卡只在 Stripe 托管页面输入。
 - **出站请求**一律经平台出站客户端（[平台的「出站 HTTP」](../../internal/platform/README.md#出站-http)），每次最多 10 秒、响应体最多 1 MiB；日志、链路和错误里只记主机和路径，不记查询串和表单（易支付的密钥在查询串里），也不回显网关正文。
 - **错误分类**：只有渠道明确拒绝或确定未发送才是失败；超时、断连、5xx、HTML、验签失败和解析不了的应答都是"结果未知"，不得据此把订单或退款改成失败。
-- **后台"测试"**：对已保存的商户做一次认证的只读查询（查一个随机不存在的订单号，或易支付的 `act=query`），返回 accepted/failed/unsupported，不建单、不转钱、不返回渠道正文。
+- **后台"测试"**：对已保存的商户做一次认证的只读查询（查一个随机不存在的订单号，易支付的 `act=query`，Stripe 读余额），返回 accepted/failed/unsupported，不建单、不转钱、不返回渠道正文。
 
 #### 支付宝官方插件
 
@@ -40,14 +40,14 @@
 - **签名**：排除 `sign`（回调另排除 `sign_type`）和空值，按键名 ASCII 升序以 `k=v&` 拼接；回调 `sign_type` 必须是 `RSA2`。JSON 应答的签名针对 `alipay_<method>_response` 节点的原文字节，先取原文验签再解析；无签名的 `error_response` 是结果未知。轮换期间新旧支付宝公钥都验，请求只用当前私钥。
 - **回调**：POST 表单；`app_id` 必须等于配置，配了 `seller_id` 也必须一致；`notify_type` 为空或 `trade_status_sync` 才是支付事件，其他回成功不入账。
 - **查单** `alipay.trade.query`：`TRADE_SUCCESS`、`TRADE_FINISHED` 已支付，`TRADE_CLOSED` 已关闭，`WAIT_BUYER_PAY` 和签名的 `ACQ.TRADE_NOT_EXIST` 待支付，回显的 `out_trade_no` 必须一致。**关单** `alipay.trade.close`：`ACQ.TRADE_NOT_EXIST` 当作已关。
-- **退款** `alipay.trade.refund`：`out_request_no` 是退款 ID，所以声明认退款单号；`fund_change=Y` 成功、`N` 待查，成功必须带与本次金额相同的 `refund_fee`，`refund_reason` 截到 256 字。`ACQ.TRADE_NOT_EXIST`、`ACQ.TRADE_STATUS_ERROR`、`ACQ.REFUND_AMT_NOT_EQUAL_TOTAL`、`ACQ.TRADE_HAS_FINISHED` 是确定没退，其他业务错误是结果未知。**查退款** `alipay.trade.fastpay.refund.query`：`REFUND_SUCCESS` 且 `refund_amount` 一致为成功；`ACQ.TRADE_NOT_EXIST` 失败；没有记录且距发送（`RefundCall.SentAt`）满 10 分钟为失败，否则待确认。
+- **退款** `alipay.trade.refund`：`out_request_no` 是退款 ID，所以声明认退款单号；`fund_change=Y` 成功、`N` 待查，成功时 `refund_fee` 是该笔交易的累计退款，必须等于此前成功的退款加本次，`refund_reason` 截到 256 字。`ACQ.TRADE_NOT_EXIST`、`ACQ.TRADE_STATUS_ERROR`、`ACQ.REFUND_AMT_NOT_EQUAL_TOTAL`、`ACQ.TRADE_HAS_FINISHED` 是确定没退，其他业务错误是结果未知。**查退款** `alipay.trade.fastpay.refund.query`：`REFUND_SUCCESS` 且 `refund_amount` 一致为成功；`ACQ.TRADE_NOT_EXIST` 失败；没有记录且距发送（`RefundCall.SentAt`）满 10 分钟为失败，否则待确认。
 - **商户测试**：只有签名的 `ACQ.TRADE_NOT_EXIST` 算通过。保存只做本地校验，不做网络探测。
 
 #### 易支付协议插件
 
 易支付没有统一标准，插件只实现协议，各分支的差异做成商户账户的配置和预设（通用、`epusdt`、`ezpay`），不新增渠道种类。配置字段见[模块 README 的「易支付配置与边界」](../../internal/payments/README.md#易支付配置与边界)。
 
-- **网关地址**只接受 HTTPS，保存时去掉 `submit.php`、`mapi.php`、`api.php` 后缀。**付款币种**只来自商户配置（通用易支付的查单不带币种），配错会让每笔入账差一个汇率。
+- **网关地址**只接受 HTTPS，保存时去掉 `submit.php`、`mapi.php`、`api.php` 后缀。**付款币种**只来自商户配置（查单不带币种）；通用协议按人民币收款，保存时拒绝其他币种，预设的币种见下。
 - **下单方式**：跳转（`submit.php`，本地签名拼 URL）或接口（`mapi.php`，返回支付链接或二维码）；付款方式映射到网关的 `type`，通道号 `cid` 可按付款方式设置。
 - **签名**：只有 MD5。用参数到达时的值、不重新编码：非空参数按键名排序、`k=v&` 拼接、末尾接密钥、取小写十六进制，常量时间比较。
 - **回调参数白名单**：只接受 `pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，多出的参数、重复字段一律拒绝，除商品名外值含 `&` 或 `=` 也拒绝：签名串不转义，下单参数里嵌着的 `trade_status=TRADE_SUCCESS` 能被重放成伪造的到账通知。验签后 `pid` 必须等于商户号。GET 只读查询串，POST 只读表单并拒绝非空查询串。
@@ -62,7 +62,7 @@
 
 #### 微信支付官方插件
 
-API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用商户 API 证书私钥做 SHA256withRSA，应答和回调用平台证书或微信支付公钥验签，回调正文用 APIv3 密钥做 AES-256-GCM 解密；只用标准库。付款币种必须是 CNY。配置见[模块 README 的「微信支付配置与边界」](../../internal/payments/README.md#微信支付配置与边界)。
+API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用商户 API 证书私钥做 SHA256withRSA（配了公钥 ID 时带 `Wechatpay-Serial` 请微信用公钥签应答），应答和回调用平台证书或微信支付公钥验签，回调正文用 APIv3 密钥做 AES-256-GCM 解密；只用标准库。付款币种必须是 CNY。配置见[模块 README 的「微信支付配置与边界」](../../internal/payments/README.md#微信支付配置与边界)。
 
 - **下单**：`upstream` 选 `native`（返回 `weixin://` 的 `code_url`，页面画二维码）或 `h5`（带服务端解析的客户端 IP 和 `h5_info.type = Wap`，返回的 `h5_url` 追加 URL 编码的返回地址）。`description` 截到 127 字，金额是整数分。不做 JSAPI（控制台没有 openid），不按设备猜产品。签名的 4xx（429 除外）是明确拒绝；429、5xx、超时和验签失败是结果未知。
 - **验签**：请求签名串是 `方法\nURL\n时间戳\n随机串\n正文\n`；应答（含错误体）和回调先按 `Wechatpay-Serial` 选公钥验 `时间戳\n随机串\n正文\n`，再解析；204 无正文不验；未配置的序列号、缺头、坏签名都是结果未知。证书模式和公钥模式都支持，轮换期间新旧各留一份。
@@ -73,15 +73,15 @@ API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用�
 
 #### Stripe 插件
 
-只接 Checkout 托管页面（`mode=payment`）：不用 Payment Element 或 `client_secret`，不保存客户的姓名、邮箱和地址，不创建 Stripe 客户对象；3D 验证和 Radar 在 Stripe 后台开启。配置见[模块 README 的「Stripe 配置与边界」](../../internal/payments/README.md#stripe-配置与边界)。保存时调余额接口做一次只读探测（受限密钥要授予 checkout session、refund 的读写和 `balance_read`）；webhook 密钥对不对要到第一条回调才知道，验签失败会记日志并告警。
+只接 Checkout 托管页面（`mode=payment`）：不用 Payment Element 或 `client_secret`，不保存客户的姓名、邮箱和地址，不创建 Stripe 客户对象；3D 验证和 Radar 在 Stripe 后台开启。配置见[模块 README 的「Stripe 配置与边界」](../../internal/payments/README.md#stripe-配置与边界)。保存和后台测试都调余额接口做一次只读探测（受限密钥要授予 checkout session、refund 的读写和 `balance_read`）；webhook 密钥对不对要到第一条回调才知道，验签失败会记日志并告警。
 
 - **回调地址由管理员在 Stripe 后台登记**：`https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，Stripe 的端点不能按 Session 指定，下单时的 `NotifyURL` 不用。订阅 `checkout.session.completed`、`async_payment_succeeded`、`async_payment_failed`、`expired` 和 `charge.dispute.created`、`closed`、`funds_withdrawn`、`funds_reinstated`（订阅 `*` 也可以）。
-- **下单**：一个订单行，内联 `price_data`，金额是订单总额（最小单位），币种小写，`quantity=1`；`client_reference_id` 和 `metadata.order` 写订单 ID，`metadata.merchant` 写商户账户 ID，`payment_intent_data.metadata` 也写这两项。`success_url`、`cancel_url` 都是服务端生成的返回地址。付款方式取 `upstream`（`card`、`alipay`、`wechat_pay`、`link`，保存时校验，空为 `card`；`wechat_pay` 另设 `client=web`）。幂等键 `cs_<订单 ID>`。`expires_at` 夹在 Stripe 的 30 分钟到 24 小时减一分钟之间，订单自己的有效期仍按本地执行，Session 比订单晚关时过期后付的款走「过期后才到账」。4xx 是确定拒绝，其余错误是结果未知；SDK 不重试。
+- **下单**：一个订单行，内联 `price_data`，金额是订单总额，按 Stripe 的币种规则换算（ISK、UGX 在 Stripe 是两位小数，乘 100；三位小数币种保存时拒绝），币种小写，`quantity=1`；`client_reference_id` 和 `metadata.order` 写订单 ID，`metadata.merchant` 写商户账户 ID，`payment_intent_data.metadata` 也写这两项。`success_url`、`cancel_url` 都是服务端生成的返回地址。付款方式取 `upstream`（`card`、`alipay`、`wechat_pay`、`link`，保存时校验，空为 `card`；`wechat_pay` 另设 `client=web`，`link` 同时列 `card`）。幂等键 `cs_<订单 ID>`。`expires_at` 夹在 Stripe 的 30 分钟到 24 小时减一分钟之间，订单自己的有效期仍按本地执行，Session 比订单晚关时过期后付的款走「过期后才到账」。4xx 是确定拒绝，其余错误是结果未知；SDK 不重试。
 - **回调验签**用官方 SDK（`IgnoreAPIVersionMismatch`，容差 300 秒），当前 `webhook_secret` 不过再试 `old_webhook_secret`；失败回 400、不写库。不认识的事件和与订单无关的事件回 200。
 
 | 事件 | 处理 |
 |---|---|
-| `completed` 且 `status=complete`、`payment_status=paid`；`async_payment_succeeded` | 付款成功：订单取 `client_reference_id`（缺失取 `metadata.order`），交易号是 PaymentIntent ID，金额取 `amount_total`/`currency` |
+| `completed` 且 `status=complete`、`payment_status=paid`；`async_payment_succeeded` | 付款成功：订单取 `client_reference_id`（缺失取 `metadata.order`），Session 不是该订单下单时保存的就转待处理，交易号是 PaymentIntent ID，金额取 `amount_total`/`currency` |
 | `completed` 但未付 | 不相关，等异步结果 |
 | `async_payment_failed`、`expired` | 只记订单事件，不改状态；晚到的成功仍能入账 |
 | `charge.dispute.*` | 拒付，见下 |
@@ -245,6 +245,22 @@ API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用�
 - **渠道账单**：渠道账单下载和逐笔比对（含渠道实际手续费）还没有实现，渠道接口里也没有对账单能力；见「待定问题」。在那之前只有上面的逐单日对账。
 - **待处理记录**（`api/admin.yaml` 的 Payments）：金额不符、多笔或重复付款、有付款没订单、网关订单号冲突、拒付不符或有在途退款、对账差额、长期未知的退款都进同一张表。后台可按状态分页、读详情，并附理由标记已调查；这只关闭调查记录，不改订单、余额或退款，资金结论走「退款」的人工结论。同一事实按商户、类别和内容指纹去重，已调查的重复报告不另建行；数值变了形成新记录。
 
+### 沙箱实测
+
+`just payments-sandbox [stripe|alipay]` 在沙箱里走一遍下单 → 人在浏览器付款 → 回调 → 入账 → 退款，核对只入账一次、重放不再入账、退款成功。缺凭证的跳过并列出变量，拒绝 Stripe 正式密钥。
+
+| 变量 | 用途 |
+|---|---|
+| `AXIOM_SANDBOX_STRIPE_SECRET_KEY` | Stripe 测试模式密钥（`sk_test_` 或 `rk_test_`） |
+| `AXIOM_SANDBOX_STRIPE_WEBHOOK_SECRET` | `stripe listen --print-secret` 打出的签名密钥；不设时只能由查单入账 |
+| `AXIOM_SANDBOX_ALIPAY_APP_ID`、`_PRIVATE_KEY_FILE`、`_PUBLIC_KEY_FILE` | 开放平台沙箱应用的 APPID、应用私钥文件、支付宝公钥文件 |
+| `AXIOM_SANDBOX_LISTEN` | 本机回调监听地址，默认 `127.0.0.1:8787` |
+| `AXIOM_SANDBOX_PUBLIC_URL` | 转发到监听地址的 HTTPS 隧道；支付宝的回调只能经它到达，不设时由查单入账 |
+| `AXIOM_SANDBOX_WAIT` | 等待付款的时长，默认 `10m` |
+
+- **Stripe**：导出前两个变量后运行，按输出在另一个终端执行 `stripe listen --forward-to …`，再用测试卡 4242 4242 4242 4242 付款。
+- **支付宝**：在开放平台沙箱取 APPID 和密钥，需要验证回调时开一条 HTTPS 隧道并设 `AXIOM_SANDBOX_PUBLIC_URL`；运行后用沙箱买家账号登录收银台付款。
+
 ### 后台配置
 
 全部是站点数据，默认值写在代码里，库里只存与默认不同的取值：
@@ -287,6 +303,7 @@ API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用�
 
 | 决策 | 理由 |
 |---|---|
+| 沙箱实测是手动运行的命令，付款由人完成，不进 `check` | Stripe 托管页和支付宝沙箱收银台都要在浏览器里付款，没有接口能代付；自动化只能伪造付款这一步，等于没测 |
 | 渠道全部做成编译进程序的插件，一个 `Channel` 接口加 `Caps` 能力集合 | 能开哪些渠道取决于主体情况，插件化后不改代码；易支付的能力取决于具体网关，是配置而不是插件种类 |
 | 易支付是一个通用协议插件，分支差异（含 Epusdt、EzPay）是配置和预设 | 不绑定某一家，接新网关不改代码，复用已验证的验签、白名单和补单路径 |
 | 金额一律是整数最小单位，总额按精确分数只取整一次，比较用相等 | 浮点加容差只是在掩盖误差，容差内的少付会被当作付清 |

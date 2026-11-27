@@ -156,6 +156,12 @@ payments-test:
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 10m ./cmd/axiom -run 'TestTopUp|TestPaymentMethods|TestReplay|TestOrder|TestIPLimitsOnOrders|TestReturn|TestARefusal|TestRefusal|TestContractRules'
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/accounts -run 'TestOrigin|TestAuthorizedScope'
 
+# One real order → pay → notify → credit → refund cycle against Stripe test mode and the Alipay sandbox
+# (docs/domains/payments.md「沙箱实测」). It is not part of `check`: a person pays in the browser. Credentials come from
+# AXIOM_SANDBOX_* variables; a provider without them is skipped with the names it needs, and live keys are refused.
+payments-sandbox provider="":
+    go run ./internal/platform/pgtest/cmd/withcluster go test -tags sandbox -count=1 -timeout 45m -run '^TestSandbox$/{{ provider }}' -v ./internal/payments
+
 # Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
 # instead, which compares allocations without -race. A pull request runs neither.
 bench-once: web-embed

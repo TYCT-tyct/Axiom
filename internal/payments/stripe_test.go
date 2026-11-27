@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -175,8 +176,13 @@ func TestStripeQueryCloseAndProbe(t *testing.T) {
 	if err := c.Close(t.Context(), OrderID(uuid.NewV7()), "cs_expired"); err != nil {
 		t.Fatalf("closing an expired session = %v", err)
 	}
-	if err := c.probe(t.Context()); err != nil || !probed {
-		t.Fatalf("probe = %v, probed=%t", err, probed)
+	// The admin's merchant test runs the same authenticated, read-only balance query as saving.
+	tester, ok := Channel(c).(interface{ testConfig(context.Context) error })
+	if !ok {
+		t.Fatal("the admin cannot test a Stripe merchant")
+	}
+	if err := tester.testConfig(t.Context()); err != nil || !probed {
+		t.Fatalf("test = %v, probed=%t", err, probed)
 	}
 	if err := c.Close(t.Context(), OrderID(uuid.NewV7()), ""); err == nil {
 		t.Fatal("close without a session succeeded")
@@ -272,5 +278,98 @@ func TestStripeRefundStatus(t *testing.T) {
 		if got, err := stripeRefund(&refund); err != nil || got.State != want {
 			t.Errorf("%s = %+v, %v; want %v", status, got, err, want)
 		}
+	}
+}
+
+// TestStripeCurrencyUnits follows Stripe's currency rules (docs.stripe.com/currencies): ISK and UGX are zero-decimal
+// here but two-decimal at Stripe, in both directions; three-decimal currencies, whose amounts Stripe rounds to tens,
+// cannot be configured.
+func TestStripeCurrencyUnits(t *testing.T) {
+	for _, tc := range []struct {
+		code             string
+		minor            int64
+		stripe           string
+		reported, wantIn int64
+	}{
+		{"USD", 1234, "1234", 1234, 1234},
+		{"JPY", 500, "500", 500, 500},
+		{"ISK", 5, "500", 500, 5},
+		{"UGX", 5, "500", 500, 5},
+		{"ISK", 5, "500", 550, -1}, // a fraction of a króna is not an amount this order can have
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			var form url.Values
+			c, _ := stripeTestServer(t, stripeUnitsAPI(t, &form, tc.reported, tc.code))
+			c.currency = currency(t, tc.code)
+			if _, err := c.Create(t.Context(), CreateRequest{
+				Order: OrderID(uuid.NewV7()), Merchant: MerchantID(uuid.NewV7()), Upstream: "card",
+				Total: Money{Currency: c.currency, Minor: tc.minor}, Subject: "Top-up",
+				ReturnURL: "https://console.example.com/pay/return", ExpiresAt: time.Now().Add(time.Hour),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := form.Get("line_items[0][price_data][unit_amount]"); got != tc.stripe {
+				t.Fatalf("unit_amount = %s, want %s", got, tc.stripe)
+			}
+			p, err := c.Query(t.Context(), "ord_1", "pi_1")
+			if err != nil || p.Paid.Minor != tc.wantIn {
+				t.Fatalf("query = %+v %v, want %d minor units", p, err, tc.wantIn)
+			}
+		})
+	}
+}
+
+func stripeUnitsAPI(t *testing.T, form *url.Values, reported int64, code string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/payment_intents/") {
+			writeStripeJSON(t, w, map[string]any{
+				"id": "pi_1", "object": "payment_intent", "status": "succeeded",
+				"amount": reported, "currency": strings.ToLower(code),
+			})
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		*form = r.PostForm
+		session := stripeSession("cs_1", "open", "unpaid")
+		session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
+		writeStripeJSON(t, w, session)
+	}
+}
+
+func TestStripeRefusesThreeDecimalCurrencies(t *testing.T) {
+	for _, code := range []string{"KWD", "BHD"} {
+		cfg := MerchantConfig{
+			Currency: currency(t, code), Settings: []byte("{}"), Client: egress.NewDirect(),
+			Secrets: map[string]secret.Secret{"secret_key": secret.New("sk_test_1"), "webhook_secret": secret.New("whsec_1")},
+		}
+		if _, err := (Stripe{}).Open(cfg); err == nil {
+			t.Fatalf("a %s merchant was accepted", code)
+		}
+	}
+}
+
+// TestStripeLinkListsCard: Stripe requires card beside link when the payment methods are listed by hand.
+func TestStripeLinkListsCard(t *testing.T) {
+	var form url.Values
+	c, _ := stripeTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		form = r.PostForm
+		session := stripeSession("cs_1", "open", "unpaid")
+		session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
+		writeStripeJSON(t, w, session)
+	})
+	if _, err := c.Create(t.Context(), CreateRequest{
+		Order: OrderID(uuid.NewV7()), Merchant: MerchantID(uuid.NewV7()), Upstream: "link",
+		Total: Money{Currency: c.currency, Minor: 1234}, Subject: "Top-up",
+		ReturnURL: "https://console.example.com/pay/return", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := form["payment_method_types[0]"]; len(got) != 1 || got[0] != "link" || form.Get("payment_method_types[1]") != "card" {
+		t.Fatalf("payment methods %v %v", form["payment_method_types[0]"], form["payment_method_types[1]"])
 	}
 }

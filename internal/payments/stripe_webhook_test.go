@@ -388,3 +388,21 @@ func TestStripeWebhookDisputeSuspendsTheAccount(t *testing.T) {
 		t.Fatalf("suspension calls = %+v, want one for the disputed account", calls)
 	}
 }
+
+// TestStripeCreditsOnlyItsOwnCheckoutSession: a paid session in the same Stripe account that names a local order by
+// client_reference_id (a Payment Link takes it from the URL) is not that order's checkout; it goes to review, uncredited.
+func TestStripeCreditsOnlyItsOwnCheckoutSession(t *testing.T) {
+	p := replayStripe(t)
+	o := p.place(t, "stripe-foreign-session")
+	p.pay(o, o.Total.Minor)
+	payload := stripeEvent(t, map[string]any{
+		"id": "cs_payment_link", "object": "checkout.session", "status": "complete", "payment_status": "paid",
+		"amount_total": o.Total.Minor, "currency": "usd", "payment_intent": "pi_" + o.ID.TypeID(),
+		"client_reference_id": o.ID.TypeID(),
+	}, "checkout.session.completed")
+	p.expectAck(t, stripeSigned(t, payload, stripeTestWebhookSecret))
+	p.w.assertCredit(o, 0)
+	if state, _, _ := p.w.stored(o.ID); state != string(Review) {
+		t.Fatalf("a foreign session left the order %s", state)
+	}
+}
