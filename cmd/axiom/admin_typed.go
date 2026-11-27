@@ -44,6 +44,9 @@ func supplierTypeBody(t suppliers.TypeView) adminapi.SupplierType {
 	}
 	for i, e := range t.Entries {
 		out.Entries[i] = adminapi.SupplierTypeEntry{Id: e.ID, Origin: e.Origin, Currency: e.Currency}
+		if e.Account != "" {
+			out.Entries[i].Account = &e.Account
+		}
 		if t.Models != nil {
 			out.Entries[i].Models = &t.Models[i]
 		}

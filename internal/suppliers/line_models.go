@@ -33,16 +33,21 @@ type lineOffer struct {
 	serves   []string
 }
 
-// prices says the catalog's reference price of m is the line's own.
-func (o lineOffer) prices(m catalog.Model) bool {
-	return slices.Contains(o.serves, m.Author)
+// price is the line's own price of m in the currency: the catalog's reference price, for a model of an author the type
+// serves, unless the price came from OpenRouter's dataset. That one is an aggregator's selling price (for an open-weight
+// model a third-party provider's, often far below the author's own), and pricing the author's own API from it would
+// understate the line's cost; such an endpoint's cost is unknown instead. The author's page, LiteLLM's compilation of
+// vendors' list prices and a person's confirmed figure are the author's price.
+func (o lineOffer) price(snap *catalog.Snapshot, m catalog.Model, currency string) (catalog.ReferencePrice, bool) {
+	ref, ok := snap.ReferencePrice(m.ID, currency)
+	return ref, ok && ref.Source != catalog.SourceOpenRouter && slices.Contains(o.serves, m.Author)
 }
 
 // offer is what the passed keys list.
 func (p *DirectPlan) offer() lineOffer {
 	return lineOffer{
 		names: p.names(), formats: func(m catalog.Model, name string) []protocol.Format { return p.direct.Formats(p.family, m, name) },
-		unmapped: familyFormats(p.family), serves: p.direct.Type().Serves,
+		unmapped: familyFormats(p.family), serves: p.direct.Type().ServesAt(p.origin, p.r.Currency.String()),
 	}
 }
 
@@ -74,7 +79,8 @@ func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group
 	for _, model := range slices.SortedFunc(maps.Keys(endpoints), func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }) {
 		name := endpoints[model]
 		m, _ := snap.Model(model) // mapLineName mapped the name to a model of the snapshot
-		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats, o.prices(m), ratio)
+		ref, has := o.price(snap, m, currency.String())
+		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, model, name, rows[name].Formats, ref, has, ratio)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -103,18 +109,17 @@ func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.Up
 	return m, true
 }
 
-// insertDirectEndpoint makes one endpoint and, when the catalog's official price in the currency is the line's own price
-// (priced) and the catalog has one, its cost schedule at the line's ratio; it reports whether it priced it. An endpoint
-// left unpriced has an unknown cost and is not routed.
-func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, model catalog.ModelID, name string, formats []string, priced bool, ratio *big.Rat) (bool, error) {
+// insertDirectEndpoint makes one endpoint and, when the line has its own price of the model (priced, lineOffer.price),
+// its cost schedule of ref at the line's ratio; it reports whether it priced it. An endpoint left unpriced has an
+// unknown cost and is not routed.
+func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, model catalog.ModelID, name string, formats []string, ref catalog.ReferencePrice, priced bool, ratio *big.Rat) (bool, error) {
 	endpoint, err := q.InsertEndpoint(ctx, tx, store.InsertEndpointParams{
 		SupplierID: id, SupplierGroupID: group, ModelID: uuid.UUID(model), UpstreamName: name, Formats: formats,
 	})
 	if err != nil {
 		return false, fmt.Errorf("make the endpoint for %s: %w", name, err)
 	}
-	ref, ok := snap.ReferencePrice(model, currency.String())
-	if !ok || !priced {
+	if !priced {
 		return false, nil
 	}
 	if err := priceEndpoint(ctx, tx, q, id, endpoint, ref, ratio); err != nil {

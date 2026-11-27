@@ -118,6 +118,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 移除后库里没有密文，做过的尝试仍能结算 | `Admin.Remove` 一个事务；`erased` 的 CHECK |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译；描述不合法不启动 | `CheckAdapters`；`just adapters-removable` 逐行；`registry.New` 核对描述 |
 | 平台直连和云线路成本 = 价 × 线路倍率，与倍率同成同败 | 定价与倍率同一事务、锁里读倍率 |
+| 直连和云线路不按 OpenRouter 数据集的参考价定价，这样的端点成本未知 | `lineOffer.price` 一处判定；`TestALineIsNotPricedFromAnAggregatorsPrice` |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 | 价目行即收费；确认价 = 基础价 × 倍率 | `TestEndpointCostIsWhatAnAttemptIsCharged`、`TestConfirmedBaseIsWhatACallIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |
