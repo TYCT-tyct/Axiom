@@ -29,7 +29,8 @@ type PricePolicy struct {
 // Publication keeps a proposal separately from its current immutable sale version. Empty schedules mean unavailable.
 type Publication struct {
 	matched   bool
-	target    Selector        // the target of the rule the price came from; for a scaled default, the default's
+	target    Selector        // the target of the rule the price came from; for a scaled price, its base's
+	scaled    bool            // a default multiplier of a published price for all accounts, which publishes as it moves
 	Audience  Selector        `json:"audience,omitzero"`
 	Model     catalog.ModelID `json:"model_id"`
 	Candidate uuid.UUID       `json:"candidate_id"`
