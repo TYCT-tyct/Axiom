@@ -19,15 +19,17 @@ import (
 // where Chat counts both in the totals and the thinking again as a detail; both break the counts down by modality, in
 // lists on Gemini's side and in the details' members on Chat's, which is how audio and images get their own price.
 type geminiUsage struct {
-	PromptTokenCount        int64           `json:"promptTokenCount"`
-	CandidatesTokenCount    int64           `json:"candidatesTokenCount"`
-	ThoughtsTokenCount      int64           `json:"thoughtsTokenCount,omitzero"`
-	CachedContentTokenCount int64           `json:"cachedContentTokenCount,omitzero"`
-	ToolUsePromptTokenCount int64           `json:"toolUsePromptTokenCount,omitzero"`
-	TotalTokenCount         int64           `json:"totalTokenCount"`
-	PromptTokensDetails     []geminiByMedia `json:"promptTokensDetails,omitzero"`
-	CacheTokensDetails      []geminiByMedia `json:"cacheTokensDetails,omitzero"`
-	CandidatesTokensDetails []geminiByMedia `json:"candidatesTokensDetails,omitzero"`
+	PromptTokenCount           int64           `json:"promptTokenCount"`
+	CandidatesTokenCount       int64           `json:"candidatesTokenCount"`
+	ThoughtsTokenCount         int64           `json:"thoughtsTokenCount,omitzero"`
+	CachedContentTokenCount    int64           `json:"cachedContentTokenCount,omitzero"`
+	ToolUsePromptTokenCount    int64           `json:"toolUsePromptTokenCount,omitzero"`
+	TotalTokenCount            int64           `json:"totalTokenCount"`
+	PromptTokensDetails        []geminiByMedia `json:"promptTokensDetails,omitzero"`
+	CacheTokensDetails         []geminiByMedia `json:"cacheTokensDetails,omitzero"`
+	CandidatesTokensDetails    []geminiByMedia `json:"candidatesTokensDetails,omitzero"`
+	ToolUsePromptTokensDetails []geminiByMedia `json:"toolUsePromptTokensDetails,omitzero"`
+	ServiceTier                string          `json:"serviceTier,omitzero"` // the tier Google served the reply at
 }
 
 // geminiByMedia is Gemini's ModalityTokenCount.
@@ -45,31 +47,39 @@ type chatMedia struct {
 }
 
 type chatUsageCounts struct {
-	PromptTokens        int64 `json:"prompt_tokens"`
-	CompletionTokens    int64 `json:"completion_tokens"`
-	TotalTokens         int64 `json:"total_tokens"`
-	PromptTokensDetails struct {
-		CachedTokens  int64      `json:"cached_tokens"`
-		CachedDetails *chatMedia `json:"cached_tokens_details,omitzero"`
-		chatMedia
-	} `json:"prompt_tokens_details"`
+	chatInputCounts
+	CompletionTokens        int64 `json:"completion_tokens"`
+	TotalTokens             int64 `json:"total_tokens"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 		chatMedia
 	} `json:"completion_tokens_details"`
 }
 
-// mediaOf is a modality list as Chat's counts; TEXT and modalities Chat has no member for stay in the plain total.
-func mediaOf(counts []geminiByMedia) chatMedia {
+// chatInputCounts is the input side of Chat's usage, which is all a report of a reply whose output Gemini has not
+// counted yet holds: the relay then estimates the output rather than bill it as none.
+type chatInputCounts struct {
+	PromptTokens        int64 `json:"prompt_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens  int64      `json:"cached_tokens"`
+		CachedDetails *chatMedia `json:"cached_tokens_details,omitzero"`
+		chatMedia
+	} `json:"prompt_tokens_details"`
+}
+
+// mediaOf is modality lists as Chat's counts; TEXT and modalities Chat has no member for stay in the plain total.
+func mediaOf(lists ...[]geminiByMedia) chatMedia {
 	var m chatMedia
-	for _, c := range counts {
-		switch c.Modality {
-		case "AUDIO":
-			m.Audio += c.TokenCount
-		case "IMAGE":
-			m.Image += c.TokenCount
-		case "VIDEO":
-			m.Video += c.TokenCount
+	for _, counts := range lists {
+		for _, c := range counts {
+			switch c.Modality {
+			case "AUDIO":
+				m.Audio += c.TokenCount
+			case "IMAGE":
+				m.Image += c.TokenCount
+			case "VIDEO":
+				m.Video += c.TokenCount
+			}
 		}
 	}
 	return m
@@ -92,7 +102,7 @@ func (u geminiUsage) chat() chatUsageCounts {
 	c.CompletionTokens = u.CandidatesTokenCount + u.ThoughtsTokenCount
 	c.TotalTokens = c.PromptTokens + c.CompletionTokens
 	c.PromptTokensDetails.CachedTokens = u.CachedContentTokenCount
-	c.PromptTokensDetails.chatMedia = mediaOf(u.PromptTokensDetails)
+	c.PromptTokensDetails.chatMedia = mediaOf(u.PromptTokensDetails, u.ToolUsePromptTokensDetails) // both are in the prompt
 	if len(u.CacheTokensDetails) > 0 {
 		cached := mediaOf(u.CacheTokensDetails)
 		c.PromptTokensDetails.CachedDetails = &cached

@@ -35,15 +35,6 @@ var rows = []direct.Provider{
 	},
 	{
 		Type: adapter.Type{
-			Kind: "google", Name: "Google Gemini", Vendor: "google", Serves: []string{"google"}, Group: adapter.GroupOfficial,
-			Entries:  []adapter.PriceEntry{{ID: "global", Origin: "https://generativelanguage.googleapis.com", Currency: "USD"}},
-			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
-		},
-		// Google serves the OpenAI formats under /v1beta/openai: the gateway does not send Gemini's own generateContent.
-		Root: "/v1beta/openai",
-	},
-	{
-		Type: adapter.Type{
 			Kind: "moonshot", Name: "Kimi", Vendor: "moonshotai", Serves: []string{"moonshotai"}, Group: adapter.GroupDomestic,
 			Entries: []adapter.PriceEntry{
 				{ID: "cn", Origin: "https://api.moonshot.cn", Currency: "CNY"},
