@@ -1934,7 +1934,7 @@ export interface paths {
         put?: never;
         /**
          * Find out what system a site runs
-         * @description Probes the address through the outbound client, which refuses private and internal addresses, and says which adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no `kind`.
+         * @description Probes the address through the outbound client, which refuses private and internal addresses, and says which adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no `kind`. A site an adapter recognises in a release it cannot connect yet (new-api before 1.0, one-api) is 422, and the message names the system and its release.
          *
          *     Limits: 10 a minute per session, because each probe is a request to a third party.
          */
@@ -2449,6 +2449,46 @@ export interface paths {
         get: operations["getSupplierEndpointCost"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/base-prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the base price of models whose supplier shows no prices
+         * @description For a relay that states no price for a model (new-api with pricing hidden, sub2api, CPA), a person's base price of it, named by the group and the upstream name the group lists it under, so it can be given before the model has an endpoint. The price is in the supplier's settlement currency: the model's official price in the catalog in that currency when `price` is absent, or the price given. It is kept in the supplier's own unit, divided by the unit value in force and rounded up, and is for the model the name maps to now: a name mapped to another model later does not carry it over. At its next catalog round, which this makes due now, the sync makes the model's cost plan of it times the group's ratio, rounded up once, and the projection makes the endpoint; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier states always wins, and one it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name the group does not list is 404; one not mapped to a model yet, a model with no official price in the settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier whose unit value is not confirmed, or that is not a relay, is 409. At most 500 models.
+         */
+        post: operations["confirmSupplierBasePrices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/base-price-removals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take confirmed base prices away
+         * @description Removes the confirmed base of each model named; at the sync's next catalog round, made due now, a model the supplier states no price for has its cost unknown again and leaves routing, also when that round cannot read the group's models. The answer is the bases removed; a model that had none is left out, and if none had one nothing changes and nothing is recorded. At most 500.
+         */
+        post: operations["clearSupplierBasePrices"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7370,6 +7410,28 @@ export interface components {
             plan_id?: components["schemas"]["Uuid"];
             lines: components["schemas"]["CostLine"][];
             break_even?: components["schemas"]["CostBreakEven"];
+        };
+        /** @description A model of one of the supplier's groups, by the upstream name the group lists it under. */
+        BaseModel: {
+            group_id: components["schemas"]["Uuid"];
+            upstream_name: string;
+        };
+        BasePriceConfirmation: {
+            items: (components["schemas"]["BaseModel"] & {
+                /** @description The base in the settlement currency, per unit of each item; absent takes the model's official price. */
+                price?: components["schemas"]["PriceSchedule"];
+            })[];
+            reason: components["schemas"]["Reason"];
+        };
+        BasePriceRemoval: {
+            items: components["schemas"]["BaseModel"][];
+            reason: components["schemas"]["Reason"];
+        };
+        BasePriceList: {
+            data: (components["schemas"]["BaseModel"] & {
+                /** @description In the supplier's own unit (currency XXX), before the group's ratio. */
+                base: components["schemas"]["PriceSchedule"];
+            })[];
         };
         /** @description A family of models within its author, such as gpt-6.1 or claude-sonnet. */
         ModelFamily: string;
@@ -12548,6 +12610,79 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    confirmSupplierBasePrices: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BasePriceConfirmation"];
+            };
+        };
+        responses: {
+            /** @description The bases as stored, in the supplier's own unit. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasePriceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    clearSupplierBasePrices: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BasePriceRemoval"];
+            };
+        };
+        responses: {
+            /** @description The bases removed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasePriceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

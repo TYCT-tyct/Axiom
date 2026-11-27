@@ -46,6 +46,14 @@ FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
 
+-- name: ModelNamesOf :many
+-- The models a supplier's groups list, among (group, name) pairs, with the group's ref the sync knows it by and the
+-- catalog model the name maps to now (NULL while it waits to be mapped).
+SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref, m.model_id
+FROM suppliers.supplier_models m JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
+WHERE m.supplier_id = @supplier_id
+  AND (m.supplier_group_id, m.upstream_name) IN (SELECT unnest(@groups::uuid[]), unnest(@names::text[]));
+
 -- name: GetEndpointOf :many
 SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id AND id = @id;

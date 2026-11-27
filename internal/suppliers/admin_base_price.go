@@ -1,0 +1,233 @@
+package suppliers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/big"
+	"uuid"
+
+	"axiom/internal/catalog"
+	"axiom/internal/platform"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/persist"
+	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/syncer"
+)
+
+// A person's base price of a model a relay lists without a price (docs/domains/suppliers.md「管理操作」).
+//
+// Invariant: an attempt on an endpoint priced from a confirmed base is charged base × the group's ratio × the unit
+// value. The base is the price in the settlement currency divided by the unit value in force when it is confirmed,
+// rounded up to a unit price, so it is in the supplier's own unit; the sync scales it by the ratio it reads into the
+// model's cost plan (rounded up once, as a published plan is); and Credits prices usage at that plan
+// (TestConfirmedBaseIsWhatACallIsCharged). A price the supplier states always wins, and a base prices only the model it
+// was confirmed for.
+
+// The ways a base price is refused.
+var (
+	// ErrNoModelName is a group that lists no model of that upstream name.
+	ErrNoModelName = errors.New("suppliers: the group lists no model of that name")
+	// ErrNameNotMapped is an upstream name that maps to no model yet: a base prices a model, so the name is mapped
+	// first.
+	ErrNameNotMapped = errors.New("suppliers: the name maps to no model yet; map it first")
+	// ErrNoUnitValue is a supplier whose unit value is not confirmed, which a base price is converted with.
+	ErrNoUnitValue = errors.New("suppliers: confirm the supplier's unit value first")
+	// ErrNoOfficialPrice is a model given no price that has no official price in the settlement currency to default to.
+	ErrNoOfficialPrice = errors.New("suppliers: the model has no official price in the settlement currency; give one")
+	// ErrBasePrice is a price that is not in the settlement currency, charges nothing, or is beyond a unit price in the
+	// supplier's own unit.
+	ErrBasePrice = errors.New("suppliers: a base price is in the settlement currency, charges something, and stays within a unit price in the supplier's unit")
+)
+
+// MaxBasePrices is the most models one change names.
+const MaxBasePrices = 500
+
+// BaseModel is a model of a group of the supplier, by the upstream name the group lists it under.
+type BaseModel struct {
+	Group uuid.UUID
+	Name  string
+}
+
+// BasePriceItem is one model to confirm. Price nil takes the model's official price in the catalog.
+type BasePriceItem struct {
+	BaseModel
+	Price *catalog.Schedule
+}
+
+// BasePrice is a model's confirmed base, in the supplier's own unit: what the group's ratio scales.
+type BasePrice struct {
+	BaseModel
+	Base catalog.Schedule
+}
+
+// OfficialPrices is where a default base comes from: *catalog.Snapshot.
+type OfficialPrices interface {
+	ReferencePrice(id catalog.ModelID, currency string) (catalog.ReferencePrice, bool)
+}
+
+// ConfirmBasePrices confirms the base price of each model, in the settlement currency, for the model its name maps to
+// now; the next catalog round makes the model's cost plan of it at its group's ratio while the supplier states no price.
+// It works before the model has an endpoint: the projection makes the endpoint with the plan. Confirming again replaces
+// the base.
+func (a *Admin) ConfirmBasePrices(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, items []BasePriceItem, official OfficialPrices, reason string) ([]BasePrice, error) {
+	s, err := a.view(ctx, tx, supplier, PlatformOwned)
+	if err != nil {
+		return nil, err
+	}
+	if s.UnitValue == "" {
+		return nil, ErrNoUnitValue
+	}
+	perUnit, ok := new(big.Rat).SetString(s.UnitValue)
+	if !ok || perUnit.Sign() <= 0 {
+		return nil, fmt.Errorf("suppliers: the unit value %q", s.UnitValue)
+	}
+	models := make([]BaseModel, len(items))
+	for i, it := range items {
+		models[i] = it.BaseModel
+	}
+	names, err := modelNames(ctx, tx, supplier, models)
+	if err != nil {
+		return nil, err
+	}
+	set, out, detail := make([]syncer.ConfirmedBase, len(items)), make([]BasePrice, len(items)), make([]map[string]any, len(items))
+	for i, it := range items {
+		n := names[it.BaseModel]
+		base, source, err := baseOf(it, n, s.SettlementCurrency, perUnit, official)
+		if err != nil {
+			return nil, err
+		}
+		text, err := base.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		set[i] = syncer.ConfirmedBase{GroupRef: n.UpstreamRef, Model: it.Name, For: n.ModelID.String(), Base: string(text)}
+		out[i] = BasePrice{BaseModel: it.BaseModel, Base: base}
+		detail[i] = map[string]any{
+			"group": it.Group.String(), "upstream_name": it.Name, "model": n.ModelID.String(), "source": source,
+			"unit_value": s.UnitValue, "base": string(text),
+		}
+	}
+	if _, err := persist.ConfirmBases(ctx, tx, supplier, set, nil, a.now()); err != nil {
+		return nil, err
+	}
+	if err := a.afterBases(ctx, tx, actor, supplier, "supplier.base_price_confirm", reason, detail); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ClearBasePrices takes the confirmed base of each model away; at the next catalog round a model the supplier states no
+// price for has its cost unknown again, whether or not its models are read. It answers the bases it took away; when
+// there were none, nothing changes and nothing is recorded.
+func (a *Admin) ClearBasePrices(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, models []BaseModel, reason string) ([]BasePrice, error) {
+	if _, err := a.view(ctx, tx, supplier, PlatformOwned); err != nil {
+		return nil, err
+	}
+	names, err := modelNames(ctx, tx, supplier, models)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]syncer.BaseKey, len(models))
+	byKey := make(map[syncer.BaseKey]BaseModel, len(models))
+	for i, m := range models {
+		keys[i] = syncer.BaseKey{GroupRef: names[m].UpstreamRef, Model: m.Name}
+		byKey[keys[i]] = m
+	}
+	cleared, err := persist.ConfirmBases(ctx, tx, supplier, nil, keys, a.now())
+	if err != nil {
+		return nil, err
+	}
+	out, detail := []BasePrice{}, []map[string]any{}
+	for _, c := range cleared {
+		base, err := catalog.ParseSchedule([]byte(c.Base))
+		if err != nil {
+			return nil, fmt.Errorf("the confirmed base of %s in %s: %w", c.Model, c.GroupRef, err)
+		}
+		m := byKey[c.BaseKey]
+		out = append(out, BasePrice{BaseModel: m, Base: base})
+		detail = append(detail, map[string]any{"group": m.Group.String(), "upstream_name": m.Name, "model": c.For, "base": c.Base})
+	}
+	if len(out) == 0 {
+		if _, err := a.locked(ctx, tx, supplier); err != nil {
+			return nil, err
+		}
+		return out, synced(ctx, tx, supplier)
+	}
+	if err := a.afterBases(ctx, tx, actor, supplier, "supplier.base_price_clear", reason, detail); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// afterBases locks the supplier, after its state as a step takes them, checks the sync runs for it, raises the
+// generation and records the change.
+func (a *Admin) afterBases(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, action, reason string, items []map[string]any) error {
+	if _, err := a.locked(ctx, tx, supplier); err != nil {
+		return err
+	}
+	if err := synced(ctx, tx, supplier); err != nil {
+		return err
+	}
+	if err := store.New().BumpConfigGen(ctx, tx, supplier); err != nil {
+		return fmt.Errorf("raise the generation: %w", err)
+	}
+	return a.record(ctx, tx, actor, action, supplier, reason, map[string]any{"items": items})
+}
+
+// baseOf is the base of one item in the supplier's own unit, and where its price came from: the item's, or the official
+// price of the model its name maps to.
+func baseOf(it BasePriceItem, n store.ModelNamesOfRow, currency string, perUnit *big.Rat, official OfficialPrices) (catalog.Schedule, string, error) {
+	if n.ModelID == nil {
+		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrNameNotMapped, it.Name)
+	}
+	price, source := it.Price, "entered"
+	if price == nil {
+		ref, ok := official.ReferencePrice(catalog.ModelID(*n.ModelID), currency)
+		if !ok {
+			return catalog.Schedule{}, "", fmt.Errorf("%w: %s", ErrNoOfficialPrice, it.Name)
+		}
+		price, source = &ref.Schedule, "official"
+	}
+	base, err := nativeBase(*price, currency, perUnit)
+	if err != nil {
+		return catalog.Schedule{}, "", fmt.Errorf("%w: %s", err, it.Name)
+	}
+	return base, source, nil
+}
+
+// modelNames reads the models the supplier's groups list under these names; ErrNoModelName names one they do not.
+func modelNames(ctx context.Context, tx pg.Tx, supplier uuid.UUID, models []BaseModel) (map[BaseModel]store.ModelNamesOfRow, error) {
+	params := store.ModelNamesOfParams{SupplierID: supplier, Groups: make([]uuid.UUID, len(models)), Names: make([]string, len(models))}
+	for i, m := range models {
+		params.Groups[i], params.Names[i] = m.Group, m.Name
+	}
+	rows, err := store.New().ModelNamesOf(ctx, tx, params)
+	if err != nil {
+		return nil, fmt.Errorf("read the models: %w", err)
+	}
+	found := make(map[BaseModel]store.ModelNamesOfRow, len(rows))
+	for _, r := range rows {
+		found[BaseModel{Group: r.SupplierGroupID, Name: r.UpstreamName}] = r
+	}
+	for _, m := range models {
+		if _, ok := found[m]; !ok {
+			return nil, fmt.Errorf("%w: %s", ErrNoModelName, m.Name)
+		}
+	}
+	return found, nil
+}
+
+// nativeBase is a price in the settlement currency in the supplier's own unit: divided by what one unit is worth,
+// rounded up to a unit price, so the base never costs a call at less than the price.
+func nativeBase(price catalog.Schedule, currency string, perUnit *big.Rat) (catalog.Schedule, error) {
+	if price.Currency().String() != currency || price.IsZero() {
+		return catalog.Schedule{}, ErrBasePrice
+	}
+	base, err := price.Scaled(new(big.Rat).Inv(perUnit).RatString(), platform.CurrencyNone)
+	if err != nil {
+		return catalog.Schedule{}, errors.Join(ErrBasePrice, err)
+	}
+	return base, nil
+}

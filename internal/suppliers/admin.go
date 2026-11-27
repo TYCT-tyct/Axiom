@@ -33,6 +33,9 @@ var (
 	ErrBadOrigin = errors.New("suppliers: the origin is not https://host[:port]")
 	// ErrAddressRefused is an origin the outbound client refuses to connect to (egress.ErrAddressDenied).
 	ErrAddressRefused = errors.New("suppliers: the outbound client refuses that address")
+	// ErrUnsupportedVersion is a site an adapter recognises in a release it cannot connect yet; the error names the
+	// release.
+	ErrUnsupportedVersion = adapter.ErrUnsupported
 	// ErrUnreachable is an origin that did not answer a probe.
 	ErrUnreachable = errors.New("suppliers: the site did not answer")
 	// ErrStatusLocked is a supplier whose status a person cannot move: it is not in a state this change starts from.

@@ -559,6 +559,12 @@ type ServerInterface interface {
 	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid)
+	// ClearSupplierBasePrices Take confirmed base prices away
+	// (POST /api/admin/v1/suppliers/{supplier_id}/base-price-removals)
+	ClearSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ClearSupplierBasePricesParams)
+	// ConfirmSupplierBasePrices Confirm the base price of models whose supplier shows no prices
+	// (POST /api/admin/v1/suppliers/{supplier_id}/base-prices)
+	ConfirmSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ConfirmSupplierBasePricesParams)
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
 	ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierCloudCredentialParams)
@@ -8617,6 +8623,114 @@ func (siw *ServerInterfaceWrapper) GetSupplier(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ClearSupplierBasePrices operation middleware
+func (siw *ServerInterfaceWrapper) ClearSupplierBasePrices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClearSupplierBasePricesParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClearSupplierBasePrices(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConfirmSupplierBasePrices operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmSupplierBasePrices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ConfirmSupplierBasePricesParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConfirmSupplierBasePrices(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ReplaceSupplierCloudCredential operation middleware
 func (siw *ServerInterfaceWrapper) ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request) {
 
@@ -10702,6 +10816,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/models", wrapper.ListSupplierModels)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/intake-rule", wrapper.SetSupplierIntakeRule)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost", wrapper.GetSupplierEndpointCost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/base-prices", wrapper.ConfirmSupplierBasePrices)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/base-price-removals", wrapper.ClearSupplierBasePrices)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/keys", wrapper.AddSupplierKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests", wrapper.TestSupplierCredential)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled", wrapper.SetSupplierCredentialEnabled)
@@ -29731,6 +29847,262 @@ func (response GetSupplierdefaultJSONResponse) VisitGetSupplierResponse(w http.R
 	return err
 }
 
+type ClearSupplierBasePricesRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     ClearSupplierBasePricesParams
+	Body       *ClearSupplierBasePricesJSONRequestBody
+}
+
+type ClearSupplierBasePricesResponseObject interface {
+	VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error
+}
+
+type ClearSupplierBasePrices200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ClearSupplierBasePrices200JSONResponse struct {
+	Body    BasePriceList
+	Headers ClearSupplierBasePrices200ResponseHeaders
+}
+
+func (response ClearSupplierBasePrices200JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePrices400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ClearSupplierBasePrices400JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePrices401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ClearSupplierBasePrices401JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePrices403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ClearSupplierBasePrices403JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePrices404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ClearSupplierBasePrices404JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePrices409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ClearSupplierBasePrices409JSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClearSupplierBasePricesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ClearSupplierBasePricesdefaultJSONResponse) VisitClearSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePricesRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     ConfirmSupplierBasePricesParams
+	Body       *ConfirmSupplierBasePricesJSONRequestBody
+}
+
+type ConfirmSupplierBasePricesResponseObject interface {
+	VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error
+}
+
+type ConfirmSupplierBasePrices200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ConfirmSupplierBasePrices200JSONResponse struct {
+	Body    BasePriceList
+	Headers ConfirmSupplierBasePrices200ResponseHeaders
+}
+
+func (response ConfirmSupplierBasePrices200JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ConfirmSupplierBasePrices400JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ConfirmSupplierBasePrices401JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ConfirmSupplierBasePrices403JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ConfirmSupplierBasePrices404JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConfirmSupplierBasePrices409JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePrices422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ConfirmSupplierBasePrices422JSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmSupplierBasePricesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConfirmSupplierBasePricesdefaultJSONResponse) VisitConfirmSupplierBasePricesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ReplaceSupplierCloudCredentialRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     ReplaceSupplierCloudCredentialParams
@@ -34273,6 +34645,12 @@ type StrictServerInterface interface {
 	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(ctx context.Context, request GetSupplierRequestObject) (GetSupplierResponseObject, error)
+	// ClearSupplierBasePrices Take confirmed base prices away
+	// (POST /api/admin/v1/suppliers/{supplier_id}/base-price-removals)
+	ClearSupplierBasePrices(ctx context.Context, request ClearSupplierBasePricesRequestObject) (ClearSupplierBasePricesResponseObject, error)
+	// ConfirmSupplierBasePrices Confirm the base price of models whose supplier shows no prices
+	// (POST /api/admin/v1/suppliers/{supplier_id}/base-prices)
+	ConfirmSupplierBasePrices(ctx context.Context, request ConfirmSupplierBasePricesRequestObject) (ConfirmSupplierBasePricesResponseObject, error)
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
 	ReplaceSupplierCloudCredential(ctx context.Context, request ReplaceSupplierCloudCredentialRequestObject) (ReplaceSupplierCloudCredentialResponseObject, error)
@@ -39783,6 +40161,74 @@ func (sh *strictHandler) GetSupplier(w http.ResponseWriter, r *http.Request, sup
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetSupplierResponseObject); ok {
 		if err := validResponse.VisitGetSupplierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ClearSupplierBasePrices operation middleware
+func (sh *strictHandler) ClearSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ClearSupplierBasePricesParams) {
+	var request ClearSupplierBasePricesRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body ClearSupplierBasePricesJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ClearSupplierBasePrices(ctx, request.(ClearSupplierBasePricesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ClearSupplierBasePrices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ClearSupplierBasePricesResponseObject); ok {
+		if err := validResponse.VisitClearSupplierBasePricesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConfirmSupplierBasePrices operation middleware
+func (sh *strictHandler) ConfirmSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ConfirmSupplierBasePricesParams) {
+	var request ConfirmSupplierBasePricesRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body ConfirmSupplierBasePricesJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConfirmSupplierBasePrices(ctx, request.(ConfirmSupplierBasePricesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConfirmSupplierBasePrices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConfirmSupplierBasePricesResponseObject); ok {
+		if err := validResponse.VisitConfirmSupplierBasePricesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

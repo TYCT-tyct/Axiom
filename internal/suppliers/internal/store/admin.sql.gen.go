@@ -810,6 +810,53 @@ func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UU
 	return items, nil
 }
 
+const modelNamesOf = `-- name: ModelNamesOf :many
+SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref, m.model_id
+FROM suppliers.supplier_models m JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
+WHERE m.supplier_id = $1
+  AND (m.supplier_group_id, m.upstream_name) IN (SELECT unnest($2::uuid[]), unnest($3::text[]))
+`
+
+type ModelNamesOfParams struct {
+	SupplierID uuid.UUID
+	Groups     []uuid.UUID
+	Names      []string
+}
+
+type ModelNamesOfRow struct {
+	SupplierGroupID uuid.UUID
+	UpstreamName    string
+	UpstreamRef     string
+	ModelID         *uuid.UUID
+}
+
+// The models a supplier's groups list, among (group, name) pairs, with the group's ref the sync knows it by and the
+// catalog model the name maps to now (NULL while it waits to be mapped).
+func (q *Queries) ModelNamesOf(ctx context.Context, db DBTX, arg ModelNamesOfParams) ([]ModelNamesOfRow, error) {
+	rows, err := db.Query(ctx, modelNamesOf, arg.SupplierID, arg.Groups, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelNamesOfRow
+	for rows.Next() {
+		var i ModelNamesOfRow
+		if err := rows.Scan(
+			&i.SupplierGroupID,
+			&i.UpstreamName,
+			&i.UpstreamRef,
+			&i.ModelID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const modelTakenInGroup = `-- name: ModelTakenInGroup :one
 SELECT (EXISTS (SELECT FROM suppliers.endpoints e WHERE e.supplier_group_id = $1 AND e.model_id = $2)
     OR EXISTS (SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = $1 AND m.model_id = $2)

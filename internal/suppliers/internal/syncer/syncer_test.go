@@ -333,7 +333,7 @@ func TestSameAnswerTwiceChangesNothing(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	e, st, clk := engine(m)
-	st.state.Confirmed = map[string]string{"m1": confirmedBase}
+	st.state.Confirmed = []ConfirmedBase{{GroupRef: "1", Model: "m1", Base: confirmedBase}}
 	round(t, e)
 	events, plans := len(st.events), len(st.plans)
 	if plans != 1 || st.count(GroupAdded) != 1 || st.count(ModelAdded) != 2 {
@@ -352,9 +352,9 @@ func TestChangedRatioMakesOneEventAndOnePlan(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	e, st, clk := engine(m)
-	st.state.Confirmed = map[string]string{"m1": confirmedBase}
+	st.state.Confirmed = []ConfirmedBase{{GroupRef: "1", Model: "m1", Base: confirmedBase}}
 	round(t, e)
-	first := st.state.Plans["1/m1"]
+	first := st.state.Plans[BaseKey{GroupRef: "1", Model: "m1"}]
 	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
 		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
 			Ref: "1", Name: "g", Ratio: "2", Facts: adapter.GroupFacts(`{}`),
@@ -368,10 +368,10 @@ func TestChangedRatioMakesOneEventAndOnePlan(t *testing.T) {
 	if !slices.Equal(got, []Kind{RatioChanged, PlanChanged}) || len(st.plans)-plans != 1 {
 		t.Fatalf("ratio change: events %v, %d new plans", got, len(st.plans)-plans)
 	}
-	if now := st.state.Plans["1/m1"]; now == first || now == "" {
+	if now := st.state.Plans[BaseKey{GroupRef: "1", Model: "m1"}]; now == first || now == "" {
 		t.Errorf("plan fingerprint %q -> %q", first, now)
 	}
-	if _, ok := st.state.Plans["1/m2"]; ok {
+	if _, ok := st.state.Plans[BaseKey{GroupRef: "1", Model: "m2"}]; ok {
 		t.Error("a model without a confirmed base got a plan")
 	}
 	// The plan is the base scaled by the new ratio, in the supplier's own unit.

@@ -87,6 +87,8 @@ func startLive(t *testing.T) *live {
 		{name: "claude-15", platform: "anthropic", rate: 1.5},
 		{name: "gpt-1", platform: "openai", rate: 1},
 		{name: "claude-code", platform: "anthropic", rate: 1, claudeCodeOnly: true},
+		{name: "kimi-1", platform: "kimi", rate: 1},
+		{name: "glm-1", platform: "zhipu", rate: 1},
 	}
 	for _, g := range l.groups {
 		l.createGroup(g)
@@ -94,7 +96,12 @@ func startLive(t *testing.T) *live {
 	for _, acc := range []struct {
 		name, platform string
 		groups         []string
-	}{{"upstream-anthropic", "anthropic", []string{"claude-1", "claude-15", "claude-code"}}, {"upstream-openai", "openai", []string{"gpt-1"}}} {
+	}{
+		{"upstream-anthropic", "anthropic", []string{"claude-1", "claude-15", "claude-code"}},
+		{"upstream-openai", "openai", []string{"gpt-1"}},
+		{"upstream-kimi", "kimi", []string{"kimi-1"}},
+		{"upstream-zhipu", "zhipu", []string{"glm-1"}},
+	} {
 		l.createAccount(acc.name, acc.platform, reach.UpstreamURL(up), acc.groups)
 	}
 	l.call(http.MethodPost, "/api/v1/admin/users", l.admin, map[string]any{"email": liveUserMail, "password": livePassword, "balance": 10, "concurrency": 5})
@@ -217,6 +224,7 @@ func (l *live) createPricingChannel() {
 	}
 	l.call(http.MethodPost, "/api/v1/admin/channels", l.admin, map[string]any{"name": "prices", "group_ids": ids, "model_pricing": []any{
 		price("anthropic", adaptertest.UpstreamAnthropicModel, 0.000005, 0.000025), price("openai", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001),
+		price("kimi", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001), price("zhipu", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001),
 	}})
 }
 

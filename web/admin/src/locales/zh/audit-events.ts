@@ -140,6 +140,8 @@ export default {
   "subscription.refund_request": "申请订阅退款",
   "subscription_plan.create": "创建订阅套餐",
   "subscription_plan.update": "修改订阅套餐",
+  "supplier.base_price_clear": "取消渠道端点的基础价",
+  "supplier.base_price_confirm": "确认渠道端点的基础价",
   "supplier.byok_create": "添加直连渠道",
   "supplier.byok_disable": "停用直连的 Key",
   "supplier.byok_enable": "启用直连的 Key",

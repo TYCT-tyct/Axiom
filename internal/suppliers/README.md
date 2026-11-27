@@ -10,9 +10,9 @@
 internal/suppliers/  公开接口：Service（调用面）、RecordAttempts 等写入、Admin、BYOK、
   CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
 internal/suppliers/internal/
-  adapter/      契约：Adapter、Type、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、KeyFinder、Pool、UsageQueue、Direct、Wire、Cloud、Signer
-  registry/     唯一同时引用所有适配器的文件，一个内置适配器包一行，另加声明式目录
-  newapi/ sub2api/ cpa/ 中转站和号池的内置适配器（testdata/ 是脱敏样本）
+  adapter/      契约：Adapter、Type、Manager、CallQuirks、Failure、CallPolicy、Client，及可选能力的接口（Onboarding、Direct、Cloud 等）
+  registry/     唯一同时引用所有适配器的文件，一个内置适配器包一行
+  newapi/ sub2api/ cpa/ 中转站和号池的内置适配器
   vendors/ anthropic/ compatible/ 直连（vendors 是 OpenAI 格式的厂商表），共用 direct/
   vertex/ bedrock/ azure/ 云平台，共用 cloud/
   declared/     声明式适配器
@@ -36,7 +36,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
 | `egress_proxies` | 密码信封同空同有；`fallback_id` 指向另一行 |
-| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`egress_id` 空为直连；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名；`settings` 是按类型描述核对的设置；`balance_*` 是钱包 key 的余额 |
+| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`egress_id` 空为直连；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密要用行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名；`settings` 是按类型描述核对的设置；`balance_*` 是钱包 key 的余额 |
 | `intake_rules`、`inbox_items` | PK `supplier_id`；`UNIQUE (supplier_id, kind, subject)` |
 | `supplier_models` | PK `(supplier_group_id, upstream_name)`；`model_id` 空即待映射 |
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |
@@ -144,7 +144,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译；描述不合法不启动 | `CheckAdapters`；`just adapters-removable` 逐行；`registry.New` 核对描述 |
 | 平台直连和云线路成本 = 价 × 线路倍率，与倍率同成同败 | 定价与倍率同一事务、锁里读倍率 |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
-| 价目行就是收费：同一份计划、同一个 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged` |
+| 价目行即收费；确认价 = 基础价 × 倍率 | `TestEndpointCostIsWhatAnAttemptIsCharged`、`TestConfirmedBaseIsWhatACallIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |
 | 停用、擦除、被拒的凭证不再被挑 | `ListRoutable` 只取 `active`；应答节点提交后即 `Reload` |
 
@@ -169,4 +169,4 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
 | `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
-| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

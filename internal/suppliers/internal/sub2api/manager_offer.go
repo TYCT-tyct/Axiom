@@ -22,14 +22,15 @@ type groupDTO struct {
 	ClaudeCode   bool   `json:"claude_code_only"`
 }
 
-// facts is the part of a group that decides what can be sold from it; Formats reads it back. ClaudeCode is left out
-// when false, so the facts of every other group read as they did before it was kept.
+// facts is the part of a group that decides what can be sold from it; Formats reads it back. ClaudeCode and Unsold are
+// left out when empty, so the facts of every other group read as they did before they were kept.
 type facts struct {
 	Platform     string `json:"platform"`
 	Status       string `json:"status"`
 	Subscription string `json:"subscription_type"`
 	Peak         bool   `json:"peak_rate_enabled"`
 	ClaudeCode   bool   `json:"claude_code_only,omitzero"`
+	Unsold       string `json:"unsold,omitzero"` // why a platform of sub2api is not sold (unsoldPlatforms)
 }
 
 // offerProgress is the position in the offer listing: the groups and multipliers read when the pass began, the key page
@@ -286,7 +287,10 @@ func (m *manager) group(ctx context.Context, g groupDTO, overrides map[string]nu
 	if o, ok := overrides[string(g.ID)]; ok {
 		multiplier = o
 	}
-	f, err := jsonx.MarshalCanonical(facts{Platform: g.Platform, Status: g.Status, Subscription: g.Subscription, Peak: g.Peak, ClaudeCode: g.ClaudeCode})
+	f, err := jsonx.MarshalCanonical(facts{
+		Platform: g.Platform, Status: g.Status, Subscription: g.Subscription, Peak: g.Peak, ClaudeCode: g.ClaudeCode,
+		Unsold: unsoldPlatforms[g.Platform],
+	})
 	if err != nil {
 		return builtGroup{}, err
 	}

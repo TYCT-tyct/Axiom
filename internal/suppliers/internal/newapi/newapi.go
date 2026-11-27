@@ -43,13 +43,16 @@ type statusData struct {
 		Version      string `json:"version"`
 		QuotaPerUnit number `json:"quota_per_unit"`
 		Turnstile    bool   `json:"turnstile_check"`
+		Setup        *bool  `json:"setup"` // only new-api has it, so one-api is told by its absence
 	} `json:"data"`
 	Success bool `json:"success"`
 }
 
-// Detect implements adapter.Adapter. A new-api answers /api/status with its version and puts X-Oneapi-Request-Id on
-// every answer; the generation is told from /api/user/login/encryption-key, which only the 1.0 line has. Version
-// strings are only what a build was stamped with and can be empty, so they are not trusted for anything.
+// Detect implements adapter.Adapter. A new-api, and one-api it grew from, answers /api/status with its version and puts
+// X-Oneapi-Request-Id on every answer; the 1.0 line is told by /api/user/login/encryption-key, which only it has. Any
+// other release (new-api before 1.0, one-api, told apart by the status's setup member) is refused as ErrUnsupported:
+// it has no personal access token to log in with, and cannot be reconciled or priced safely yet. Version strings are
+// only what a build was stamped with and can be empty, so they decide nothing.
 func (*Adapter) Detect(ctx context.Context, c adapter.Client) (adapter.Detection, error) {
 	resp, err := c.Do(ctx, adapter.Request{Method: http.MethodGet, Path: "/api/status", Buckets: global})
 	if err != nil {
@@ -63,11 +66,14 @@ func (*Adapter) Detect(ctx context.Context, c adapter.Client) (adapter.Detection
 	if err != nil {
 		return adapter.Detection{}, err
 	}
-	generation := "0.13"
-	if key.Status == http.StatusOK && key.Header.Get(requestIDHeader) != "" {
-		generation = "1.0"
+	if key.Status != http.StatusOK || key.Header.Get(requestIDHeader) == "" {
+		system := "new-api"
+		if status.Data.Setup == nil {
+			system = "one-api"
+		}
+		return adapter.Detection{}, &adapter.Unsupported{System: system, Version: status.Data.Version, Supported: "new-api 1.0 and later"}
 	}
-	return adapter.Detection{Generation: generation, Version: status.Data.Version, Captcha: status.Data.Turnstile}, nil
+	return adapter.Detection{Generation: "1.0", Version: status.Data.Version, Captcha: status.Data.Turnstile}, nil
 }
 
 // Open implements adapter.Adapter. The personal access token never changes, so there is nothing to refresh and no

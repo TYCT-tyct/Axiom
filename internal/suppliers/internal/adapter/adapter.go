@@ -8,6 +8,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"time"
 
@@ -52,6 +53,8 @@ type Detection struct {
 var (
 	// ErrNotRecognised: Detect found that the address is not a supplier system of this adapter's kind.
 	ErrNotRecognised = errors.New("adapter: not a system of this kind")
+	// ErrUnsupported: Detect recognised the system in a release the adapter cannot connect yet (Unsupported names it).
+	ErrUnsupported = errors.New("adapter: this release of the system is not supported yet")
 	// ErrAuthRejected: the supplier refused the account credentials (expired, revoked, missing a permission). Polling
 	// the supplier stops until a person fixes them; trying again would only risk the account.
 	ErrAuthRejected = errors.New("adapter: the supplier rejected the account credentials")
@@ -271,6 +274,9 @@ type Model struct {
 	UpstreamName string
 	Formats      []protocol.Format
 	Cost         *catalog.Schedule
+	// Published is whether the supplier states a price for the model, Cost nil when no schedule can express it (a
+	// price per call, an expression): a person's confirmed base prices a model only while its supplier states none.
+	Published bool
 	// Derivation is what each price of Cost is the product of, nil when the adapter does not say; it explains Cost and
 	// prices nothing.
 	Derivation Derivation
@@ -342,3 +348,22 @@ type ChargePage struct {
 
 // ScanState is an adapter's own position in a scan, opaque to everyone else.
 type ScanState []byte
+
+// Unsupported is ErrUnsupported for one release: the system Detect recognised, the version it reports (only when it is a
+// plain version string, since it is the supplier's own text), and what the adapter connects instead.
+type Unsupported struct {
+	System, Version, Supported string
+}
+
+func (u *Unsupported) Error() string {
+	version := "of this release"
+	if plainVersion.MatchString(u.Version) {
+		version = u.Version
+	}
+	return fmt.Sprintf("%s %s is not supported yet: Axiom connects %s", u.System, version, u.Supported)
+}
+
+func (*Unsupported) Unwrap() error { return ErrUnsupported }
+
+// plainVersion is a version a build is stamped with, such as v0.13.2 or 0.6.10-preview.7.
+var plainVersion = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+_-]{0,39}$`)

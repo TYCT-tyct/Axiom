@@ -337,6 +337,13 @@ func TestFormatsServeOnlyWhatCanBeSold(t *testing.T) {
 		`{"platform":"openai","status":"active","subscription_type":"subscription"}`:                         nil,
 		`{"platform":"anthropic","status":"active","subscription_type":"standard","peak_rate_enabled":true}`: nil,
 		`{"platform":"gemini","status":"active","subscription_type":"standard"}`:                             nil,
+		`{"platform":"antigravity","status":"active","subscription_type":"standard"}`:                        nil,
+		`{"platform":"kimi","status":"active","subscription_type":"standard"}`:                               {protocol.Chat},
+		`{"platform":"zhipu","status":"active","subscription_type":"standard"}`:                              {protocol.Chat},
+		`{"platform":"typesafe","status":"active","subscription_type":"standard"}`:                           nil,
+		`{"platform":"composite","status":"active","subscription_type":"standard"}`:                          nil,
+		`{"platform":"kiro","status":"active","subscription_type":"standard"}`:                               nil,
+		`{"platform":"kimi","status":"active","subscription_type":"subscription","peak_rate_enabled":true}`:  nil,
 		`{"platform":"openai","status":"inactive","subscription_type":"standard"}`:                           nil,
 		`{"platform":"anthropic","status":"active","subscription_type":"standard","claude_code_only":true}`:  nil,
 	} {

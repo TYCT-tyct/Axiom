@@ -294,12 +294,13 @@ func (q *Queries) ReleaseSyncLease(ctx context.Context, db DBTX, arg ReleaseSync
 
 const requestBalanceSync = `-- name: RequestBalanceSync :exec
 UPDATE suppliers.sync_states
-SET version = $1, state = $2, next_due = LEAST(next_due, $3)
-WHERE supplier_id = $4
+SET version = $1, format = $2, state = $3, next_due = LEAST(next_due, $4)
+WHERE supplier_id = $5
 `
 
 type RequestBalanceSyncParams struct {
 	Version    int64
+	Format     int16
 	State      []byte
 	NextDue    time.Time
 	SupplierID uuid.UUID
@@ -309,6 +310,7 @@ type RequestBalanceSyncParams struct {
 func (q *Queries) RequestBalanceSync(ctx context.Context, db DBTX, arg RequestBalanceSyncParams) error {
 	_, err := db.Exec(ctx, requestBalanceSync,
 		arg.Version,
+		arg.Format,
 		arg.State,
 		arg.NextDue,
 		arg.SupplierID,
@@ -318,13 +320,14 @@ func (q *Queries) RequestBalanceSync(ctx context.Context, db DBTX, arg RequestBa
 
 const resetSyncState = `-- name: ResetSyncState :exec
 UPDATE suppliers.sync_states
-SET version = $1, state = $2, next_due = $3, lease_holder = NULL, lease_until = NULL,
+SET version = $1, format = $2, state = $3, next_due = $4, lease_holder = NULL, lease_until = NULL,
     lease_fence = lease_fence + 1
-WHERE supplier_id = $4
+WHERE supplier_id = $5
 `
 
 type ResetSyncStateParams struct {
 	Version    int64
+	Format     int16
 	State      []byte
 	NextDue    time.Time
 	SupplierID uuid.UUID
@@ -336,6 +339,7 @@ type ResetSyncStateParams struct {
 func (q *Queries) ResetSyncState(ctx context.Context, db DBTX, arg ResetSyncStateParams) error {
 	_, err := db.Exec(ctx, resetSyncState,
 		arg.Version,
+		arg.Format,
 		arg.State,
 		arg.NextDue,
 		arg.SupplierID,

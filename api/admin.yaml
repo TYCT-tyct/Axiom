@@ -4186,7 +4186,8 @@ paths:
       description: >-
         Probes the address through the outbound client, which refuses private and internal addresses, and says which
         adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no
-        `kind`.
+        `kind`. A site an adapter recognises in a release it cannot connect yet (new-api before 1.0, one-api) is 422,
+        and the message names the system and its release.
 
 
         Limits: 10 a minute per session, because each probe is a request to a third party.
@@ -5222,6 +5223,95 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/base-prices:
+    post:
+      operationId: confirmSupplierBasePrices
+      tags: [Suppliers]
+      summary: Confirm the base price of models whose supplier shows no prices
+      description: >-
+        For a relay that states no price for a model (new-api with pricing hidden, sub2api, CPA), a person's base price
+        of it, named by the group and the upstream name the group lists it under, so it can be given before the model
+        has an endpoint. The price is in the supplier's settlement currency: the model's official price in the catalog
+        in that currency when `price` is absent, or the price given. It is kept in the supplier's own unit, divided by
+        the unit value in force and rounded up, and is for the model the name maps to now: a name mapped to another
+        model later does not carry it over. At its next catalog round, which this makes due now, the sync makes the
+        model's cost plan of it times the group's ratio, rounded up once, and the projection makes the endpoint; the
+        plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier states always wins, and one
+        it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name
+        the group does not list is 404; one not mapped to a model yet, a model with no official price in the
+        settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier
+        whose unit value is not confirmed, or that is not a relay, is 409. At most 500 models.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BasePriceConfirmation"}
+      responses:
+        "200":
+          description: The bases as stored, in the supplier's own unit.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BasePriceList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/base-price-removals:
+    post:
+      operationId: clearSupplierBasePrices
+      tags: [Suppliers]
+      summary: Take confirmed base prices away
+      description: >-
+        Removes the confirmed base of each model named; at the sync's next catalog round, made due now, a model the
+        supplier states no price for has its cost unknown again and leaves routing, also when that round cannot read
+        the group's models. The answer is the bases removed; a model that had none is left out, and if none had one
+        nothing changes and nothing is recorded. At most 500.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BasePriceRemoval"}
+      responses:
+        "200":
+          description: The bases removed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BasePriceList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}/keys:
     post:
@@ -12639,6 +12729,55 @@ components:
           type: array
           items: {$ref: "#/components/schemas/CostLine"}
         break_even: {$ref: "#/components/schemas/CostBreakEven"}
+    BaseModel:
+      type: object
+      required: [group_id, upstream_name]
+      description: A model of one of the supplier's groups, by the upstream name the group lists it under.
+      properties:
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_name: {type: string, minLength: 1, maxLength: 200}
+    BasePriceConfirmation:
+      type: object
+      required: [items, reason]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            allOf:
+              - {$ref: "#/components/schemas/BaseModel"}
+              - type: object
+                properties:
+                  price:
+                    allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+                    description: The base in the settlement currency, per unit of each item; absent takes the model's official price.
+        reason: {$ref: "#/components/schemas/Reason"}
+    BasePriceRemoval:
+      type: object
+      required: [items, reason]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: {$ref: "#/components/schemas/BaseModel"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    BasePriceList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            allOf:
+              - {$ref: "#/components/schemas/BaseModel"}
+              - type: object
+                required: [base]
+                properties:
+                  base:
+                    allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+                    description: In the supplier's own unit (currency XXX), before the group's ratio.
     ModelFamily:
       type: string
       pattern: '^[a-z0-9][a-z0-9.-]{0,63}$'

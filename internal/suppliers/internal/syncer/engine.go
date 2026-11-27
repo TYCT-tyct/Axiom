@@ -91,7 +91,7 @@ func New(store Store, mgr adapter.Manager, set Settings, now func() time.Time) *
 
 // clone copies what a Commit may change, so that a step that fails leaves the state it started from.
 func (s State) clone() State {
-	s.Plans, s.Confirmed = maps.Clone(s.Plans), maps.Clone(s.Confirmed)
+	s.Plans, s.Confirmed = maps.Clone(s.Plans), slices.Clone(s.Confirmed)
 	s.Groups, s.Keys = slices.Clone(s.Groups), slices.Clone(s.Keys)
 	return s
 }

@@ -8,9 +8,15 @@
 package syncer
 
 import (
+	"cmp"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -58,6 +64,29 @@ type ModelSnap struct {
 	Formats []int
 	Without protocol.Capabilities
 	Plan    string
+	// Published is whether the supplier stated a price for the model when it was last read, whether or not a schedule
+	// could express it: a model whose models are not read this time keeps that, so a confirmed base does not take the
+	// place of a published price.
+	Published bool `json:",omitzero"`
+	// Confirmed is whether Plan was made of a person's base (State.Confirmed), which a kept model gives up once the
+	// base is cleared and the projection puts in force only for the model the base was confirmed for.
+	Confirmed bool `json:",omitzero"`
+}
+
+// BaseKey names a model of a group the way a confirmed base is kept: the group's ref and the model's upstream name, as
+// two members, so that no two pairs share a key.
+type BaseKey struct {
+	GroupRef, Model string
+}
+
+// ConfirmedBase is a person's base price of one model of a group: a schedule in the supplier's own unit (canonical
+// JSON) that the group's ratio scales into the model's cost plan while the supplier publishes no price for it. For is
+// the catalog model the name mapped to when it was confirmed; the base prices that model only, so a name mapped to
+// another since does not carry it over.
+type ConfirmedBase struct {
+	BaseKey
+	For  string
+	Base string
 }
 
 // GroupSnap is a group as last read.
@@ -69,11 +98,52 @@ type GroupSnap struct {
 	KeyEligible bool `json:"-"`
 }
 
-// PlanKey names an endpoint the way the engine keeps it in its state and the way its cost plans are stored
-// (suppliers.sync_plans.endpoint): the group's ref and the model's upstream name. Every writer and reader of a plan goes
-// through it, because a key built in two places that disagree loses the plan without an error: every endpoint of that
-// name would be left with its cost unknown and no reason in any log.
+// PlanKey names an endpoint the way its cost plans are stored (suppliers.sync_plans.endpoint) and its events name it:
+// the group's ref and the model's upstream name, joined. Two pairs can join alike (a/b with c, a with b/c), so the state
+// keeps plans by BaseKey, and a stored plan is found by this name and its fingerprint together. Every writer and reader
+// of a stored plan goes through it, because a name built in two places that disagree loses the plan without an error.
 func PlanKey(ref, model string) string { return ref + "/" + model }
+
+// Plans is the fingerprint of each endpoint's cost plan in force, by group and model. It is stored as an array of
+// {GroupRef, Model, Plan} sorted by key, since a JSON object is keyed by one string.
+type Plans map[BaseKey]string
+
+// planEntry is one member of the stored form of Plans.
+type planEntry struct {
+	GroupRef, Model, Plan string
+}
+
+// MarshalJSON stores the plans sorted by key, so the same plans store as the same bytes.
+func (p Plans) MarshalJSON() ([]byte, error) {
+	entries := make([]planEntry, 0, len(p))
+	for _, k := range slices.SortedFunc(maps.Keys(p), compareKeys) {
+		entries = append(entries, planEntry{GroupRef: k.GroupRef, Model: k.Model, Plan: p[k]})
+	}
+	return jsonx.MarshalCanonical(entries)
+}
+
+// UnmarshalJSON reads what MarshalJSON stored; a key stored twice is not a form it writes.
+func (p *Plans) UnmarshalJSON(b []byte) error {
+	var entries []planEntry
+	if err := jsonx.UnmarshalKnown(b, &entries); err != nil {
+		return err
+	}
+	out := make(Plans, len(entries))
+	for _, e := range entries {
+		k := BaseKey{GroupRef: e.GroupRef, Model: e.Model}
+		if _, twice := out[k]; twice {
+			return fmt.Errorf("syncer: the plan of %s in %s is stored twice", e.Model, e.GroupRef)
+		}
+		out[k] = e.Plan
+	}
+	*p = out
+	return nil
+}
+
+// compareKeys orders keys by group, then model.
+func compareKeys(a, b BaseKey) int {
+	return cmp.Or(strings.Compare(a.GroupRef, b.GroupRef), strings.Compare(a.Model, b.Model))
+}
 
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
 // 「持久化」).
@@ -89,10 +159,12 @@ type State struct {
 	Funding     adapter.Funding
 	LowNotified bool // a BalanceLow event has been sent and the balance has not recovered
 
-	Groups    []GroupSnap // sorted by Ref
-	Keys      []adapter.KeyState
-	Plans     map[string]string // "group/model" -> fingerprint of the current cost plan
-	Confirmed map[string]string // model -> a person's confirmed base schedule (JSON); scaled by the group's ratio
+	Groups []GroupSnap // sorted by Ref
+	Keys   []adapter.KeyState
+	Plans  Plans
+	// Confirmed are the bases a person confirmed, sorted by key and one per key. Only the admin writes them
+	// (persist.ConfirmBases); the engine and the projection read them.
+	Confirmed []ConfirmedBase
 
 	// Pool is what the management API of a pool last said of each group's accounts and windows, sorted by group ref.
 	// It lives in the groups' own columns, not in the stored state (json:"-"): the state's format is what an older node
@@ -212,3 +284,15 @@ type KeyFailure struct {
 	Reason   string
 	RetryAt  time.Time
 }
+
+// Base is the confirmed base of a model of a group, if there is one.
+func (s State) Base(k BaseKey) (ConfirmedBase, bool) {
+	i, found := slices.BinarySearchFunc(s.Confirmed, k, compareBase)
+	if !found {
+		return ConfirmedBase{}, false
+	}
+	return s.Confirmed[i], true
+}
+
+// compareBase orders confirmed bases by their key.
+func compareBase(b ConfirmedBase, k BaseKey) int { return compareKeys(b.BaseKey, k) }

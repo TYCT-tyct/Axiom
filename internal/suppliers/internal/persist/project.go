@@ -36,8 +36,8 @@ type projector struct {
 	mapBy      syncer.Catalog // what a name maps by: the snapshot, with drafts under the rule `known` (withDrafts)
 	nativeUnit string
 	now        time.Time
-	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
-	plans      map[string]store.PlanVersion
+	aliases    map[aliasKey]alias                      // the supplier's aliases, by the group they hold in
+	plans      map[planRef]store.PlanVersion           // by the stored name and the fingerprint: names can join alike (syncer.PlanKey)
 	rule       intakeRule                              // which mapped names become endpoints
 	offerRead  bool                                    // this commit holds a complete offer listing
 	groupRows  map[string]store.ListProjectedGroupsRow // what the tables held before the listing was applied
@@ -128,7 +128,7 @@ func (p *projector) readAliases(ctx context.Context) (map[aliasKey]alias, error)
 
 // readPlans reads the schedules of the cost plans in force. The engine keeps only their fingerprints in its state, and a
 // name mapped after its plan was worked out must still find that plan: it is read back from where every version is kept.
-func (p *projector) readPlans(ctx context.Context) (map[string]store.PlanVersion, error) {
+func (p *projector) readPlans(ctx context.Context) (map[planRef]store.PlanVersion, error) {
 	var keys []store.PlanVersion
 	for _, g := range p.st.Groups {
 		for _, m := range g.Models {
@@ -141,12 +141,15 @@ func (p *projector) readPlans(ctx context.Context) (map[string]store.PlanVersion
 	if err != nil {
 		return nil, fmt.Errorf("read the cost plans: %w", err)
 	}
-	out := make(map[string]store.PlanVersion, len(rows))
+	out := make(map[planRef]store.PlanVersion, len(rows))
 	for _, r := range rows {
-		out[r.Endpoint] = r
+		out[planRef{endpoint: r.Endpoint, fingerprint: r.Fingerprint}] = r
 	}
 	return out, nil
 }
+
+// planRef is a version of a stored plan: the endpoint's stored name and the plan's fingerprint.
+type planRef struct{ endpoint, fingerprint string }
 
 // groups makes and changes the groups of the listing and returns their ids by the supplier's ref. A group is made
 // unselected here; autoSelect puts the ones with a priced endpoint in use unless a person has chosen for them.
@@ -308,10 +311,11 @@ func (p *projector) hasPricedEndpoint(g syncer.GroupSnap, group uuid.UUID, state
 		if m.Plan == "" || len(m.Formats) == 0 {
 			continue
 		}
-		if state := states[nameKey{group: group, name: m.Name}]; state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
+		state := states[nameKey{group: group, name: m.Name}]
+		if state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
 			continue
 		}
-		if v, ok := p.plans[syncer.PlanKey(g.Ref, m.Name)]; ok && v.Fingerprint == m.Plan {
+		if _, ok := p.planOf(g.Ref, m, state.model); ok {
 			return true
 		}
 	}

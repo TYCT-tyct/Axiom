@@ -83,7 +83,7 @@ func RequestSync(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) ([]
 		return nil, err
 	}
 	if err := q.RequestBalanceSync(ctx, tx, store.RequestBalanceSyncParams{
-		SupplierID: id, Version: st.Version, State: raw, NextDue: nextDue(st),
+		SupplierID: id, Version: st.Version, Format: format, State: raw, NextDue: nextDue(st),
 	}); err != nil {
 		return nil, err
 	}
