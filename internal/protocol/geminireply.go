@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"cmp"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -147,8 +148,9 @@ type chatError struct {
 }
 
 // geminiError is Google's error object: the status as code and its google.rpc name, with the message; Axiom's own
-// error type rides in details as ErrorInfo's reason, as Google puts a machine-readable cause.
-func geminiError(status int, e chatError) jsonx.Raw {
+// error type rides in details as ErrorInfo's reason, as Google puts a machine-readable cause. The usage of a reply that
+// failed after its content goes beside it, so what was charged stays in sight.
+func geminiError(status int, e chatError, usage *chatUsageCounts) jsonx.Raw {
 	name := geminiStatuses[status]
 	if name == "" {
 		name = map[bool]string{true: "INTERNAL", false: "INVALID_ARGUMENT"}[status >= 500]
@@ -162,7 +164,11 @@ func geminiError(status int, e chatError) jsonx.Raw {
 			"@type": jsonValue("type.googleapis.com/google.rpc.ErrorInfo"), "reason": jsonValue(meta.ErrorType), "domain": jsonValue("axiom"),
 		}})
 	}
-	return jsonValue(requestObject{"error": jsonValue(out)})
+	body := requestObject{"error": jsonValue(out)}
+	if usage != nil {
+		body["usageMetadata"] = jsonValue(usage.gemini())
+	}
+	return jsonValue(body)
 }
 
 // chatReply is a Chat chunk or completion as the relay writes it.
@@ -218,25 +224,28 @@ type geminiFrame struct {
 // NewGeminiReply is the reply for a request GeminiToChat converted with opts.
 func NewGeminiReply(opts GeminiOptions) *GeminiReply { return &GeminiReply{opts: opts} }
 
-// Event converts one Chat stream event's data into a Gemini stream event's data, or nil when it has nothing for one:
-// the end marker, or a chunk that only opened a call.
+// Event converts one Chat stream event's data into the Gemini stream events it makes, framed as server-sent events:
+// none for the end marker with nothing held or a chunk that only opened a call, two for an error after content.
 func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	if string(data) == sse.Done {
-		return g.release(nil), nil
+		return events(g.release(nil)), nil
 	}
 	var c chatReply
 	if err := jsonx.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
-	if c.Error != nil {
-		return geminiErrorEvent(*c.Error), nil
+	if c.Error != nil { // what was held back and the usage go out before the error that ends the stream
+		if g.held == nil && g.last == nil && c.Usage != nil {
+			g.held = &geminiFrame{c: c}
+		}
+		return events(g.release(c.Usage), geminiErrorEvent(*c.Error)), nil
 	}
 	parts, finish := g.chunkParts(c)
 	parts, g.last = append(g.last, parts...), nil
 	switch {
 	case g.held != nil:
 		g.held.parts = append(g.held.parts, parts...)
-		return g.release(c.Usage), nil
+		return events(g.release(c.Usage)), nil
 	case finish != "" && c.Usage == nil:
 		g.held = &geminiFrame{c, parts, finish}
 		return nil, nil
@@ -246,7 +255,18 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	if len(parts) == 0 && finish == "" && c.Usage == nil {
 		return nil, nil
 	}
-	return geminiResponseOf(c, parts, finish), nil
+	return events(geminiResponseOf(c, parts, finish)), nil
+}
+
+// events frames the data of each event there is as a server-sent event; nil for none.
+func events(data ...[]byte) []byte {
+	var out []byte
+	for _, d := range data {
+		if d != nil {
+			out = sse.AppendEvent(out, "", d)
+		}
+	}
+	return out
 }
 
 // chunkParts are a chunk's parts and the finish reason it gives first: a call's parts come whole at the finish.
@@ -288,7 +308,7 @@ func geminiErrorEvent(e chatError) jsonx.Raw {
 	if err != nil || status == 0 {
 		status = 502 // an error event's code is the status Axiom wrote it with
 	}
-	return geminiError(status, e)
+	return geminiError(status, e, nil)
 }
 
 func (g *GeminiReply) deltaParts(parts []geminiPart, d *chatReplyMessage) []geminiPart {
@@ -357,17 +377,23 @@ func geminiResponseOf(c chatReply, parts []geminiPart, finish string) jsonx.Raw 
 	return jsonValue(out)
 }
 
-// Body converts a whole Chat reply, or the error a call answered with, into Gemini's.
-func (g *GeminiReply) Body(status int, body []byte) ([]byte, error) {
+// Body converts a whole Chat reply, or the error a call answered with, into Gemini's, with the status to answer it at.
+// A reply that failed after its content, which Chat answers 200 with the content and the error, is a 502 with the
+// error and the usage, as Messages answers it: Gemini has no answer that holds both, and its SDKs would read a 200 as
+// an empty reply (docs/domains/gateway.md「错误」).
+func (g *GeminiReply) Body(status int, body []byte) (int, []byte, error) {
 	var c chatReply
 	if err := jsonx.Unmarshal(body, &c); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if c.Error != nil || status >= 400 {
 		if c.Error == nil {
 			c.Error = &chatError{Message: "The request failed."}
 		}
-		return geminiError(status, *c.Error), nil
+		if status < 400 {
+			status = http.StatusBadGateway
+		}
+		return status, geminiError(status, *c.Error, c.Usage), nil
 	}
 	var parts []geminiPart
 	finish := ""
@@ -386,7 +412,7 @@ func (g *GeminiReply) Body(status int, body []byte) ([]byte, error) {
 			finish = geminiFinishOf(*choice.FinishReason)
 		}
 	}
-	return geminiResponseOf(c, parts, finish), nil
+	return status, geminiResponseOf(c, parts, finish), nil
 }
 
 // GeminiErrorBody is Gemini's error object for a Chat-shaped error body answered with status: what a Gemini client
@@ -396,7 +422,7 @@ func GeminiErrorBody(status int, body []byte) []byte {
 	if jsonx.Unmarshal(body, &c) != nil || c.Error == nil {
 		c.Error = &chatError{Message: strings.TrimSpace(string(body))}
 	}
-	return geminiError(status, *c.Error)
+	return geminiError(status, *c.Error, nil)
 }
 
 func cmpOrPtr(a, b *string) *string {

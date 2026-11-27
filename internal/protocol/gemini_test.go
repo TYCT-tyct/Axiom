@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"syscall"
 	"testing"
@@ -296,19 +297,22 @@ func TestGeminiReplyEndsTextWithParts(t *testing.T) {
 	}
 }
 
-// geminiEvents is the Gemini events the reply makes of a Chat stream.
+// geminiEvents is the data of the Gemini events the reply makes of a Chat stream.
 func geminiEvents(t *testing.T, reply *protocol.GeminiReply, chat []byte) []string {
 	t.Helper()
-	var events []string
+	var stream []byte
 	r := sse.NewReader(bytes.NewReader(chat), 1<<20)
 	for data, err := r.Next(); err == nil; data, err = r.Next() {
 		out, err := reply.Event(data)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out != nil {
-			events = append(events, string(out))
-		}
+		stream = append(stream, out...)
+	}
+	var events []string
+	r = sse.NewReader(bytes.NewReader(stream), 1<<20)
+	for data, err := r.Next(); err == nil; data, err = r.Next() {
+		events = append(events, string(data))
 	}
 	return events
 }
@@ -320,7 +324,7 @@ func TestGeminiReplyBody(t *testing.T) {
 	if whole.err != nil {
 		t.Fatal(whole.err)
 	}
-	body, err := protocol.NewGeminiReply(protocol.GeminiOptions{Thoughts: true}).Body(whole.status, whole.body)
+	_, body, err := protocol.NewGeminiReply(protocol.GeminiOptions{Thoughts: true}).Body(whole.status, whole.body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,4 +335,31 @@ func TestGeminiReplyBody(t *testing.T) {
 	}
 	sameJSON(t, `{"error":{"code":429,"message":"Slow down.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"rate_limited","domain":"axiom"}]}}`,
 		protocol.GeminiErrorBody(429, []byte(`{"error":{"message":"Slow down.","type":"rate_limit_error","param":"","code":429,"metadata":{"error_type":"rate_limited"}}}`)))
+}
+
+// geminiCutOff is a Gemini stream that broke off after some text and its usage.
+const geminiCutOff = `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` +
+	`"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"totalTokenCount":13}}` + "\n\n"
+
+// A reply that fails after its first content reaches a Gemini client with what it was charged for: a whole reply, which
+// Chat answers 200 with the content and the error, is a 502 with the error and the usage, as Messages answers (Gemini
+// has no answer holding both); a stream gives the text it held back and the usage before the error that ends it.
+func TestGeminiReplyFailsAfterContent(t *testing.T) {
+	t.Parallel()
+	const usage = `"usageMetadata":{"candidatesTokenCount":3,"promptTokenCount":10,"totalTokenCount":13}` // as written, in key order
+	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff))), protocol.NewMemory(64<<20), unsettled)
+	if whole.status != http.StatusOK {
+		t.Fatalf("Chat answered %d: %s", whole.status, whole.body)
+	}
+	status, body, err := protocol.NewGeminiReply(protocol.GeminiOptions{}).Body(whole.status, whole.body)
+	if err != nil || status != http.StatusBadGateway || !strings.Contains(string(body), `"code":502`) || !strings.Contains(string(body), usage) {
+		t.Errorf("the whole reply is %d (%v): %s", status, err, body)
+	}
+	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff))),
+		protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
+	events := geminiEvents(t, protocol.NewGeminiReply(protocol.GeminiOptions{}), chat.out)
+	if n := len(events); n < 2 || !strings.Contains(events[n-2], `{"text":"Half"}`) || !strings.Contains(events[n-2], usage) ||
+		!strings.HasPrefix(events[n-1], `{"error":`) {
+		t.Errorf("Gemini events:\n%s", strings.Join(events, "\n"))
+	}
 }

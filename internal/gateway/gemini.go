@@ -226,7 +226,7 @@ func (g *geminiWriter) event(event []byte) error {
 	if err != nil || out == nil {
 		return err
 	}
-	_, err = g.out.Write(append(append([]byte("data: "), out...), "\n\n"...))
+	_, err = g.out.Write(out)
 	return err
 }
 
@@ -236,9 +236,9 @@ func (g *geminiWriter) finish() error {
 	if g.stream || g.status == 0 {
 		return nil
 	}
-	body, err := g.replyOf().Body(g.status, g.pending)
+	status, body, err := g.replyOf().Body(g.status, g.pending)
 	if err != nil {
-		body = protocol.GeminiErrorBody(g.status, g.pending)
+		status, body = g.status, protocol.GeminiErrorBody(g.status, g.pending)
 	}
 	err = http.NewResponseController(g.ResponseWriter).SetWriteDeadline(time.Now().Add(g.writeFor))
 	if err != nil && !errors.Is(err, http.ErrNotSupported) {
@@ -246,7 +246,7 @@ func (g *geminiWriter) finish() error {
 	}
 	g.Header().Set("Content-Type", "application/json")
 	g.Header().Set("Cache-Control", "no-store")
-	g.ResponseWriter.WriteHeader(g.status)
+	g.ResponseWriter.WriteHeader(status)
 	writeBody(g.ResponseWriter, body)
 	return nil
 }
