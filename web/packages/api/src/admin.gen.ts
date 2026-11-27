@@ -4347,7 +4347,7 @@ export interface components {
             id?: string;
             /** Format: email */
             email?: string;
-            /** @description HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do), so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use. */
+            /** @description HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do, in the path; some in the host), so it is stored sealed and read back masked, host included (https://…/…<last 4 characters>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use. */
             webhook_url?: string;
             /** @description A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots. */
             feishu_url?: string;

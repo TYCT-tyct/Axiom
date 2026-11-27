@@ -3577,7 +3577,7 @@ type AlertChannel struct {
 	// TelegramChatId The Telegram chat a bot posts to: a numeric ID or a public @username. The bot's token is set with the channel secret before use. Exactly one destination member is set; configure only after all nodes support bots.
 	TelegramChatId *string `json:"telegram_chat_id,omitempty"`
 
-	// WebhookUrl HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do), so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use.
+	// WebhookUrl HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do, in the path; some in the host), so it is stored sealed and read back masked, host included (https://…/…<last 4 characters>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use.
 	WebhookUrl *string `json:"webhook_url,omitempty"`
 
 	// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
@@ -3608,7 +3608,7 @@ type AlertConfigurationRequest struct {
 		// TelegramChatId The Telegram chat a bot posts to: a numeric ID or a public @username. The bot's token is set with the channel secret before use. Exactly one destination member is set; configure only after all nodes support bots.
 		TelegramChatId *string `json:"telegram_chat_id,omitempty"`
 
-		// WebhookUrl HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do), so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use.
+		// WebhookUrl HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do, in the path; some in the host), so it is stored sealed and read back masked, host included (https://…/…<last 4 characters>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use.
 		WebhookUrl *string `json:"webhook_url,omitempty"`
 
 		// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.

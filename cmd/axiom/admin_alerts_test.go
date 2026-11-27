@@ -131,4 +131,12 @@ func TestAdminWebhookPreflightUsesDomainValidation(t *testing.T) {
 			t.Fatalf("invalid webhook reached egress: %v", err)
 		}
 	}
+	// A masked address sent back stands for the sealed one, which was checked when it was saved: it has no host to check.
+	body, err := adminJSON[adminapi.AlertConfigurationRequest](observability.AlertConfiguration{Channels: []observability.AlertChannel{{ID: "hook", WebhookURL: "https://…/…hook"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (adminAPI{}).checkAlertDestinations(t.Context(), &body); err != nil {
+		t.Fatalf("a masked webhook sent back was refused: %v", err)
+	}
 }

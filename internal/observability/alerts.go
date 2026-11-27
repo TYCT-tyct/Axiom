@@ -200,11 +200,16 @@ func validateAlertChannel(ch AlertChannel) error {
 }
 
 // AlertChannelHost is the host a notification on ch connects to, "" for mail, once ch names exactly one valid
-// destination. Configuration validation and the admin's egress preflight outside the transaction share it.
+// destination. Configuration validation and the admin's egress preflight outside the transaction share it. A masked
+// address stands for the sealed one, whose host was checked when it was saved, so it has none to check again; whether
+// it may stand for one is SealAlertAddresses' to say.
 func AlertChannelHost(ch AlertChannel) (string, error) {
 	k, dest, ok := kindOf(ch)
-	if !ok {
+	switch {
+	case !ok:
 		return "", ErrAlertConfiguration
+	case k.addressSecret && masked(dest):
+		return "", nil
 	}
 	return k.check(dest)
 }

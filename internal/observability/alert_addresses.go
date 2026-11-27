@@ -18,13 +18,19 @@ const maskMark = "/…"
 // masked reports whether an address is the masked form the configuration returns, not one that can be posted to.
 func masked(address string) bool { return strings.Contains(address, maskMark) }
 
-// maskAddress is what the configuration shows of a sealed address: its host and its last four characters.
-func maskAddress(address string) string {
+// maskAddress is what the configuration shows of a sealed address: its host, unless the host may itself be the
+// secret (a generic webhook's, which a receiver can make unguessable), and its last four characters, whole runes.
+func maskAddress(address string, hideHost bool) string {
 	u, err := url.Parse(address)
 	if err != nil {
 		return maskMark
 	}
-	return "https://" + u.Host + maskMark + address[max(0, len(address)-4):]
+	host := u.Host
+	if hideHost {
+		host = "…"
+	}
+	r := []rune(address)
+	return "https://" + host + maskMark + string(r[max(0, len(r)-4):])
 }
 
 func addressDigest(channel, address string) string {
@@ -80,7 +86,7 @@ func sealAddress(ctx context.Context, tx pg.Tx, keys *secret.Keyring, ch *AlertC
  VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO NOTHING`, id, ch.ID, ch.AddressDigest, s.Ciphertext, s.Nonce, s.WrappedDEK, int64(s.KeyVersion)); err != nil {
 		return err
 	}
-	*k.field(ch) = maskAddress(address)
+	*k.field(ch) = maskAddress(address, k.hideHost)
 	return nil
 }
 

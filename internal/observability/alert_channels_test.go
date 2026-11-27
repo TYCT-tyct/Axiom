@@ -414,7 +414,7 @@ func saveChannel(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel)
 }
 
 // TestAddressesAreWriteOnly: an address that may carry a credential, a bot's or a generic webhook's (Slack's and
-// Discord's carry a token in their path), is read back only masked, a save that sends the masked form keeps the sealed
+// Discord's carry a token in their path, a workflow's trigger in its host), is read back only masked, a save that sends the masked form keeps the sealed
 // address, and a masked form is no address for a channel that has none.
 func TestAddressesAreWriteOnly(t *testing.T) {
 	db := openDB(t)
@@ -426,7 +426,9 @@ func TestAddressesAreWriteOnly(t *testing.T) {
 		masked string
 	}{
 		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, wecomKey, "https://qyapi.weixin.qq.com/…6789"},
-		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookPath}, hookPath, "https://hooks.slack.com/…4321"},
+		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookPath}, hookPath, "https://…/…4321"},
+		// The host may be the part that is secret, and the last characters are counted as characters, not bytes.
+		{AlertChannel{ID: "flow", WebhookURL: "https://eo1a2b3c4d.m.pipedream.net/告警"}, "eo1a2b3c4d", "https://…/…t/告警"},
 	} {
 		configureBot(t, db, keys, tc.ch, "", time.Now())
 		c := readAlertConfig(t, db)
