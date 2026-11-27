@@ -234,7 +234,11 @@ function WhereFields({ type, choice, onChoose, error }: ChoiceProps) {
             label:
               e.account === undefined
                 ? t("upstream.types.entryOption", { origin: e.origin, currency: e.currency })
-                : t("upstream.types.entryAccountOption", { account: e.account, origin: e.origin, currency: e.currency }),
+                : t("upstream.types.entryAccountOption", {
+                    account: e.account,
+                    origin: e.origin,
+                    currency: e.currency,
+                  }),
           }))}
         />
       ) : null}
