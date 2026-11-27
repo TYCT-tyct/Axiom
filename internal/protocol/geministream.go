@@ -60,10 +60,10 @@ func (s *chatFromGemini) Read(p []byte) (int, error) {
 			s.end()
 			s.err = io.EOF
 		case err != nil:
-			s.err = err
+			s.broke(err)
 		default:
 			if err := s.event(data); err != nil {
-				s.err = err
+				s.broke(err)
 			}
 		}
 	}
@@ -76,6 +76,15 @@ func (s *chatFromGemini) Read(p []byte) (int, error) {
 }
 
 func (s *chatFromGemini) Close() error { return s.src.Close() }
+
+// broke ends a stream that failed to read, or read something that is not Gemini's: what Gemini reported before it is
+// sent on the error chunk, which the relay bills, and the failure follows.
+func (s *chatFromGemini) broke(err error) {
+	if !s.finished && s.usage != nil {
+		s.fail(502, "The Gemini stream broke off before the reply finished.")
+	}
+	s.err = err
+}
 
 func (s *chatFromGemini) event(data []byte) error {
 	if s.finished {

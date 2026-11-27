@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
@@ -184,6 +186,7 @@ func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 		name, stream string
 		failed       bool
 		want         map[catalog.Item]int64
+		reset        bool // the connection is reset after the stream's bytes
 	}{
 		{
 			"audio and image tokens",
@@ -191,24 +194,33 @@ func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 				`"promptTokensDetails":[{"modality":"TEXT","tokenCount":4},{"modality":"AUDIO","tokenCount":3},{"modality":"IMAGE","tokenCount":2}],` +
 				`"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}]}}` + "\n\n",
 			false,
-			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2},
+			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2}, false,
 		},
 		{
 			"cut off after reporting",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
 			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, false,
+		},
+		{
+			"reset after reporting",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
+			true, map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, true,
 		},
 		{
 			"a malformed call after reporting",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}],` + usage + `}` + "\n\n",
 			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, false,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(c.stream))),
+			var src io.Reader = strings.NewReader(c.stream)
+			if c.reset {
+				src = io.MultiReader(src, iotest.ErrReader(syscall.ECONNRESET))
+			}
+			got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(src)),
 				protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 			if failed := errors.Is(got.err, protocol.ErrUpstream); failed != c.failed {
 				t.Fatalf("error %v, want failed %v", got.err, c.failed)
