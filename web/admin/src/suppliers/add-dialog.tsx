@@ -230,7 +230,11 @@ function WhereFields({ type, choice, onChoose, error }: ChoiceProps) {
           onChange={(event) => onChoose({ entry: event.target.value })}
           options={type.entries.map((e) => ({
             value: e.id,
-            label: t("upstream.types.entryOption", { origin: e.origin, currency: e.currency }),
+            // A vendor whose account, not the address, decides the price list names the account the entry is for.
+            label:
+              e.account === undefined
+                ? t("upstream.types.entryOption", { origin: e.origin, currency: e.currency })
+                : t("upstream.types.entryAccountOption", { account: e.account, origin: e.origin, currency: e.currency }),
           }))}
         />
       ) : null}

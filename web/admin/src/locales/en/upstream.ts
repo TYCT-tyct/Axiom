@@ -337,6 +337,7 @@ export default {
     change: "Change",
     entry: "Price entry",
     entryOption: "{{origin}} · {{currency}}",
+    entryAccountOption: "{{account}} · {{origin}} ({{currency}})",
     entryModels: "This entry sells {{count}} of the catalog's models.",
     form: "Credential form",
     forms: { api_key: "API key", access_key: "Access key", service_account: "Service account" },

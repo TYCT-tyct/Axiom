@@ -335,6 +335,7 @@ export default {
     change: "换一个",
     entry: "价目入口",
     entryOption: "{{origin}} · {{currency}}",
+    entryAccountOption: "{{account}} · {{origin}}（{{currency}}）",
     entryModels: "这个入口能卖目录里的 {{count}} 个模型。",
     form: "凭证形式",
     forms: { api_key: "API Key", access_key: "访问密钥", service_account: "服务账号" },
