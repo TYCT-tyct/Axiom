@@ -15,6 +15,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/payments"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
@@ -203,13 +204,21 @@ func (g *journeyGateway) calls(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, strings.Join(paths, "\n")) //nolint:errcheck // a test server
 }
 
-// open lets the site take top-ups: one EasyPay merchant account in the site's own currency, taking alipay, so the
-// order's price needs no exchange rate.
+// open lets the site take top-ups: one EasyPay merchant account taking alipay. EasyPay charges in yuan, so the
+// dollar site's order is priced in CNY at a set reference rate.
 func (g *journeyGateway) open(w *callWorld) {
 	g.t.Helper()
 	ctx := g.t.Context()
-	usd, err := platform.ParseCurrency("USD")
+	cny, err := platform.ParseCurrency("CNY")
 	if err != nil {
+		g.t.Fatal(err)
+	}
+	if err = w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := billing.SetExchangeRate(ctx, tx, audit.System("journey"), billing.ExchangeInput{
+			Base: "USD", Quote: "CNY", Numerator: "36", Denominator: "5", Kind: "initial", Reason: "journey setup",
+		})
+		return err
+	}); err != nil {
 		g.t.Fatal(err)
 	}
 	client := egress.NewForTesting(egresstest.Loopback(g.t, g.server.Certificate()))
@@ -222,7 +231,7 @@ func (g *journeyGateway) open(w *callWorld) {
 	}
 	settings := `{"gateway":"` + g.server.URL + `","pid":"1001","mode":"api","cids":{"alipay":"2"},"query":true}`
 	if _, err = pay.SaveMerchant(ctx, pg.PlatformScope(), audit.System("journey"), payments.MerchantInput{
-		Site: w.site, Kind: "easypay", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
+		Site: w.site, Kind: "easypay", Name: "Gateway", Enabled: true, Currency: cny, TTLSeconds: 1800,
 		Settings: []byte(settings), Secrets: map[string]secret.Secret{"key": secret.New("journey-gateway-key")},
 		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Enabled: true}},
 	}, "journey setup"); err != nil {

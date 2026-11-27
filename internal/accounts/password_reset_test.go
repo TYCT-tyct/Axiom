@@ -367,8 +367,19 @@ func TestPasswordResetDisabledAndUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	x.s.UsePasswordRecovery(recovery)
-	if err := x.s.RequestPasswordReset(t.Context(), accounts.PasswordResetRequest{Host: console, Email: x.email}); !errors.Is(err, accounts.ErrBusy) {
+	if err := x.s.RequestPasswordReset(t.Context(), accounts.PasswordResetRequest{Host: console, Email: x.email}); !errors.Is(err, accounts.ErrMailDisabled) {
 		t.Fatalf("disabled SMTP: %v", err)
+	}
+	// A change must mail its notice, so without mail it is refused as plainly, and the site says so before anyone asks.
+	p, err := x.principal(t, console, x.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: "a new long password", ClientIP: client}); !errors.Is(err, accounts.ErrMailDisabled) {
+		t.Fatalf("a password change without mail: %v", err)
+	}
+	if x.s.MailEnabled() {
+		t.Fatal("a node without SMTP says it sends mail")
 	}
 }
 

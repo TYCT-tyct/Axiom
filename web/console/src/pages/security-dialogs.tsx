@@ -8,8 +8,9 @@ import {
   useShowRecoveryCodes,
   useStartSession,
 } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import { Button, Cluster, Dialog, Field, FormError, Stack, SubmitButton } from "@axiom/ui";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { sessionsQuery, validatePasswordChange, validateTotpReplace } from "./security-data";
@@ -70,10 +71,12 @@ export function ChangePasswordDialog({
   const [confirm, setConfirm] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const { change, serverError } = useChangePassword(onSaved, onClose);
+  // The change must mail its notice: a node without mail refuses it, so the dialog says why before anything is typed.
+  const noMail = useQuery(siteQuery).data?.email_delivery === false;
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (change.isPending) return;
+    if (change.isPending || noMail) return;
     const issue = validatePasswordChange(current, next, confirm);
     if (issue) return setValidationError(t(passwordErrorKeys[issue]));
     setValidationError(null);
@@ -85,6 +88,7 @@ export function ChangePasswordDialog({
       <form onSubmit={submit} noValidate>
         <Stack gap={16}>
           <p>{t("security.password.dialogBody")}</p>
+          {noMail ? <FormError>{t("security.password.noMail")}</FormError> : null}
           {(validationError ?? serverError) ? <FormError>{validationError ?? serverError}</FormError> : null}
           <Field
             label={t("security.password.current")}
@@ -114,7 +118,9 @@ export function ChangePasswordDialog({
             <Button onClick={onClose} disabled={change.isPending}>
               {t("security.cancel")}
             </Button>
-            <SubmitButton pending={change.isPending}>{t("security.password.submit")}</SubmitButton>
+            <SubmitButton pending={change.isPending} disabled={noMail}>
+              {t("security.password.submit")}
+            </SubmitButton>
           </Cluster>
         </Stack>
       </form>

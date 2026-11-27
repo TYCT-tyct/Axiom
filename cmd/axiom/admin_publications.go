@@ -56,10 +56,14 @@ func (a adminAPI) PublishSalePrice(ctx context.Context, r adminapi.PublishSalePr
 		current = &id
 	}
 	body, replayed, err := idempotently(ctx, a.db, "publishSalePrice", r.Params.IdempotencyKey, []any{r.ModelId, r.Body}, func(tx pg.Tx) (adminapi.PricePublicationList, error) {
-		if err := refreshSalePrices(ctx, tx, uuid.UUID(site.ID), site.Currency); err != nil {
+		in, err := salePriceInputs(ctx, tx, uuid.UUID(site.ID), site.Currency)
+		if err != nil {
 			return adminapi.PricePublicationList{}, err
 		}
-		_, err := billing.PublishPrice(ctx, tx, actor(ctx), uuid.UUID(site.ID), model, candidate, current, r.Body.Confirmed, r.Body.OverrideFloor, r.Body.Reason)
+		if _, err := billing.RefreshPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, in.Snapshot, in.Costs, in.Rates...); err != nil {
+			return adminapi.PricePublicationList{}, err
+		}
+		_, err = billing.PublishPrice(ctx, tx, actor(ctx), uuid.UUID(site.ID), model, candidate, current, r.Body.Confirmed, r.Body.OverrideFloor, r.Body.Reason, in)
 		if err != nil {
 			return adminapi.PricePublicationList{}, pricingProblem(err, "/")
 		}

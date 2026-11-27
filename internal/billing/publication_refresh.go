@@ -39,16 +39,46 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	if err != nil {
 		return nil, err
 	}
-	// Reconcile previous selectors too: an edit may have moved the rule to a different audience.
-	for audience, rules := range grouped {
-		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, previous[audience], rates); err != nil {
-			return nil, err
-		}
+	refresh := func(audience Selector, bases map[catalog.ModelID]scaledBase) error {
+		return refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, grouped[audience], bases, previous[audience], rates)
+	}
+	if err := refreshEveryoneFirst(ctx, tx, site, policy, grouped, refresh); err != nil {
+		return nil, err
 	}
 	if err := queries.ConfirmPriceRefresh(ctx, tx, site); err != nil {
 		return nil, err
 	}
 	return PublishedPrices(ctx, tx, site)
+}
+
+// refreshEveryoneFirst refreshes the price for all accounts before the other audiences: a default multiplier scales the
+// price for all as it is published after that refresh, so a tier moves with a published price for all in the same
+// refresh, and never with one that waits for confirmation. Previous selectors are reconciled too: an edit may have
+// moved a rule to another audience.
+func refreshEveryoneFirst(ctx context.Context, tx pg.Tx, site uuid.UUID, policy PricePolicy, grouped map[Selector][]Rule,
+	refresh func(Selector, map[catalog.ModelID]scaledBase) error,
+) error {
+	everyone := Selector{Kind: "all"}
+	if err := refresh(everyone, nil); err != nil {
+		return err
+	}
+	rows, err := queries.ReadPublications(ctx, tx, site)
+	if err != nil {
+		return err
+	}
+	bases, err := publishedBases(rows, policy)
+	if err != nil {
+		return err
+	}
+	for audience := range grouped {
+		if audience == everyone {
+			continue
+		}
+		if err := refresh(audience, bases); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][]Rule, map[Selector]map[catalog.ModelID]ReadPublicationsRow) {
@@ -74,13 +104,17 @@ func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][
 	return grouped, previous
 }
 
-func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow, rates []platform.ExchangeRate) error {
+func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, bases map[catalog.ModelID]scaledBase, previous map[catalog.ModelID]ReadPublicationsRow, rates []platform.ExchangeRate) error {
 	for m := range snap.Models() {
 		old := previous[m.ID]
 		if audience.Kind != "all" && old.CandidateID == uuid.Nil() && !slices.ContainsFunc(rules, func(r Rule) bool { return r.Enabled && pricesModel(r.Target, m) }) {
 			continue
 		}
-		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults, rates...)
+		var base *scaledBase
+		if b, ok := bases[m.ID]; ok {
+			base = &b
+		}
+		p, err := proposeAudiencePrice(audience, policy, rules, base, m, snap, currency, costs[m.ID], defaults, rates...)
 		if err != nil {
 			return err
 		}
@@ -114,6 +148,11 @@ func reconcilePrice(ctx context.Context, tx pg.Tx, site uuid.UUID, policy PriceP
 	current, status, err := publicationDecision(policy, p, old)
 	if err != nil {
 		return Sold{}, err
+	}
+	// A scaled price moves only with a price for all that was published, or with its own rule, which an administrator
+	// changed: its size was reviewed there, so it does not wait for a second confirmation.
+	if p.scaled && status == "pending" {
+		status = "published"
 	}
 	p.Status = status
 	if status == "published" {

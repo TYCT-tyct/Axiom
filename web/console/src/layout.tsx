@@ -12,6 +12,7 @@ import { siteQuery } from "@axiom/login";
 import {
   BoardMark,
   BoardShell,
+  Notice,
   pressBoardButton,
   useBoardMedia,
   useFormat,
@@ -142,6 +143,13 @@ function parts(money: string) {
   return { balanceCurrency: currency, balanceWhole: whole, balanceFraction: fraction };
 }
 
+// CallsPaused says before a key is refused that the account's calls are paused; the session names it, and the reason
+// stays with the staff (docs/domains/accounts.md「停用与注销」).
+function CallsPaused() {
+  const { t } = useTranslation();
+  return useSession().calls_paused ? <Notice>{t("shell.callsPaused")}</Notice> : null;
+}
+
 export function Layout() {
   const { t } = useTranslation();
   const site = useQuery(siteQuery);
@@ -151,6 +159,7 @@ export function Layout() {
   const notices = (
     <>
       <NewVersionNotice />
+      <CallsPaused />
       <SignOutError error={signOut.error} />
     </>
   );

@@ -147,6 +147,9 @@ linters:
       # Table-driven tests are long by nature and repeat a shape on purpose.
       - path: _test\.go
         linters: [funlen, dupl]
+      # The error tables, one file per module, are rows of the same shape on purpose: any two of a similar length match.
+      - path: ^cmd/axiom/(admin|console)_errors_[a-z]+\.go$
+        linters: [dupl]
       - path: ^(cmd|tools)/ # programs, which print their results and build the platform scope
         linters: [forbidigo]
         text: use of `(fmt\.Print|print|pg\.PlatformScope)

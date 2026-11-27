@@ -24,6 +24,7 @@
 | 文本形状权重 | `tokenkit/tokenkit.go`（`e449cc7`，用 54 段会话文本校准） | — | — |
 | 分词器 | `tiktoken-go/tokenizer`（`service/token_counter.go`，`206e0fa`） | 同（`openai_gateway_count_tokens.go`，`8f2cbb5`） | — |
 | 记账 | 付款金额存在充值单（`model/topup.go` 的 `Money float64`），无复式账本 | 订单上存付款金额和币种，浮点折算（`service/payment_fulfillment.go`、`payment_amounts.go`） | `GET /api/v1/credits` 只有总额度和总用量 |
+| 等级加价（2026-11-26 核对） | 模型倍率 × 分组倍率（`relay/helper/price.go:121`） | 费用 × 分组倍率，用户专属倍率覆盖分组默认（`billing_service.go:1806`、`user_group_rate_resolver.go:44`） | 没有等级 |
 | BYOK | — | — | 按本应收取价格的 5%（`BYOK_FEE_PERCENTAGE = '5'`），PAYG 每月 $25,000 免收 |
 
 ## 官方价格（2026-10 到 2026-11 查）

@@ -34,11 +34,11 @@ func merchantJSON(site, name string, enabled bool, rev int64, feeFixed string, w
 	}
 	return fmt.Sprintf(`{
 		%s"merchant": {
-			%s"kind": "easypay", "name": %q, "enabled": %t, "currency": "USD", "ttl_seconds": 1800,
+			%s"kind": "easypay", "name": %q, "enabled": %t, "currency": "CNY", "ttl_seconds": 1800,
 			"refund_enabled": false, "user_refund": false, "sort": 1,
 			"settings": {"gateway": "https://pay.example.com", "pid": "1001", "mode": "redirect"},
 			%s"methods": [{"method": "alipay", "upstream": "alipay", "fee_ppm": 30000,
-				"fee_fixed": {"amount": %q, "currency": "USD"}, "enabled": true}]
+				"fee_fixed": {"amount": %q, "currency": "CNY"}, "enabled": true}]
 		}, "reason": "configured the gateway for the site"
 	}`, siteField, revField, name, enabled, secrets, feeFixed)
 }
@@ -137,7 +137,7 @@ func checkMerchantSealed(t *testing.T, f adminFixture) {
 	}
 	f.expectAudit("merchant.create", map[string]string{
 		"reason":                "configured the gateway for the site",
-		"detail->>'currency'":   "USD",
+		"detail->>'currency'":   "CNY",
 		"detail->>'enabled'":    "false",
 		"detail->>'kind'":       "easypay",
 		"detail->>'name'":       "Gateway",
