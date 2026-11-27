@@ -18,6 +18,8 @@ import { useTranslation } from "react-i18next";
 import { useLines } from "../lines";
 import { Code } from "../parts";
 import type { SupplierView } from "../queries";
+import { takesBases, targetOf } from "./base-price";
+import { ConfirmBaseDialog } from "./base-price-dialogs";
 import { EndpointEnabledDialog, QuantizationDialog } from "./dialogs";
 import { EndpointDrawer } from "./endpoint-drawer";
 import { EndpointTestDialog } from "./endpoint-test-dialog";
@@ -27,6 +29,7 @@ import { MapDialog, type Unmatched } from "./map-dialog";
 import type { Open } from "./open";
 import { BuiltState } from "./parts";
 import { supplierModelsQuery } from "./queries";
+import { Unpriced, useListed } from "./unpriced";
 import { byFamily, modeOf } from "./upstream";
 
 type Mode = AdminSchemas["SupplierIntakeMode"];
@@ -41,6 +44,7 @@ export default function SupplierModelsTab({ detail, endpoint }: { detail: Suppli
     <>
       {detail.intake_rule && modeOf(detail.supplier) === "relay" ? <Rule detail={detail} manage={manage} /> : null}
       <Review detail={detail} manage={manage} />
+      {manage && takesBases(detail.supplier) ? <Unpriced detail={detail} /> : null}
       <Piles detail={detail} manage={manage} endpoint={endpoint} />
     </>
   );
@@ -171,6 +175,8 @@ function Listed({ detail, manage, endpoint }: { detail: SupplierView; manage: bo
   const [open, setOpen] = useState<Open | null>(null);
   const { supplier } = detail;
   const opened = detail.endpoints?.find((one) => one.id === endpoint);
+  const bases = manage && takesBases(supplier);
+  const listed = useListed(supplier.id, bases);
   const line = (groupId: string) => byGroup.get(groupId)?.name ?? supplier.name;
   const show = (id: string | undefined) =>
     void navigate({
@@ -184,6 +190,7 @@ function Listed({ detail, manage, endpoint }: { detail: SupplierView; manage: bo
       <Endpoints
         endpoints={detail.endpoints}
         groups={detail.groups}
+        baseOf={(one) => (bases ? targetOf(one, listed.find) : undefined)}
         onOpen={manage ? setOpen : undefined}
         onShow={(one) => show(one.id)}
       />
@@ -203,6 +210,9 @@ function Listed({ detail, manage, endpoint }: { detail: SupplierView; manage: bo
       ) : null}
       {open?.kind === "quantization" ? (
         <QuantizationDialog supplier={supplier} endpoint={open.endpoint} onClose={close} />
+      ) : null}
+      {open?.kind === "basePrice" ? (
+        <ConfirmBaseDialog supplier={supplier} target={open.target} onClose={close} />
       ) : null}
     </>
   );
