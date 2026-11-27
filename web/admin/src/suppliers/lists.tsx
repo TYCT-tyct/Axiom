@@ -74,11 +74,14 @@ const endpointTones = {
 export function Endpoints({
   endpoints,
   groups,
+  priceable,
   onOpen,
   onShow,
 }: {
   endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
   groups: AdminSchemas["SupplierGroup"][];
+  // Whether a person can confirm the base price of an endpoint whose cost is unknown: a relay's, which states no price.
+  priceable: boolean;
   onOpen: OnOpen;
   onShow: (endpoint: AdminSchemas["SupplierEndpoint"]) => void;
 }) {
@@ -107,6 +110,7 @@ export function Endpoints({
             key={endpoint.id}
             endpoint={endpoint}
             group={groupName(groups, endpoint.group_id)}
+            priceable={priceable}
             onOpen={onOpen}
             onShow={() => onShow(endpoint)}
           />
@@ -119,11 +123,13 @@ export function Endpoints({
 function EndpointRow({
   endpoint,
   group,
+  priceable,
   onOpen,
   onShow,
 }: {
   endpoint: AdminSchemas["SupplierEndpoint"];
   group: string;
+  priceable: boolean;
   onOpen: OnOpen;
   onShow: () => void;
 }) {
@@ -155,6 +161,15 @@ function EndpointRow({
           >
             {t("upstream.byModel.details")}
           </ActionButton>
+          {onOpen && priceable && endpoint.cost_state === "unknown" ? (
+            <ActionButton
+              size="sm"
+              aria-label={t("upstream.basePrice.openFor", { name: endpoint.upstream_name, group })}
+              onClick={() => onOpen({ kind: "basePrice", endpoint })}
+            >
+              {t("upstream.basePrice.open")}
+            </ActionButton>
+          ) : null}
           {onOpen ? <EndpointChanges endpoint={endpoint} group={group} state={state} onOpen={onOpen} /> : null}
         </Cluster>
       </Td>

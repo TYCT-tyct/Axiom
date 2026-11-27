@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { useLines } from "../lines";
 import { Code } from "../parts";
 import type { SupplierView } from "../queries";
+import { baseOf, ConfirmBaseDialog } from "./base-price-dialogs";
 import { EndpointEnabledDialog, QuantizationDialog } from "./dialogs";
 import { EndpointDrawer } from "./endpoint-drawer";
 import { EndpointTestDialog } from "./endpoint-test-dialog";
@@ -27,6 +28,7 @@ import { MapDialog, type Unmatched } from "./map-dialog";
 import type { Open } from "./open";
 import { BuiltState } from "./parts";
 import { supplierModelsQuery } from "./queries";
+import { Unpriced } from "./unpriced";
 import { byFamily, modeOf } from "./upstream";
 
 type Mode = AdminSchemas["SupplierIntakeMode"];
@@ -41,6 +43,7 @@ export default function SupplierModelsTab({ detail, endpoint }: { detail: Suppli
     <>
       {detail.intake_rule && modeOf(detail.supplier) === "relay" ? <Rule detail={detail} manage={manage} /> : null}
       <Review detail={detail} manage={manage} />
+      {manage && modeOf(detail.supplier) === "relay" ? <Unpriced detail={detail} /> : null}
       <Piles detail={detail} manage={manage} endpoint={endpoint} />
     </>
   );
@@ -184,6 +187,7 @@ function Listed({ detail, manage, endpoint }: { detail: SupplierView; manage: bo
       <Endpoints
         endpoints={detail.endpoints}
         groups={detail.groups}
+        priceable={modeOf(supplier) === "relay"}
         onOpen={manage ? setOpen : undefined}
         onShow={(one) => show(one.id)}
       />
@@ -203,6 +207,9 @@ function Listed({ detail, manage, endpoint }: { detail: SupplierView; manage: bo
       ) : null}
       {open?.kind === "quantization" ? (
         <QuantizationDialog supplier={supplier} endpoint={open.endpoint} onClose={close} />
+      ) : null}
+      {open?.kind === "basePrice" ? (
+        <ConfirmBaseDialog supplier={supplier} target={baseOf(open.endpoint)} onClose={close} />
       ) : null}
     </>
   );

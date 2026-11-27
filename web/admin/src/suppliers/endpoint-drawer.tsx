@@ -17,11 +17,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { showRate } from "../models/price-fields";
 import { Code } from "../parts";
+import { baseOf, ClearBaseDialog, ConfirmBaseDialog } from "./base-price-dialogs";
 import { EndpointEnabledDialog, QuantizationDialog } from "./dialogs";
 import { endpointState, testFormats } from "./endpoint-test";
 import { EndpointTestDialog } from "./endpoint-test-dialog";
 import { BuiltState, Rate, useTraffic } from "./parts";
 import { endpointCostQuery } from "./queries";
+import { modeOf } from "./upstream";
 
 type Supplier = AdminSchemas["Supplier"];
 type Endpoint = AdminSchemas["SupplierEndpoint"];
@@ -87,7 +89,7 @@ export function EndpointDrawer({
         ]}
       />
       <DrawerSection title={t("upstream.endpoint.cost")}>
-        <CostSection supplier={supplier} endpoint={endpoint} />
+        <CostSection supplier={supplier} endpoint={endpoint} priceable={manage && modeOf(supplier) === "relay"} />
       </DrawerSection>
       {open === "enable" ? (
         <EndpointEnabledDialog supplier={supplier} endpoint={endpoint} group={line} onClose={() => setOpen(null)} />
@@ -100,11 +102,49 @@ export function EndpointDrawer({
   );
 }
 
-function CostSection({ supplier, endpoint }: { supplier: Supplier; endpoint: Endpoint }) {
+// A relay's endpoint whose cost is unknown can be given a base price here, and one priced by a confirmed base can have
+// it taken away.
+function CostSection({
+  supplier,
+  endpoint,
+  priceable,
+}: {
+  supplier: Supplier;
+  endpoint: Endpoint;
+  priceable: boolean;
+}) {
+  const { t } = useTranslation();
   const cost = useQuery(endpointCostQuery(supplier.id, endpoint.id));
+  const [open, setOpen] = useState<"confirm" | "clear" | null>(null);
+  const close = () => setOpen(null);
+  const action = (plan: Cost) => {
+    if (!priceable) return null;
+    if (plan.cost_state === "unknown") return "confirm";
+    return plan.source === "confirmed" ? "clear" : null;
+  };
   return (
     <BuiltState query={cost} compact>
-      {(plan) => <PriceLines plan={plan} />}
+      {(plan) => {
+        const offered = action(plan);
+        return (
+          <>
+            <PriceLines plan={plan} />
+            {offered ? (
+              <Cluster>
+                <ActionButton size="sm" onClick={() => setOpen(offered)}>
+                  {t(offered === "confirm" ? "upstream.basePrice.open" : "upstream.basePrice.clear")}
+                </ActionButton>
+              </Cluster>
+            ) : null}
+            {open === "confirm" ? (
+              <ConfirmBaseDialog supplier={supplier} target={baseOf(endpoint)} onClose={close} />
+            ) : null}
+            {open === "clear" ? (
+              <ClearBaseDialog supplier={supplier} target={baseOf(endpoint)} onClose={close} />
+            ) : null}
+          </>
+        );
+      }}
     </BuiltState>
   );
 }

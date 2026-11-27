@@ -137,6 +137,40 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await close(page);
   });
 
+  test("a relay model with no published price is put on sale at the official base price, then cleared", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page, "usual");
+    signedInAs(state, "mfa");
+    const detail = state.suppliers[1];
+    const endpoint = detail?.endpoints.find((one) => one.upstream_name === "unpriced-model");
+    if (!detail?.groups[0] || !endpoint) throw new Error("the usual data has supplier 2's unpriced endpoint");
+    detail.supplier.unit_value = "1";
+    detail.groups[0].ratio = "1.5";
+    endpoint.model_id = uuid(5, 1);
+    await page.goto(`/suppliers/${uuid(2, 2)}?tab=models`);
+    await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
+    const row = page.getByRole("row").filter({ hasText: "unpriced-model" });
+    await expect(row).toContainText(zhText("suppliers.endpoints.state.unknown"));
+
+    await page.getByRole("button", { name: "确认 unpriced-model 的底价（分组 Maple 2）" }).click();
+    // the official price is the default: input 3 per million tokens, which costs 4.5 after the group ratio 1.5
+    await expect(dialog(page).getByText("4.5", { exact: true })).toBeVisible();
+    await send(page, "the supplier publishes no price");
+    await expect(done(page)).toBeVisible();
+    expect(endpoint.cost_state).toBe("known");
+    await close(page);
+    await expect(row).toContainText(zhText("suppliers.endpoints.state.ready"));
+
+    await page.getByRole("button", { name: "打开 unpriced-model 的价目和检测" }).click();
+    await expect(page.getByText(zhText("upstream.endpoint.sources.confirmed"))).toBeVisible();
+    await press(page, "upstream.basePrice.clear").click();
+    await send(page, "the supplier published its price");
+    await expect(done(page)).toBeVisible();
+    await expect(dialog(page)).toContainText(zhText("upstream.basePrice.cleared"));
+    expect(endpoint.cost_state).toBe("unknown");
+  });
+
   test("credential concurrency and RPM ceiling validate bounds, save and clear RPM", async ({ page }) => {
     const state = await open(page, `/suppliers/${uuid(2, 1)}?tab=keys`);
     // the key's drawer holds its limits

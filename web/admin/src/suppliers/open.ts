@@ -8,4 +8,4 @@ export type Open =
   | { kind: "credentialLimits"; credential: AdminSchemas["SupplierCredential"] }
   | { kind: "test"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
   | { kind: "endpointEnabled"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
-  | { kind: "quantization"; endpoint: AdminSchemas["SupplierEndpoint"] };
+  | { kind: "quantization" | "basePrice"; endpoint: AdminSchemas["SupplierEndpoint"] };
