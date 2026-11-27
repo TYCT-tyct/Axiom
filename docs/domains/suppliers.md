@@ -36,7 +36,7 @@
 
 现有的内置适配器：
 
-- **普通用户身份**：new-api 1.0（个人访问令牌；0.13 只识别、不接入）、sub2api（邮箱密码或令牌，加刷新令牌）。
+- **普通用户身份**：new-api 1.0（个人访问令牌）、new-api 0.13 和 one-api（系统访问令牌加用户 ID）、sub2api（邮箱密码或令牌，加刷新令牌）。
 - **管理员身份，用于自建号池**：sub2api 管理接口、CPA（CLIProxyAPI，Go 适配器加常驻采集器），见「号池」和「CPA」。
 - **官方 API（直连接口）**：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口，各一个适配器，共用 `direct` 包；OpenAI 的也服务账户自带的 key。三种主流协议的调用面同时是转换和检测的基准。云平台 Vertex AI、Bedrock、Azure OpenAI 共用 `cloud` 包。
 
@@ -108,6 +108,7 @@
 - **分组**：`SelectGroup` 选用或取消，不能选用已不在清单里的分组，取消不受限。
 - **凭证上限**：`SetLimits` 一起设并发（至少 1）和每分钟请求（1 到 100,000 或空，省略或 null 即清除）；值没变时不动、不审计；凭证已擦除或供应商已移除时拒绝。
 - **端点**：`setSupplierEndpointEnabled` 启停端点，没变也审计；同步从不写这一列，停用的一直停着，各节点下一次重建快照生效；管理接口的启用同时重置端点熔断，运营工具 `endpoint_set_enabled` 不重置（见[端点评估](quality.md#三条摘除通道各归各的主人)）。`setSupplierEndpointQuantization` 记录或清除 OpenRouter 的 12 个量化级别之一，未记录是 NULL，不等于 `unknown`；路由按它匹配 `provider.quantizations`（见[接入的路由参数](gateway.md#路由参数)）。
+- **确认基础价**：`confirmSupplierBasePrices` 给不公布价格的中转站逐端点定基础价，存在同步状态的 `Confirmed`（键是分组 ref/上游名）：默认取目录的美元官方价，也可手填美元价目表；按供应商单位存（new-api 倍率 1 是 $0.002/1K token，即每美元 500,000 quota，不看站点的 `quota_per_unit`）。同一事务抬高状态版本和配置代次、把目录任务提前到现在；下一轮按基础价 × 分组倍率生成计划，对方公布的价优先。`clearSupplierBasePrices` 取消，下一轮回到成本未知；没有可取消的不动、不审计。
 - **接入分组**：`connectSupplierGroup` 在一个事务里选中没有凭证的分组并给它 key。`make` 先确认分组还在清单里、没有凭证，再经适配器的 `KeyMaker` 用同步给 key 起的名字建 key、读出文字：先建后查会在对方留下一把无限额、不到期、哪里都没存的 key。`paste` 先经适配器的 `KeyFinder` 找出对方列的那把 key，核对它在这个分组、状态正常（停用、过期、额度用尽的 422），并照对方清单存下它的模型限制和到期时间，下一次完整清单照常更新。凭证 `active`、并发 4、不设每分钟上限。对方的请求在幂等事务之外先发，重放直接回第一次的结果；事务里在锁下再查一次分组。
 - **识别 key**：`identifySupplierKey` 问对方一段文字是哪把 key、在哪个分组，什么也不存，每会话每分钟 10 次。new-api 和 sub2api 实现 `KeyFinder`，都以文字整段相同为准，且文字和它的任何部分都不发给对方：两家的按文字搜索都把文字放在查询串里，会进对方的访问日志（new-api `middleware/logger.go`）。所以都翻同步用的那份 key 清单、在本地比：new-api 的清单把 key 遮成前四后四，遮法相同的是候选，读回候选的原文（关键限速桶）按常数时间比较，候选超过 5 个不算答案；sub2api 的清单直接给原文，逐页按常数时间比较。代价是 key 多的账号要翻多页（每页 100 个，至多 100 页）。CPA、声明式适配器 422。
 - **贴 key**：`addSupplierKeys` 逐把处理：同一请求里重复的、对方的 ref 已经存过的是 `duplicate`；对方列在别的分组的、对方不列但检测能通过的（别的账号的 key）是 `wrong_group`；其余发一次检测，通过的才存，各成一条凭证（`source` 为 `pasted`，`hint` 是末四位），带上对方清单给的模型限制和到期时间。幂等指纹只含末四位。直连接口的 key 不带分组，见[直连接口与云平台](suppliers-direct.md)。
@@ -212,8 +213,9 @@
 
 ### new-api
 
-- **识别**：`/api/status` 有应答且带 `X-Oneapi-Request-Id`；有 `/api/user/login/encryption-key` 是 1.0，否则 0.13（不接入，`Open` 报凭证被拒）。
+- **识别**：`/api/status` 有应答且带 `X-Oneapi-Request-Id`；有 `/api/user/login/encryption-key` 是 1.0，否则 `data` 有 `setup` 是 0.13，没有是 one-api。
 - **登录**：个人访问令牌加过期时间，需要 `profile:read`（账号、分组、模型）、`wallet:read`（订阅）、`usage:read`（扣费记录）、`api_key:read`、`api_key:write`，读原文还要 `api_key:reveal`。管理接口的 401/403 按固定的 `code` 清单报凭证被拒，错误里没有对方的文字；缺权限同样停掉轮询，但原因写明缺哪个权限，告警是「同步需处理」而不是登录失效。key 的 ID 只许数字。
+- **旧版**（0.13、one-api，实测 v0.13.2、one-api v0.6.10）：登录是系统访问令牌加用户 ID（`Authorization` 加 `New-Api-User`），打开时读一次 `/api/status` 分辨两者；令牌无效时对方回 200 `success:false`，只在读 `/api/user/self` 时算登录被拒。0.13 的 `/api/user/models` 不认分组、回并集，有价的模型只进价格表 `enable_groups` 写的分组，价格表把令牌请求当匿名。one-api 没有价格表、订阅和可见的分组倍率：唯一分组按倍率 1 记、事实带 `ratio_shown:false`，确认的基础价要已含站点倍率；key 清单给原文。日志没有 `request_id` 的版本（one-api v0.6.10、v0.10.8 之前的 new-api）对不了账，扣费任务读到第一条记录就停下。
 - **读取**：余额是整数 `quota`，单位提示是 `quota_per_unit`；有生效订阅即资金来源不支持。倍率写 `auto` 的分组不收，倍率缺失或不是数字是认不出。key 状态 1 到 4 对应正常、停用、过期、额度用尽，模型限制读 `model_limits_enabled`、`model_limits`，到期读 `expired_time`（-1 不到期），权限字段缺失时全拒。
 - **成本计划**（币种 `XXX`，单位是每 token 多少 quota）：输入 = `model_ratio × 分组倍率`，输出 = 输入 × `completion_ratio`，缓存读 × `cache_ratio`（缺省 1），缓存写 × `create_cache_ratio`（缺省 1.25），一小时缓存写 = 缓存写 × 1.6；精确分数计算，向上取整到 15 位小数，不低于对方的价。按次计费、`tiered_expr`、倍率缺失或超上限的没有成本计划；`image_ratio` 显式且不为 1 的不声明图片能力；推理按输出价。
 - **建 key**：响应不回 ID，按名字和分组找回最小 ID，还没列出就是任务失败、下一轮认领；`ACCESS_TOKEN_SCOPE_DENIED` 是无权限，200 `success:false` 是拒绝。
@@ -228,7 +230,7 @@
 - **桶**：登录 5/分、刷新 7/分（按 IP），面板 60/分、用量 15/分、号池 30/分（按账号），是对方默认的四分之一。
 - **读取**：有生效订阅即资金来源不是钱包；每个分组用一把可用的 key 读模型和含高峰的倍率，key 余额为 0 读不了时保留上次的模型。key 没有模型级限制，到期读 `expires_at`。普通用户读不到渠道把模型映射成什么、按哪个名字计费，公布的价不算数（见「决策与理由」），成本计划为空，直到人确认底价，按目录官方价乘分组倍率生成（与售价同一取整）。报文里的数字只接受 JSON 数字。
 - **建 key**：带 `Idempotency-Key: <name>`；403 `GROUP_NOT_ALLOWED` 是分组不可用，其他 403 是无权限，404 分组不在，400/409 拒绝。
-- **调用面**：`anthropic` 分组服务 Messages，`openai` 分组服务 Responses 和 Chat；订阅、高峰、只许 Claude Code 客户端（`claude_code_only`，事实里标出）和其他平台的分组不服务。对账键是 `client:` 加 `X-Client-Request-Id`；不传递取消（对方读完上游并全额扣费）。
+- **调用面**：按平台所走的网关定格式：Anthropic 网关（`anthropic`、`typesafe`）服务 Messages；OpenAI 网关服务 Chat，`openai` 另加 Responses；`gemini` 服务 Messages 和 Chat（对方转成 Gemini 请求），`antigravity` 服务 Messages。订阅分组（高峰倍率只能开在订阅分组上）、只许 Claude Code 客户端（`claude_code_only`，事实里标出）、`composite`（服务端按模型选平台，普通用户看不到）和表外平台的分组不服务。对账键是 `client:` 加 `X-Client-Request-Id`；不传递取消（对方读完上游并全额扣费）。
 - **扣费扫描**：同一套水位（重叠 5 分钟、滞后 30 秒、每天补扫 24 小时）；接口只认日期，所以按 key 逐把读，每页 200 条。只有记录写了的计费项算已报告；非 token 计费带未知用量；`billing_type` 不是 0 的不是钱包。
 
 ### CPA（CLIProxyAPI）
@@ -264,6 +266,8 @@ Go 适配器加常驻采集器，不在声明式里：它的用量队列读一�
 | 三档适配器 | 自研中转站大多只是路径和字段名不同，用配置就能接；配置做不到的才交给浏览器 |
 | 声明式是启动时编译的部署文件，不存数据库 | 坏声明在启动时让节点起不来，而不是首次同步才失败；后台保存即生效要另一套分发、版本和回滚 |
 | CPA 另写 Go 适配器和常驻采集器，用 staging 表 | 读一条删一条的队列不满足可重读的契约；弹出后马上落一份持久副本，重放幂等、坏记录可查 |
+| 基础价按端点存在同步状态里，以美元填、按供应商单位存 | 它是同步算计划的输入，与计划同一个栅栏；别名按分组映射，默认的官方价取这个分组映射到的模型；美元是 new-api、sub2api 运营者定价用的币种 |
+| 旧版 new-api 和 one-api 用同一个适配器，登录多一个用户 ID | 两者与 1.0 同源，差异只在鉴权和几处报文；new-api 0.13 不带 `New-Api-User` 的请求一律 401 |
 | CPA 成本保持未知，等管理员确认基础价 | 给零成本会让 `cost_plus` 售价也成零，把订阅费摊到每次调用是没有来源的单价 |
 | 每个适配器独立成包，移除只删目录和一行 | 自研中转站的适配以后要能干净移除 |
 | 号池用自建的现成系统、以管理员接入、按分组路由 | 订阅账号的登录和风控由这些系统的社区维护，账号调度交给它们 |
