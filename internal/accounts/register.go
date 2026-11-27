@@ -177,29 +177,33 @@ func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, re
 	if language == "" {
 		language = "en"
 	}
-	var id uuid.UUID
 	err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(d.site)), func(tx pg.Tx) error {
-		var inviter *uuid.UUID
-		var err error
-		if r.InviteCode != "" {
-			if inviter, err = s.registrationInviter(ctx, tx, uuid.UUID(d.site), r.InviteCode); err != nil {
-				return err
-			}
-		}
-		id, err = s.queries.InsertRegistrationRequest(ctx, tx, InsertRegistrationRequestParams{
+		return s.storeRegistrationRequest(ctx, tx, r.InviteCode, InsertRegistrationRequestParams{
 			ID: uuid.NewV7(), SiteID: uuid.UUID(d.site), EmailHash: emailHash[:], Email: email,
-			TierID: registration.DefaultTierID, Domain: strings.ToLower(r.Host), Language: language, InviterUserID: inviter,
+			TierID: registration.DefaultTierID, Domain: strings.ToLower(r.Host), Language: language,
 		})
-		if err != nil {
-			return err
-		}
-		_, err = s.registration.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: registrationArgs{ID: id}}})
-		return err
 	})
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("register: %w", err)
 	}
 	return RegisterResult{Pending: true}, nil
+}
+
+// storeRegistrationRequest writes the pending request with the inviter code names, if any, and queues its mail.
+func (s *Service) storeRegistrationRequest(ctx context.Context, tx pg.Tx, code string, request InsertRegistrationRequestParams) error {
+	if code != "" {
+		inviter, err := s.registrationInviter(ctx, tx, request.SiteID, code)
+		if err != nil {
+			return err
+		}
+		request.InviterUserID = inviter
+	}
+	id, err := s.queries.InsertRegistrationRequest(ctx, tx, request)
+	if err != nil {
+		return err
+	}
+	_, err = s.registration.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: registrationArgs{ID: id}}})
+	return err
 }
 
 // registrationInviter is the user an open registration's invite code names, or ErrInvalidInvite for a code that would
