@@ -70,9 +70,54 @@ function Login({ error, proxy }: { error: unknown; proxy?: Proxy }) {
   );
 }
 
-export function CreateProxy({ proxies, onClose }: { proxies: readonly Proxy[]; onClose: () => void }) {
+// What cannot change after the proxy is made: its id and where it is.
+function Identity({ error }: { error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  return (
+    <>
+      <Grid min="16rem">
+        <Field
+          label={t("egress.id")}
+          hint={t("egress.idHint")}
+          name="id"
+          maxLength={32}
+          autoComplete="off"
+          error={errors.field(error, "id")}
+        />
+        <Field label={t("egress.name")} name="name" maxLength={200} error={errors.field(error, "name")} />
+      </Grid>
+      <Grid min="12rem">
+        <Select label={t("egress.scheme")} name="scheme" defaultValue="http">
+          {schemes.map((scheme) => (
+            <option key={scheme} value={scheme}>
+              {scheme}
+            </option>
+          ))}
+        </Select>
+        <Field
+          label={t("egress.host")}
+          hint={t("egress.hostHint")}
+          name="host"
+          maxLength={253}
+          autoComplete="off"
+          error={errors.field(error, "host")}
+        />
+        <Field
+          label={t("egress.port")}
+          name="port"
+          type="number"
+          min={1}
+          max={65535}
+          error={errors.field(error, "port")}
+        />
+      </Grid>
+    </>
+  );
+}
+
+export function CreateProxy({ proxies, onClose }: { proxies: readonly Proxy[]; onClose: () => void }) {
+  const { t } = useTranslation();
   return (
     <ChangeDialog
       operation="egress-proxy-create"
@@ -81,42 +126,7 @@ export function CreateProxy({ proxies, onClose }: { proxies: readonly Proxy[]; o
       action={t("egress.create")}
       fields={(error) => (
         <>
-          <Grid min="16rem">
-            <Field
-              label={t("egress.id")}
-              hint={t("egress.idHint")}
-              name="id"
-              maxLength={32}
-              autoComplete="off"
-              error={errors.field(error, "id")}
-            />
-            <Field label={t("egress.name")} name="name" maxLength={200} error={errors.field(error, "name")} />
-          </Grid>
-          <Grid min="12rem">
-            <Select label={t("egress.scheme")} name="scheme" defaultValue="http">
-              {schemes.map((scheme) => (
-                <option key={scheme} value={scheme}>
-                  {scheme}
-                </option>
-              ))}
-            </Select>
-            <Field
-              label={t("egress.host")}
-              hint={t("egress.hostHint")}
-              name="host"
-              maxLength={253}
-              autoComplete="off"
-              error={errors.field(error, "host")}
-            />
-            <Field
-              label={t("egress.port")}
-              name="port"
-              type="number"
-              min={1}
-              max={65535}
-              error={errors.field(error, "port")}
-            />
-          </Grid>
+          <Identity error={error} />
           <Login error={error} />
           <Fallback proxies={proxies} />
           <StatusSelect current="active" />

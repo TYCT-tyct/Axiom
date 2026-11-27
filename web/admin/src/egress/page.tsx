@@ -68,31 +68,12 @@ function Proxies({ manage }: { manage: boolean }) {
           }
         >
           {(view) => (
-            <Table label={t("egress.listTitle")}>
-              <Head
-                cols={[
-                  [t("egress.name"), { main: true }],
-                  t("egress.scheme"),
-                  [t("egress.address"), { from: "sm" }],
-                  t("egress.inUse"),
-                  t("egress.status"),
-                ]}
-                action={manage}
-              />
-              <tbody>
-                {view.data.map((proxy) => (
-                  <Row
-                    key={proxy.id}
-                    proxy={proxy}
-                    proxies={view.data}
-                    exits={exits}
-                    manage={manage}
-                    onEdit={() => setEditing({ kind: "edit", id: proxy.id })}
-                    onRemove={() => setEditing({ kind: "remove", id: proxy.id })}
-                  />
-                ))}
-              </tbody>
-            </Table>
+            <ProxyTable
+              proxies={view.data}
+              exits={exits}
+              manage={manage}
+              open={(kind, id) => setEditing({ kind, id })}
+            />
           )}
         </DataState>
       </Card>
@@ -109,6 +90,47 @@ function Proxies({ manage }: { manage: boolean }) {
         />
       ) : null}
     </>
+  );
+}
+
+function ProxyTable({
+  proxies,
+  exits,
+  manage,
+  open,
+}: {
+  proxies: readonly Proxy[];
+  exits: Exits;
+  manage: boolean;
+  open: (kind: "edit" | "remove", id: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Table label={t("egress.listTitle")}>
+      <Head
+        cols={[
+          [t("egress.name"), { main: true }],
+          t("egress.scheme"),
+          [t("egress.address"), { from: "sm" }],
+          t("egress.inUse"),
+          t("egress.status"),
+        ]}
+        action={manage}
+      />
+      <tbody>
+        {proxies.map((proxy) => (
+          <Row
+            key={proxy.id}
+            proxy={proxy}
+            proxies={proxies}
+            exits={exits}
+            manage={manage}
+            onEdit={() => open("edit", proxy.id)}
+            onRemove={() => open("remove", proxy.id)}
+          />
+        ))}
+      </tbody>
+    </Table>
   );
 }
 
