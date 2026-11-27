@@ -145,7 +145,7 @@ const connectDetails = scene(
     await press(p, "upstream.add");
     await p
       .getByRole("dialog")
-      .getByRole("option", { name: /New API/ })
+      .getByRole("button", { name: /New API/ })
       .click();
     await p.getByRole("dialog").locator("input[name=origin]").fill("https://api.example.cn");
     await p.getByRole("dialog").locator("button[type=submit]").click();

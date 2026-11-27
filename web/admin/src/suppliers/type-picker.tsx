@@ -1,13 +1,13 @@
-import { ActionButton, Field } from "@axiom/ui";
-import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ActionButton, Cluster, Field, type RowItem, RowList, Stack, Text } from "@axiom/ui";
+import type { TFunction } from "i18next";
+import { type KeyboardEvent, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { VendorIcon } from "./icons/vendor-icon";
 import { findTypes, modelCount, type SupplierType, typeLine, unsellable } from "./supplier-types";
-import s from "./type-picker.module.css";
 
-// The type picker of 添加上游账号: a query over the types, a combobox whose list keeps the groups' order. Focus stays in
-// the query; the arrow keys, Home and End move the active option and Enter takes it. A type with nothing to sell yet is
-// listed greyed with the reason, and cannot be taken.
+// The type picker of 添加上游账号: a query over the types, listed under their groups' headings, each a button. Enter in
+// the query takes the first type found; the arrow keys, Home and End move between the types (and up out of the first,
+// back to the query). A type with nothing to sell yet is a disabled button whose line says why.
 export function TypePicker({
   types,
   onPick,
@@ -16,174 +16,102 @@ export function TypePicker({
   onPick: (type: SupplierType) => void;
 }) {
   const { t } = useTranslation();
-  const id = useId();
   const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const sections = useMemo(() => findTypes(types, query), [types, query]);
-  const rows = sections.flatMap((section) => section.types);
-  const choose = (type: SupplierType | undefined) => {
-    if (type && !unsellable(type)) onPick(type);
-  };
-  const cursor = useCursor(rows, choose);
   useEffect(() => input.current?.focus(), []);
+  const move = moveFocus(input, list);
   return (
-    <div className={s.root}>
+    <Stack gap={8}>
       <Field
         ref={input}
         label={t("upstream.types.search")}
         placeholder={t("upstream.types.placeholder")}
         value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          cursor.reset();
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            enabled(list.current)[0]?.click();
+          } else if (event.key === "ArrowDown") move(event);
         }}
-        onKeyDown={cursor.keys}
-        role="combobox"
-        aria-expanded="true"
-        aria-controls={`${id}-list`}
-        aria-activedescendant={rows.length > 0 ? `${id}-${cursor.active}` : undefined}
         autoComplete="off"
         spellCheck={false}
       />
-      {rows.length === 0 ? (
-        <p className={s.empty} role="status">
-          {t("upstream.types.empty", { query: query.trim() })}
-        </p>
+      {sections.length === 0 ? (
+        <Text tone="muted">{t("upstream.types.empty", { query: query.trim() })}</Text>
       ) : (
-        <TypeList id={id} sections={sections} rows={rows} cursor={cursor} onChoose={choose} />
-      )}
-    </div>
-  );
-}
-
-type Cursor = ReturnType<typeof useCursor>;
-
-// The active option of the list, moved by the query's keys; Enter takes it (not while an input method is composing).
-function useCursor(rows: readonly SupplierType[], choose: (type: SupplierType | undefined) => void) {
-  const [at, setAt] = useState(0);
-  const active = Math.min(at, rows.length - 1);
-  const keys = (event: KeyboardEvent<HTMLInputElement>) => {
-    const last = rows.length - 1;
-    const moves: Record<string, number> = {
-      ArrowDown: Math.min(active + 1, last),
-      ArrowUp: Math.max(active - 1, 0),
-      Home: 0,
-      End: last,
-    };
-    const to = moves[event.key];
-    if (to !== undefined && rows.length > 0) {
-      event.preventDefault();
-      setAt(to);
-    } else if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      choose(rows[active]);
-    }
-  };
-  return { active, keys, moveTo: setAt, reset: () => setAt(0) };
-}
-
-// The options under their groups' headings; the active one is kept in view as it moves.
-function TypeList({
-  id,
-  sections,
-  rows,
-  cursor,
-  onChoose,
-}: {
-  id: string;
-  sections: ReturnType<typeof findTypes>;
-  rows: readonly SupplierType[];
-  cursor: Cursor;
-  onChoose: (type: SupplierType) => void;
-}) {
-  const { t } = useTranslation();
-  const list = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-  });
-  return (
-    <div ref={list} id={`${id}-list`} role="listbox" aria-label={t("upstream.types.label")} className={s.list}>
-      {sections.map((section) => (
-        // biome-ignore lint/a11y/useSemanticElements: a listbox's options are grouped by role; a fieldset is a form's.
-        <div key={section.group} role="group" aria-labelledby={`${id}-${section.group}`}>
-          <div id={`${id}-${section.group}`} className={s.heading}>
-            {t(`upstream.types.groups.${section.group}`)}
-          </div>
-          {section.types.map((type) => {
-            const n = rows.indexOf(type);
-            return (
-              <TypeOption
-                key={type.kind}
-                id={`${id}-${n}`}
-                type={type}
-                active={n === cursor.active}
-                onHover={() => cursor.moveTo(n)}
-                onChoose={() => onChoose(type)}
-              />
-            );
-          })}
+        // biome-ignore lint/a11y/useSemanticElements: it groups buttons for the arrow keys; a fieldset groups a form's fields.
+        <div ref={list} role="group" aria-label={t("upstream.types.label")} onKeyDown={move}>
+          <Stack gap={12}>
+            {sections.map((section) => (
+              <Stack key={section.group} gap={4}>
+                <Text as="h3" size="sm" tone="faint">
+                  {t(`upstream.types.groups.${section.group}`)}
+                </Text>
+                <RowList
+                  label={t(`upstream.types.groups.${section.group}`)}
+                  items={section.types.map((type) => typeRow(type, t, onPick))}
+                />
+              </Stack>
+            ))}
+          </Stack>
         </div>
-      ))}
-    </div>
+      )}
+    </Stack>
   );
 }
 
-function TypeOption({
-  id,
-  type,
-  active,
-  onHover,
-  onChoose,
-}: {
-  id: string;
-  type: SupplierType;
-  active: boolean;
-  onHover: () => void;
-  onChoose: () => void;
-}) {
-  const { t } = useTranslation();
+const enabled = (list: HTMLElement | null) => [
+  ...(list?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []),
+];
+
+// The arrow keys, Home and End move focus between the types that can be taken; up from the first goes to the query.
+function moveFocus(input: RefObject<HTMLInputElement | null>, list: RefObject<HTMLDivElement | null>) {
+  return (event: KeyboardEvent) => {
+    const all = enabled(list.current);
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const to = ({ ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: all.length - 1 } as Record<string, number>)[
+      event.key
+    ];
+    if (to === undefined || all.length === 0) return;
+    event.preventDefault();
+    if (to < 0) input.current?.focus();
+    else all[Math.min(to, all.length - 1)]?.focus();
+  };
+}
+
+function typeRow(type: SupplierType, t: TFunction<"admin">, onPick: (type: SupplierType) => void): RowItem {
   const greyed = unsellable(type);
   const count = modelCount(type);
-  return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: the keys are the query's, which keeps focus.
-    <div
-      id={id}
-      role="option"
-      tabIndex={-1}
-      aria-selected={active}
-      aria-disabled={greyed || undefined}
-      className={s.option}
-      onPointerMove={onHover}
-      onClick={onChoose}
-    >
-      <TypeLabel type={type} line={greyed ? t("upstream.types.noModels") : typeLine(type, t)} />
-      {count === undefined ? null : <span className={s.count}>{t("upstream.types.models", { count })}</span>}
-    </div>
-  );
-}
-
-// A type's mark, name and the line under it, in the list and over the fields it asks for.
-function TypeLabel({ type, line }: { type: SupplierType; line: string }) {
-  return (
-    <>
-      <VendorIcon vendor={type.vendor} name={type.name} />
-      <span className={s.text}>
-        <span className={s.name}>{type.name}</span>
-        <span className={s.line}>{line}</span>
-      </span>
-    </>
-  );
+  return {
+    key: type.kind,
+    lead: <VendorIcon vendor={type.vendor} name={type.name} />,
+    title: type.name,
+    sub: greyed ? t("upstream.types.noModels") : typeLine(type, t),
+    end: count === undefined ? undefined : t("upstream.types.models", { count }),
+    link: <button type="button" disabled={greyed} onClick={() => onPick(type)} />,
+  };
 }
 
 // The type chosen, over the fields it asks for, with the way back to the picker.
 export function ChosenType({ type, onChange }: { type: SupplierType; onChange: () => void }) {
   const { t } = useTranslation();
   return (
-    <div className={s.chosen}>
-      <TypeLabel type={type} line={typeLine(type, t)} />
+    <Cluster justify="between">
+      <Cluster gap={12}>
+        <VendorIcon vendor={type.vendor} name={type.name} />
+        <Stack gap={4}>
+          <Text medium>{type.name}</Text>
+          <Text size="sm" tone="muted">
+            {typeLine(type, t)}
+          </Text>
+        </Stack>
+      </Cluster>
       <ActionButton size="sm" variant="gho" onClick={onChange}>
         {t("upstream.types.change")}
       </ActionButton>
-    </div>
+    </Cluster>
   );
 }

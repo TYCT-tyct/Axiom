@@ -30,9 +30,9 @@ test.describe("suppliers", () => {
     await press(page, "upstream.add").click();
     // the search finds the one type by its kind, as the families in other types' lines also say OpenAI
     await dialog(page)
-      .getByRole("combobox", { name: words("upstream.types.search") })
+      .getByLabel(words("upstream.types.search"))
       .fill("openai");
-    await dialog(page).getByRole("option").click();
+    await dialog(page).getByRole("button", { name: /OpenAI/ }).click();
     await expect(
       dialog(page).getByLabel(words("upstream.addDialog.to")).locator("option", { hasText: "Far Direct" }),
     ).toHaveCount(1);
@@ -56,7 +56,7 @@ test.describe("suppliers", () => {
     const state = await open(page, "/suppliers");
     await press(page, "upstream.add").click();
     await dialog(page)
-      .getByRole("option", { name: /New API/ })
+      .getByRole("button", { name: /New API/ })
       .click();
     await dialog(page).getByLabel(words("suppliers.connect.origin")).fill("https://shop.unknown.example");
     await dialog(page).locator("button[type=submit]").click();

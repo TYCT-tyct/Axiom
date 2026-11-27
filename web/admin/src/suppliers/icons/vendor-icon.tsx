@@ -1,5 +1,5 @@
+import { Avatar } from "@axiom/ui";
 import type { ReactNode } from "react";
-import s from "./vendor-icon.module.css";
 
 // The marks of the channel types, by the descriptor's vendor (docs/domains/suppliers-direct.md「后台的「添加上游账号」」):
 // plain geometric shapes of our own, not the makers' artwork, drawn in currentColor on a 24-unit grid so they follow
@@ -28,17 +28,23 @@ const marks: Record<string, ReactNode> = {
   azure: <path d="M10.5 4.5h4L20 19.5H4l6.5-15ZM8 15.5h8" />,
 };
 
+// The mark is decoration beside the type's name, so a screen reader skips it; the letter is an Avatar's.
 export function VendorIcon({ vendor, name }: { vendor?: string; name: string }) {
   const mark = vendor ? marks[vendor] : undefined;
+  if (!mark) return <Avatar name={name} size="sm" />;
   return (
-    <span className={s.tile} aria-hidden="true">
-      {mark ? (
-        <svg viewBox="0 0 24 24" className={s.mark} aria-hidden="true">
-          {mark}
-        </svg>
-      ) : (
-        <span className={s.letter}>{[...name.trim()][0]?.toUpperCase() ?? "?"}</span>
-      )}
-    </span>
+    <svg
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {mark}
+    </svg>
   );
 }
