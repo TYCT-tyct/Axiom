@@ -14,9 +14,9 @@ DECLARE
     upto uuid;
 BEGIN
     LOOP
-        SELECT max(id) INTO upto FROM (
+        SELECT id INTO upto FROM (
             SELECT id FROM suppliers.credentials WHERE id > after ORDER BY id LIMIT 1000
-        ) batch;
+        ) batch ORDER BY id DESC LIMIT 1;
         EXIT WHEN upto IS NULL;
         UPDATE suppliers.credentials c SET settings = '{"form": "access_key"}'
         FROM suppliers.suppliers s
