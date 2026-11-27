@@ -30,9 +30,9 @@ type AlertRule struct {
 }
 
 // AlertChannel is a platform operator destination: exactly one of its destination members is set, and it names the
-// channel's kind (channelKinds). Its mail uses the reserved zero-site outbox; its secret is never part of it. A bot
-// whose address is its credential holds the address's masked form and AddressDigest, and the address is sealed apart
-// (SealAlertAddresses).
+// channel's kind (channelKinds). Its mail uses the reserved zero-site outbox; its secret is never part of it. A channel
+// whose address may carry a credential (a webhook or a bot posting to an address) holds the address's masked form and
+// AddressDigest, and the address is sealed apart (SealAlertAddresses).
 type AlertChannel struct {
 	ID             string `json:"id"`
 	Email          string `json:"email,omitempty"`

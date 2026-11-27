@@ -36,8 +36,8 @@ func addressLocation(id string) secret.Location {
 	return secret.Location{Table: "observability.channel_addresses", RowID: id, Purpose: "address"}
 }
 
-// SealAlertAddresses keeps out of c every address that is a bot's credential (a WeCom key, a Feishu hook's token): a
-// new address is sealed, and c holds its masked form and digest instead; a masked one stands for the address the same
+// SealAlertAddresses keeps out of c every address that is or may carry a credential (a WeCom key, a Feishu hook's
+// token, a generic webhook's path token): a new address is sealed, and c holds its masked form and digest instead; a masked one stands for the address the same
 // channel already has, and is refused for any other. Call it in the transaction that then saves c.
 func SealAlertAddresses(ctx context.Context, tx pg.Tx, keys *secret.Keyring, c *AlertConfiguration) error {
 	held, err := readAlertConfiguration(ctx, tx, false)
@@ -91,7 +91,7 @@ func sendable(k *channelKind, dest string) bool {
 	return err == nil && !masked(dest)
 }
 
-// openAddress puts the sealed address back into ch, a bot channel whose address is its credential, for its post.
+// openAddress puts the sealed address back into ch, a channel whose address is sealed, for its post.
 func openAddress(ctx context.Context, tx pg.Tx, keys *secret.Keyring, ch *AlertChannel) error {
 	k, _, ok := kindOf(*ch)
 	if !ok || !k.addressSecret {
