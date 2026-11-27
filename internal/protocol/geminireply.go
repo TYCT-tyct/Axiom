@@ -234,11 +234,8 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	if err := jsonx.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
-	if c.Error != nil { // what was held back and the usage go out before the error that ends the stream
-		if g.held == nil && g.last == nil && c.Usage != nil {
-			g.held = &geminiFrame{c: c}
-		}
-		return events(g.release(c.Usage), geminiErrorEvent(*c.Error)), nil
+	if c.Error != nil {
+		return g.failed(c), nil
 	}
 	parts, finish := g.chunkParts(c)
 	parts, g.last = append(g.last, parts...), nil
@@ -256,6 +253,15 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return events(geminiResponseOf(c, parts, finish)), nil
+}
+
+// failed is the events of a Chat stream's error chunk c: what was held back and c's usage, then the error that ends
+// the stream.
+func (g *GeminiReply) failed(c chatReply) []byte {
+	if g.held == nil && g.last == nil && c.Usage != nil {
+		g.held = &geminiFrame{c: c}
+	}
+	return events(g.release(c.Usage), geminiErrorEvent(*c.Error))
 }
 
 // events frames the data of each event there is as a server-sent event; nil for none.

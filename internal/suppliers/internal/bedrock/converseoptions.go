@@ -29,10 +29,15 @@ func inert(in chatRequest) bool {
 		v        jsonx.Raw
 		defaults []string
 	}{
-		{in.N, []string{"1"}}, {in.Logprobs, []string{"false"}},
-		{in.FrequencyPenalty, []string{"0"}}, {in.PresencePenalty, []string{"0"}}, {in.LogitBias, []string{"{}"}},
-		{in.Modalities, []string{`["text"]`}}, {in.ServiceTier, []string{`"auto"`, `"default"`}},
-		{in.ResponseFormat, []string{`{"type":"text"}`}}, {in.Verbosity, nil},
+		{in.N, []string{"1"}},
+		{in.Logprobs, []string{"false"}},
+		{in.FrequencyPenalty, []string{"0"}},
+		{in.PresencePenalty, []string{"0"}},
+		{in.LogitBias, []string{"{}"}},
+		{in.Modalities, []string{`["text"]`}},
+		{in.ServiceTier, []string{`"auto"`, `"default"`}},
+		{in.ResponseFormat, []string{`{"type":"text"}`}},
+		{in.Verbosity, nil},
 	} {
 		if absent(m.v) {
 			continue
@@ -48,20 +53,20 @@ func inert(in chatRequest) bool {
 // default, no reasoning.
 var novaEfforts = map[string]string{"none": "", "minimal": "low", "low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
 
-// reasoning is the reasoning configuration of a Chat reasoning_effort for model. Nova 2 Lite is the one model behind
+// reasoning is the model's own parameters for a Chat reasoning_effort, none for model if it takes none. Nova 2 Lite is the one model behind
 // Converse that takes an effort; to any other the effort asks nothing it can act on, and it is dropped. Nova refuses its
 // high effort beside an output cap or a sampling, and every call the gateway sends has a cap, so that effort goes to
 // another endpoint rather than to an error from Bedrock.
-func reasoning(model string, effort *string, c inferenceConfig) (*reasoningConfig, error) {
+func reasoning(model string, effort *string, c inferenceConfig) (additional, error) {
 	if effort == nil || !strings.Contains(model, "amazon.nova-2-lite") {
-		return nil, nil
+		return additional{}, nil
 	}
 	level, ok := novaEfforts[*effort]
 	switch {
 	case !ok, level == "high" && (c.MaxTokens != nil || c.Temperature != nil || c.TopP != nil):
-		return nil, errUnconvertible
+		return additional{}, errUnconvertible
 	case level == "":
-		return nil, nil
+		return additional{}, nil
 	}
-	return &reasoningConfig{Type: "enabled", MaxReasoningEffort: level}, nil
+	return additional{ReasoningConfig: &reasoningConfig{Type: "enabled", MaxReasoningEffort: level}}, nil
 }

@@ -197,7 +197,7 @@ func converse(body []byte, model string) ([]byte, bool, error) {
 	if out.ToolConfig, err = tools(in.Tools, in.ToolChoice); err != nil {
 		return nil, false, err
 	}
-	if out.Additional.ReasoningConfig, err = reasoning(model, in.ReasoningEffort, out.InferenceConfig); err != nil {
+	if out.Additional, err = reasoning(model, in.ReasoningEffort, out.InferenceConfig); err != nil {
 		return nil, false, err
 	}
 	b, err := jsonx.MarshalCanonical(out)

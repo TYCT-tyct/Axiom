@@ -419,14 +419,14 @@ func saveChannel(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel)
 func TestAddressesAreWriteOnly(t *testing.T) {
 	db := openDB(t)
 	keys := webhookTestKeys(t)
-	const hookToken = "T000/B000/XXXXsecret4321"
+	const hookPath = "T000/B000/XXXXabcd4321"
 	for _, tc := range []struct {
 		ch     AlertChannel
 		secret string
 		masked string
 	}{
 		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, wecomKey, "https://qyapi.weixin.qq.com/…6789"},
-		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookToken}, hookToken, "https://hooks.slack.com/…4321"},
+		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookPath}, hookPath, "https://hooks.slack.com/…4321"},
 	} {
 		configureBot(t, db, keys, tc.ch, "", time.Now())
 		c := readAlertConfig(t, db)

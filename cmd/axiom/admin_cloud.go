@@ -155,8 +155,10 @@ func cloudProblem(err error) error {
 	case errors.Is(err, suppliers.ErrNotCloud):
 		return &apiError{status: http.StatusConflict, code: codeConflict, message: "the supplier is not a cloud platform's"}
 	case errors.Is(err, suppliers.ErrMixedEgress):
-		return &apiError{status: http.StatusConflict, code: codeConflict,
-			message: "the supplier's credentials use different egress proxies: give them one exit first, then replace the credential"}
+		return &apiError{
+			status: http.StatusConflict, code: codeConflict,
+			message: "the supplier's credentials use different egress proxies: give them one exit first, then replace the credential",
+		}
 	}
 	return supplierProblem(err)
 }
