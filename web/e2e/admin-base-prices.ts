@@ -14,7 +14,7 @@ function listSupplierModels({ params, query, state }: Ctx<"/api/admin/v1/supplie
   if (!detail || query.get("pile") !== "listed") {
     return fail(404, "not_found");
   }
-  const rows = detail.endpoints.map((e) => ({
+  const rows = (detail.endpoints ?? []).map((e) => ({
     group_id: e.group_id,
     upstream_name: e.upstream_name,
     formats: e.formats,

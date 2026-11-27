@@ -173,10 +173,13 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(done(page)).toBeVisible();
     await expect(dialog(page)).toContainText(zhText("upstream.basePrice.cleared"));
     expect(endpoint.cost_state).toBe("unknown");
-    await close(page);
+  });
 
-    // a new-api relay is offered a base where it publishes no price, not where its price cannot be expressed, and the
-    // dialog names the model it showed
+  test("a new-api relay is offered a base only where it publishes no price, for the model the dialog showed", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page, "usual");
+    signedInAs(state, "mfa");
     const newapi = state.suppliers[0];
     const unpriced = newapi?.endpoints.find((one) => one.upstream_name === "unpriced-model");
     const unexpressible = newapi?.endpoints.find((one) => one.upstream_name === "rate-limited-model");
@@ -193,7 +196,9 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(offer).toBeVisible();
     await expect(page.getByRole("button", { name: "确认 rate-limited-model 的底价（分组 Maple）" })).toHaveCount(0);
     await offer.click();
-    const sent = page.waitForRequest((request) => request.url().endsWith("/base-prices"));
+    const sent = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/base-prices"),
+    );
     await send(page, "the new-api relay hides this price");
     expect((await sent).postDataJSON().items).toEqual([
       { group_id: unpriced.group_id, upstream_name: "unpriced-model", model_id: uuid(5, 1) },
