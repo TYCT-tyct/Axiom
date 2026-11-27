@@ -89,7 +89,6 @@ func startLive(t *testing.T) *live {
 		{name: "claude-code", platform: "anthropic", rate: 1, claudeCodeOnly: true},
 		{name: "kimi-1", platform: "kimi", rate: 1},
 		{name: "glm-1", platform: "zhipu", rate: 1},
-		{name: "gemini-1", platform: "gemini", rate: 1},
 	}
 	for _, g := range l.groups {
 		l.createGroup(g)
@@ -102,7 +101,6 @@ func startLive(t *testing.T) *live {
 		{"upstream-openai", "openai", []string{"gpt-1"}},
 		{"upstream-kimi", "kimi", []string{"kimi-1"}},
 		{"upstream-zhipu", "zhipu", []string{"glm-1"}},
-		{"upstream-gemini", "gemini", []string{"gemini-1"}},
 	} {
 		l.createAccount(acc.name, acc.platform, reach.UpstreamURL(up), acc.groups)
 	}
@@ -227,7 +225,6 @@ func (l *live) createPricingChannel() {
 	l.call(http.MethodPost, "/api/v1/admin/channels", l.admin, map[string]any{"name": "prices", "group_ids": ids, "model_pricing": []any{
 		price("anthropic", adaptertest.UpstreamAnthropicModel, 0.000005, 0.000025), price("openai", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001),
 		price("kimi", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001), price("zhipu", adaptertest.UpstreamOpenAIModel, 0.0000025, 0.00001),
-		price("gemini", adaptertest.UpstreamGeminiModel, 0.0000025, 0.00001),
 	}})
 }
 

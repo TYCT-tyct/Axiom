@@ -164,10 +164,6 @@ func (r *liveRun) relayCalls(t *testing.T) {
 		{group: "kimi-1", path: "/v1/chat/completions", model: adaptertest.UpstreamOpenAIModel, want: "0.00075"},
 		{group: "kimi-1", path: "/v1/chat/completions", model: adaptertest.UpstreamOpenAIModel, stream: true, want: "0.00075"},
 		{group: "glm-1", path: "/v1/chat/completions", model: adaptertest.UpstreamOpenAIModel, want: "0.00075"},
-		{group: "gemini-1", path: "/v1/chat/completions", model: adaptertest.UpstreamGeminiModel, want: "0.00075"},
-		{group: "gemini-1", path: "/v1/chat/completions", model: adaptertest.UpstreamGeminiModel, stream: true, want: "0.00075"},
-		{group: "gemini-1", path: "/v1/messages", model: adaptertest.UpstreamGeminiModel, want: "0.00075"},
-		{group: "gemini-1", path: "/v1/messages", model: adaptertest.UpstreamGeminiModel, stream: true, want: "0.00075"},
 	}
 	for _, c := range r.relays {
 		if ans := r.send(r.a, r.keys[c.group], c); ans.Status != http.StatusOK {

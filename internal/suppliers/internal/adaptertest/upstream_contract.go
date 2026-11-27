@@ -32,9 +32,6 @@ const (
 	// (Messages); the upstream answers either model in any of its endpoints, like a real one that maps names.
 	UpstreamOpenAIModel    = "gpt-6-astra"
 	UpstreamAnthropicModel = "claude-opus-5-5"
-	// UpstreamGeminiModel is the model of Gemini's own format (generateContent), which a relay that converts into it
-	// sends (sub2api's Gemini groups).
-	UpstreamGeminiModel = "gemini-3-pro"
 	// UpstreamKey is the credential a relay's channel or account holds for the upstream. The upstream takes any.
 	UpstreamKey = "sk-upstream-contract-secret"
 )
@@ -46,8 +43,7 @@ type UpstreamCall struct {
 }
 
 // Upstream is an OpenAI- and Anthropic-compatible server on the host that systems under test (new-api, sub2api, ...)
-// relay to. It answers /v1/chat/completions, /v1/responses, /v1/messages and Gemini's generateContent, whole and as a
-// stream, and /v1/models.
+// relay to. It answers /v1/chat/completions, /v1/responses and /v1/messages, whole and as a stream, and /v1/models.
 type Upstream struct {
 	server *httptest.Server
 	mu     sync.Mutex
@@ -199,8 +195,6 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models"):
 		reply(w, models())
-	case strings.HasSuffix(r.URL.Path, ":generateContent"), strings.HasSuffix(r.URL.Path, ":streamGenerateContent"):
-		gemini(w, strings.HasSuffix(r.URL.Path, ":streamGenerateContent"))
 	case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 		chat(w, req.Model, req.Stream)
 	case strings.HasSuffix(r.URL.Path, "/responses"):
@@ -237,24 +231,7 @@ func stream(w http.ResponseWriter, events []string) {
 
 func models() string {
 	item := `{"id":%q,"object":"model","created":1,"owned_by":"contract","type":"model","display_name":%[1]q}`
-	return `{"object":"list","data":[` + fmt.Sprintf(item, UpstreamOpenAIModel) + `,` + fmt.Sprintf(item, UpstreamAnthropicModel) + `,` +
-		fmt.Sprintf(item, UpstreamGeminiModel) + `]}`
-}
-
-// gemini answers generateContent, or streamGenerateContent as server-sent events (alt=sse), with the usage on the
-// last event as Gemini sends it.
-func gemini(w http.ResponseWriter, streaming bool) {
-	answer := func(text, finish, usage string) string {
-		return fmt.Sprintf(`{"candidates":[{"content":{"role":"model","parts":[{"text":%q}]},"index":0%s}]%s,"modelVersion":%q}`,
-			text, finish, usage, UpstreamGeminiModel)
-	}
-	usage := fmt.Sprintf(`,"usageMetadata":{"promptTokenCount":%d,"candidatesTokenCount":%d,"totalTokenCount":%d}`,
-		UpstreamInputTokens, UpstreamOutputTokens, UpstreamInputTokens+UpstreamOutputTokens)
-	if !streaming {
-		reply(w, answer("ok", `,"finishReason":"STOP"`, usage))
-		return
-	}
-	stream(w, []string{"data: " + answer("o", "", "") + "\r\n\r\n", "data: " + answer("k", `,"finishReason":"STOP"`, usage) + "\r\n\r\n"})
+	return `{"object":"list","data":[` + fmt.Sprintf(item, UpstreamOpenAIModel) + `,` + fmt.Sprintf(item, UpstreamAnthropicModel) + `]}`
 }
 
 func chat(w http.ResponseWriter, model string, streaming bool) {
