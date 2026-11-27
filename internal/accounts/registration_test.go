@@ -513,28 +513,44 @@ func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
 		"another site's code":                    {codes: []string{inviteCode(t, x.db, ":u2")}, refused: accounts.ErrInvalidInvite},
 	} {
 		email := strings.ReplaceAll(strings.ReplaceAll(name, "'", ""), " ", "-") + "@example.com"
-		for i, code := range c.codes {
-			var want error
-			if i == len(c.codes)-1 {
-				want = c.refused
-			}
-			if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client}); !errors.Is(err, want) {
-				t.Fatalf("%s: request %d = %v, want %v", name, i, err, want)
-			}
-		}
+		x.requestAll(t, email, c.codes, c.refused)
 		if c.refused != nil {
 			if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests WHERE email = '"+email+"'"); got != 0 {
 				t.Errorf("%s: %d pending requests, want none", name, got)
 			}
 			continue
 		}
-		if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
-			t.Fatal(err)
-		}
-		x.verifyAt(t, console, x.token(t, email))
-		got := texts(t, x.db, platform, "SELECT coalesce(inviter_user_id::text, '') FROM accounts.users WHERE email = '"+email+"'")
-		if len(got) != 1 || got[0] != c.inviter {
+		if got := x.verifiedInviter(t, email); got != c.inviter {
 			t.Errorf("%s: inviter %q, want %q", name, got, c.inviter)
 		}
 	}
+}
+
+// requestAll makes one open registration of email per code, in order: all but the last succeed, and the last fails
+// with refused.
+func (x registrationWorld) requestAll(t *testing.T, email string, codes []string, refused error) {
+	t.Helper()
+	for i, code := range codes {
+		var want error
+		if i == len(codes)-1 {
+			want = refused
+		}
+		if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client}); !errors.Is(err, want) {
+			t.Fatalf("%s: request %d = %v, want %v", email, i, err, want)
+		}
+	}
+}
+
+// verifiedInviter clicks email's pending link and returns the inviter of the user it made, "" for none.
+func (x registrationWorld) verifiedInviter(t *testing.T, email string) string {
+	t.Helper()
+	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
+		t.Fatal(err)
+	}
+	x.verifyAt(t, console, x.token(t, email))
+	got := texts(t, x.db, platform, "SELECT coalesce(inviter_user_id::text, '') FROM accounts.users WHERE email = '"+email+"'")
+	if len(got) != 1 {
+		t.Fatalf("%s: %d users, want 1", email, len(got))
+	}
+	return got[0]
 }
