@@ -428,7 +428,11 @@ func TestAddressesAreWriteOnly(t *testing.T) {
 		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, wecomKey, "https://qyapi.weixin.qq.com/…6789"},
 		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookPath}, hookPath, "https://…/…4321"},
 		// The host may be the part that is secret, and the last characters are counted as characters, not bytes.
-		{AlertChannel{ID: "flow", WebhookURL: "https://eo1a2b3c4d.m.pipedream.net/告警"}, "eo1a2b3c4d", "https://…/…t/告警"},
+		{AlertChannel{ID: "flow", WebhookURL: "https://eo1a2b3c4d.m.pipedream.net/告警"}, "eo1a2b3c4d", "https://…/…警"},
+		// The last characters come from the path and query only, never more than half of them, so a short one or none
+		// tells nothing of the host either.
+		{AlertChannel{ID: "bare", WebhookURL: "https://x.ai"}, "x.ai", "https://…/…"},
+		{AlertChannel{ID: "short", WebhookURL: "https://x.ai/ab"}, "x.ai", "https://…/…b"},
 	} {
 		configureBot(t, db, keys, tc.ch, "", time.Now())
 		c := readAlertConfig(t, db)

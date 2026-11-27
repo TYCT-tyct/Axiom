@@ -19,7 +19,8 @@ const maskMark = "/…"
 func masked(address string) bool { return strings.Contains(address, maskMark) }
 
 // maskAddress is what the configuration shows of a sealed address: its host, unless the host may itself be the
-// secret (a generic webhook's, which a receiver can make unguessable), and its last four characters, whole runes.
+// secret (a generic webhook's, which a receiver can make unguessable), and the last characters of its path and query,
+// whole runes: four at most and never more than half of them, so a short path is not shown whole and none shows none.
 func maskAddress(address string, hideHost bool) string {
 	u, err := url.Parse(address)
 	if err != nil {
@@ -29,8 +30,12 @@ func maskAddress(address string, hideHost bool) string {
 	if hideHost {
 		host = "…"
 	}
-	r := []rune(address)
-	return "https://" + host + maskMark + string(r[max(0, len(r)-4):])
+	rest := strings.TrimPrefix(u.Path, "/")
+	if u.RawQuery != "" {
+		rest += "?" + u.RawQuery
+	}
+	r := []rune(rest)
+	return "https://" + host + maskMark + string(r[len(r)-min(4, len(r)/2):])
 }
 
 func addressDigest(channel, address string) string {
