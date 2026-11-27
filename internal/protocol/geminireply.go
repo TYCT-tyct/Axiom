@@ -241,7 +241,6 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 		return g.failed(c), nil
 	}
 	parts, finish := g.chunkParts(c)
-	g.delivered = g.delivered || len(parts) > 0
 	parts, g.last = append(g.last, parts...), nil
 	switch {
 	case g.held != nil:
@@ -296,6 +295,7 @@ func (g *GeminiReply) chunkParts(c chatReply) ([]geminiPart, string) {
 			parts = append(parts, g.flushCalls()...)
 		}
 	}
+	g.delivered = g.delivered || len(parts) > 0
 	return parts, finish
 }
 
