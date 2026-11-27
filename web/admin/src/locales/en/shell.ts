@@ -58,6 +58,7 @@ export default {
     inbox: "To do",
     upstreamModels: "By model",
     upstreamKeys: "All keys",
+    egressProxies: "Egress proxies",
     modelAuthors: "Authors",
     routingDefaults: "Defaults and limits",
     pricingRules: "Pricing rules",
