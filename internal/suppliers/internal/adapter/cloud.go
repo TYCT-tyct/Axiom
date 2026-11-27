@@ -79,7 +79,8 @@ type Doer interface {
 
 // Signer is the call half of a cloud platform, which a path and a header do not reach (Wire): the address follows from
 // the credential's region and the model, the body carries the platform's version in place of the model, and the
-// authorization is a signature over the request or a token the credential is exchanged for. The module's shared call
+// authorization is a signature over the request or a token the credential is exchanged for. A provider's own API whose
+// protocol is not the call format's (google's generateContent) makes its calls the same way. The module's shared call
 // code asks it for the request, and for the answer in the call format's own framing.
 type Signer interface {
 	// Sign is the request call becomes. A failure is the call's before anything reached the platform: the body is not
