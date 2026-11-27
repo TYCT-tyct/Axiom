@@ -414,6 +414,9 @@ func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
 			return err
 		}
 		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: "https://receiver.example/hook"}}
+		if err = observability.SealAlertAddresses(t.Context(), tx, masterKeys(t), &c); err != nil {
+			return err
+		}
 		if err = observability.SetAlertConfiguration(t.Context(), tx, c); err != nil {
 			return err
 		}

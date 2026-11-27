@@ -128,6 +128,9 @@ func (w *supplierAlertTest) seed(destination string, keys *secret.Keyring) {
 		}
 		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: destination}}
 		c.Rules = []observability.AlertRule{{ID: "balance", Kind: "suppliers.low_balance", MinimumSeverity: "warning", Threshold: 1, Channel: "hook"}}
+		if err = observability.SealAlertAddresses(ctx, tx, keys, &c); err != nil {
+			return err
+		}
 		if err = observability.SetAlertConfiguration(ctx, tx, c); err != nil {
 			return err
 		}

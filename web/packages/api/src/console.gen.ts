@@ -1159,7 +1159,7 @@ export interface paths {
          * Register with an invite code or open registration
          * @description On a site registering by invitation, makes the user, their personal account, its default workspace and balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
          *
-         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers `unavailable`, and a closed site `registration_closed`. An invite code given there names the inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown, its user disabled, or of another site) is ignored with the same 202, so the answer does not tell which codes work.
+         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers 503 `email_unavailable`, and a closed site `registration_closed`. An invite code given there names the inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown, its user disabled, or of another site) is ignored with the same 202, so the answer does not tell which codes work.
          *
          *     Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
          */
@@ -5301,6 +5301,15 @@ export interface operations {
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
+            /** @description Open registration on a site that cannot send mail (`email_unavailable`), or the service is busy (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             default: components["responses"]["Failure"];
         };
     };

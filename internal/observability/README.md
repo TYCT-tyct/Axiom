@@ -100,7 +100,7 @@ schema `observability`，全部强制行级安全。
 | 同一 `(kind, key)` 只有一个未恢复事件，同一事件、规则和序号只有一条回执 | 部分唯一索引和唯一约束。`TestAlertStormAcrossNodesAndRecovery` |
 | 告警评估不用已替换的规则 | 评估读配置持 FOR SHARE，替换配置的 UPDATE 与之互斥；待发通知保留渠道快照。`TestAlertConfigurationReplacementWaitsForEvaluation` |
 | 无效信号不堵后续信号 | 隔离成 quarantined 行 |
-| 渠道密钥和带凭证的地址不能挪到别的目标，配置只存脱敏的 | 主键含渠道/目标的摘要，读取时重建验证；`fence_envelope_key_version` 触发器。`TestWebhookKeyCannotBeRelabelledToAnotherDestination`、`TestBotAddressesAreWriteOnly` |
+| 渠道密钥和带凭证的地址不能挪到别的目标，配置只存脱敏的 | 主键含渠道/目标的摘要，读取时重建验证；`fence_envelope_key_version` 触发器。`TestWebhookKeyCannotBeRelabelledToAnotherDestination`、`TestAddressesAreWriteOnly` |
 | 一次花费异常只通知一次 | `spend_anomalies` 主键去重，首次插入才持久化信号和提醒。`TestSpendAnomalyDetectsRaisesNotifiesAndResolves` |
 | 所有表和分区都过启动检查 | 分区不继承 RLS，各自开启并有策略。`TestStartupCheckAcceptsTheModule` |
 

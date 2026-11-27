@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"uuid"
@@ -274,10 +275,11 @@ func (a *Admin) exitFor(ctx context.Context, tx pg.Tx, id string) (*egress.Clien
 	if id == "" {
 		return a.egress, nil
 	}
-	e, err := readExits(ctx, tx, a.egress, a.keys, nil)
+	e, err := a.readExits(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
+	defer a.keepExits(e)
 	if _, ok := e.proxies[id]; !ok {
 		return nil, ErrUnknownEgress
 	}
@@ -286,6 +288,38 @@ func (a *Admin) exitFor(ctx context.Context, tx pg.Tx, id string) (*egress.Clien
 		return nil, ErrEgressUnavailable
 	}
 	return c, err
+}
+
+// readExits reads the proxies in tx with the clients the admin side's readings built before, so its checks and
+// re-lists share one client per proxy, and its connections, rather than each building one; keepExits gives back what
+// the reading built.
+func (a *Admin) readExits(ctx context.Context, tx pg.Tx) (*exits, error) {
+	a.exitsMu.Lock()
+	earlier := maps.Clone(a.exits)
+	a.exitsMu.Unlock()
+	return readExits(ctx, tx, a.egress, a.keys, earlier)
+}
+
+// keepExits keeps the clients a reading built for the readings after it. A client it replaced, because its proxy
+// changed, and the client of a proxy no longer there have their idle connections closed; calls still on one finish.
+func (a *Admin) keepExits(e *exits) {
+	a.exitsMu.Lock()
+	defer a.exitsMu.Unlock()
+	if a.exits == nil {
+		a.exits = map[string]proxyClient{}
+	}
+	for id, b := range e.built {
+		if old, ok := a.exits[id]; ok && old != b {
+			old.client.CloseIdleConnections()
+		}
+		a.exits[id] = b
+	}
+	for id, b := range a.exits {
+		if _, ok := e.proxies[id]; !ok {
+			b.client.CloseIdleConnections()
+			delete(a.exits, id)
+		}
+	}
 }
 
 // lockedProxies takes the proxies' lock and reads them all by id.

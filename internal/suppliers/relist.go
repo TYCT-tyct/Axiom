@@ -311,10 +311,11 @@ func (l *lines) keysOf(ctx context.Context, tx pg.Tx, line pastedLine) ([]lineKe
 	if err != nil {
 		return nil, fmt.Errorf("read the keys: %w", err)
 	}
-	exits, err := readExits(ctx, tx, l.admin.egress, l.admin.keys, nil)
+	exits, err := l.admin.readExits(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
+	defer l.admin.keepExits(exits)
 	var keys []lineKey
 	for _, k := range rows {
 		exit, _, err := exits.client(k.EgressID)

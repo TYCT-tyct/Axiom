@@ -1,7 +1,6 @@
 package suppliers
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,25 +20,31 @@ import (
 var errNoExit = errors.New("suppliers: the credential's proxy is disabled and has no active fallback")
 
 // exits are the clients one reading of the proxies hands out: each proxy's, its password opened once per reading, and
-// taken from an earlier reading when its row is unchanged, so a node's connections to a proxy outlive a Reload.
+// taken from an earlier reading while the proxy's row opens to the same proxy, so a node's connections to a proxy
+// outlive a Reload, and the admin side's checks share one client per proxy (Admin.readExits).
 type exits struct {
 	direct  *egress.Client
 	keys    *secret.Keyring
 	proxies map[string]store.SuppliersEgressProxy
-	byID    map[string]*egress.Client // this reading's, by proxy id
-	earlier map[egress.Proxy]*egress.Client
-	built   map[egress.Proxy]*egress.Client
+	earlier map[string]proxyClient // a reading before's, by proxy id
+	built   map[string]proxyClient // this reading's, by proxy id
+}
+
+// proxyClient is a proxy's client and the proxy it was built for.
+type proxyClient struct {
+	proxy  egress.Proxy
+	client *egress.Client
 }
 
 // readExits reads the proxies in tx; earlier is the clients a reading before built, nil for none.
-func readExits(ctx context.Context, tx pg.Tx, direct *egress.Client, keys *secret.Keyring, earlier map[egress.Proxy]*egress.Client) (*exits, error) {
+func readExits(ctx context.Context, tx pg.Tx, direct *egress.Client, keys *secret.Keyring, earlier map[string]proxyClient) (*exits, error) {
 	rows, err := store.New().ListEgressProxies(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("read the egress proxies: %w", err)
 	}
 	e := &exits{
-		direct: direct, keys: keys, proxies: make(map[string]store.SuppliersEgressProxy, len(rows)), byID: map[string]*egress.Client{},
-		earlier: earlier, built: map[egress.Proxy]*egress.Client{},
+		direct: direct, keys: keys, proxies: make(map[string]store.SuppliersEgressProxy, len(rows)),
+		earlier: earlier, built: map[string]proxyClient{},
 	}
 	for _, r := range rows {
 		e.proxies[r.ID] = r
@@ -59,20 +64,22 @@ func (e *exits) client(egressID *string) (c *egress.Client, proxy string, err er
 	if !ok {
 		return nil, "", errNoExit
 	}
-	if c = e.byID[row.ID]; c != nil {
-		return c, row.ID, nil
+	if b, ok := e.built[row.ID]; ok {
+		return b.client, row.ID, nil
 	}
 	p, err := e.open(row)
 	if err != nil {
 		return nil, "", err
 	}
-	if c = cmp.Or(e.built[p], e.earlier[p]); c == nil {
+	b, ok := e.earlier[row.ID]
+	if !ok || b.proxy != p {
 		if c, err = e.direct.Via(p); err != nil {
 			return nil, "", fmt.Errorf("egress proxy %s: %w", row.ID, err)
 		}
+		b = proxyClient{p, c}
 	}
-	e.byID[row.ID], e.built[p] = c, c
-	return c, row.ID, nil
+	e.built[row.ID] = b
+	return b.client, row.ID, nil
 }
 
 // route is the proxy a credential naming id goes through: the proxy while it is active, else its fallback while that
@@ -106,9 +113,9 @@ func (e *exits) open(r store.SuppliersEgressProxy) (egress.Proxy, error) {
 // release closes the idle connections of the clients an earlier reading built that this one no longer hands out;
 // calls still using one finish on it.
 func (e *exits) release() {
-	for p, c := range e.earlier {
-		if e.built[p] != c {
-			c.CloseIdleConnections()
+	for id, b := range e.earlier {
+		if e.built[id] != b {
+			b.client.CloseIdleConnections()
 		}
 	}
 }

@@ -47,6 +47,29 @@ func TestResealedCloudCredentialKeepsItsSettingsAndTakesTheLinesExit(t *testing.
 	}
 }
 
+// TestCloudReplaceRefusesALineOfMixedExits: a line whose credentials leave through different exits has no exit a new
+// credential could take without guessing, and storing it direct would send calls from an address the line was kept
+// off, so the replacement is refused (409) before anything is checked, and the credentials stay as they were.
+func TestCloudReplaceRefusesALineOfMixedExits(t *testing.T) {
+	t.Parallel()
+	f, _ := newCloudFixture(t)
+	var made adminapi.SupplierConnected
+	decode(t, f.change(f.s, http.MethodPost, "/supplier-types/bedrock/suppliers", bedrockBody("us-east-1", "us-east-2"), newKey()), &made)
+	id := made.Supplier.Id
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		"INSERT INTO suppliers.egress_proxies (id, name, scheme, host, port) VALUES ('tunnel', 'tunnel', 'http', '127.0.0.1', 9)",
+		"UPDATE suppliers.credentials SET egress_id = 'tunnel' WHERE region = 'us-east-1' AND supplier_id = '"+id+"'"); err != nil {
+		t.Fatal(err)
+	}
+	serving := `SELECT string_agg(region || ' ' || hint || ' ' || coalesce(egress_id, 'direct'), ',' ORDER BY region)
+		FROM suppliers.credentials WHERE status = 'active' AND supplier_id = '` + id + `'`
+	second := `{"fields":{"access_key_id":"AKIAFAKEHARBOR0002","secret_access_key":"fake/second"},"reason":"a new key"}`
+	expectAdmin(t, "a line of mixed exits", f.change(f.s, http.MethodPut, "/suppliers/"+id+"/cloud-credential", second, newKey()), http.StatusConflict, codeConflict)
+	if got := f.text(serving); got != "us-east-1 0001 tunnel,us-east-2 0001 direct" {
+		t.Errorf("after the refusal the credentials are %q", got)
+	}
+}
+
 // tunnelProxy is an HTTP proxy on loopback that opens CONNECT tunnels to the address asked for, counting them.
 type tunnelProxy struct {
 	*httptest.Server

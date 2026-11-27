@@ -2066,7 +2066,7 @@ paths:
         learn which addresses exist. A password in this request is ignored: the verification page sets it after the
         address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found
         when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot
-        send mail answers `unavailable`, and a closed site `registration_closed`. An invite code given there names the
+        send mail answers 503 `email_unavailable`, and a closed site `registration_closed`. An invite code given there names the
         inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown,
         its user disabled, or of another site) is ignored with the same 202, so the answer does not tell which codes
         work.
@@ -2095,6 +2095,13 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
+        "503":
+          description: >-
+            Open registration on a site that cannot send mail (`email_unavailable`), or the service is busy
+            (`unavailable`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/verify-email:
     post:

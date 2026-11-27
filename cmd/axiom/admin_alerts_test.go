@@ -82,6 +82,9 @@ func TestAdminWebhookSecretIsSealedAuditedAndIdempotent(t *testing.T) {
 			return err
 		}
 		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: "https://receiver.example/hook"}}
+		if err = observability.SealAlertAddresses(t.Context(), tx, masterKeys(t), &c); err != nil {
+			return err
+		}
 		return observability.SetAlertConfiguration(t.Context(), tx, c)
 	}); err != nil {
 		t.Fatal(err)
@@ -127,5 +130,13 @@ func TestAdminWebhookPreflightUsesDomainValidation(t *testing.T) {
 		if err := (adminAPI{}).checkAlertDestinations(t.Context(), &body); !errors.Is(err, observability.ErrAlertConfiguration) {
 			t.Fatalf("invalid webhook reached egress: %v", err)
 		}
+	}
+	// A masked address sent back stands for the sealed one, which was checked when it was saved: it has no host to check.
+	body, err := adminJSON[adminapi.AlertConfigurationRequest](observability.AlertConfiguration{Channels: []observability.AlertChannel{{ID: "hook", WebhookURL: "https://…/…hook"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (adminAPI{}).checkAlertDestinations(t.Context(), &body); err != nil {
+		t.Fatalf("a masked webhook sent back was refused: %v", err)
 	}
 }

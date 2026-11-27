@@ -70,7 +70,7 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 
 ## Gemini
 
-Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同一组结构和表（`gemini.go`）：客户端用 `GeminiToChat` 和 `GeminiReply`（流按事件、整份按 `Body`、错误按 `GeminiErrorBody`），上游用 `ChatToGemini` 和 `ChatFromGemini`（把 `streamGenerateContent?alt=sse` 读成 Chat 流）。没有 ID 的调用按位置编号，结果按 ID 否则按同名最早未答的配对；思考签名在 Chat 一侧放 `extra_content.google.thought_signature`，转往 Gemini 时缺签名的首个调用写官方的跳过值；`thoughtsTokenCount` 计入输出和推理，各模态明细（音频、图片、视频，含缓存的）对应 Chat 明细的同名成员；上游报告过用量后断流或以 Chat 没有的原因结束，错误块带上这份用量。Gemini 表达不了的成员两个方向都点名拒绝。
+Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同一组结构和表（`gemini.go`）：客户端用 `GeminiToChat` 和 `GeminiReply`（流按事件、整份按 `Body`、错误按 `GeminiErrorBody`），上游用 `ChatToGemini` 和 `ChatFromGemini`（把 `streamGenerateContent?alt=sse` 读成 Chat 流）。没有 ID 的调用按位置编号，结果按 ID 否则按同名最早未答的配对；思考签名在 Chat 一侧放 `extra_content.google.thought_signature`，转往 Gemini 时缺签名的首个调用写官方的跳过值；`thoughtsTokenCount` 计入输出和推理，各模态明细（音频、图片、视频，含缓存的）对应 Chat 明细的同名成员；上游报告过用量后断流或以 Chat 没有的原因结束，错误块带上这份用量；开始输出后失败：整份回 502 带用量，流先发末段再报错，只计已交付的。Gemini 表达不了的成员两个方向都点名拒绝。
 
 ## 读 SSE
 
