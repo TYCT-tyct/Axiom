@@ -45,7 +45,8 @@ func (*Service) SetAccountSuspended(ctx context.Context, tx pg.Tx, actor audit.A
 }
 
 // SetAccountTier moves an account to another tier of its site. The account row is locked, so two changes to one account
-// queue; the same tier changes nothing and writes no audit entry, and a tier of another site is a *SettingError.
+// queue; the same tier changes nothing and writes no audit entry, and a tier of another site or a disabled one is a
+// *SettingError.
 func (*Service) SetAccountTier(ctx context.Context, tx pg.Tx, actor audit.Actor, id AccountID, tier TierID, reason string) error {
 	// Lock the account on its own before reading the tier names. Locking through a join can pair the account row a
 	// waiter rechecks after another transaction commits with the tier row it read before waiting; the join then finds
@@ -62,12 +63,16 @@ func (*Service) SetAccountTier(ctx context.Context, tx pg.Tx, actor audit.Actor,
 		return nil
 	}
 	var after string
-	if err := tx.QueryRow(ctx, `SELECT name FROM accounts.tiers WHERE site_id=$1 AND id=$2`,
-		site, uuid.UUID(tier)).Scan(&after); err != nil {
+	var disabled bool
+	if err := tx.QueryRow(ctx, `SELECT name, disabled FROM accounts.tiers WHERE site_id=$1 AND id=$2`,
+		site, uuid.UUID(tier)).Scan(&after, &disabled); err != nil {
 		if errors.Is(err, pg.ErrNoRows) {
 			return &SettingError{"tier_id", "must be one of the account's site's tiers"}
 		}
 		return fmt.Errorf("read the tier: %w", err)
+	}
+	if disabled {
+		return &SettingError{"tier_id", "is disabled"}
 	}
 	var before string
 	if err := tx.QueryRow(ctx, `SELECT name FROM accounts.tiers WHERE site_id=$1 AND id=$2`,

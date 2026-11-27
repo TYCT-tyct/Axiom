@@ -12,8 +12,10 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// override validates the provider object before admission. A constraint is either enforced by the route or refused
-// by name; accepting a condition this node cannot keep would give the client a false guarantee.
+// override validates the provider object before admission. A member this node reads is enforced by the route, and a
+// value of it the node cannot keep is refused by name. A member it does not read is ignored, as OpenRouter's schema
+// lets extensions pass (enforce_distillable_text, options, ones added later): refusing it would fail the whole call of
+// a client that sends OpenRouter's full preference object (docs/openrouter-parity.md「供应商路由参数」).
 func override(raw []byte) (routing.Override, error) {
 	var o routing.Override
 	if raw == nil {
@@ -30,7 +32,7 @@ func override(raw []byte) (routing.Override, error) {
 		}
 		read, known := providerMembers[name]
 		if !known {
-			return o, unsupported(name)
+			continue
 		}
 		if err := read(&o, name, value); err != nil {
 			return o, err

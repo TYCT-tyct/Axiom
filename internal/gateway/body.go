@@ -14,7 +14,8 @@ const minBody = 4 << 10
 // readBody reads the body within MaxBody and charges it to the node's memory budget until the call is done. Whatever is
 // allocated for it is charged before it is allocated, so no number of slow or large uploads holds more than the budget:
 // an announced length is charged whole before the first byte is read; an unannounced body is charged as its buffer
-// grows, which a body that stops short never needs more of than it sent.
+// grows, which a body that stops short never needs more of than it sent. A call that came by a Gemini path gets its body
+// converted to the Chat request it runs as (gemini.go).
 func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, c *Call) ([]byte, error) {
 	limit := h.Limits.cfg.MaxBody
 	if r.ContentLength > limit {
@@ -30,6 +31,9 @@ func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, c *Call) ([]b
 		return nil, bodyRefusal(err)
 	}
 	c.hold(func() { h.Memory.Refund(held) })
+	if c.gemini != nil {
+		return h.geminiBody(c, body)
+	}
 	return body, nil
 }
 

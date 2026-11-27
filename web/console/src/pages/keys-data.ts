@@ -169,26 +169,46 @@ export type RowContext = { format: Format; t: TFunction; language: string; now: 
 // that is off, says so on the line under its name, since the personal list the board draws has no status column of its
 // own; expiry comes first as the contract's own key status does, since switching an expired key back on cannot make it
 // usable.
+//
+// A management key is marked as one, since it cannot call models (#317): its limit is what it caps each key it issues
+// at, so the row says so and draws no bar of spending, which it has none of.
 export function keyRow(key: Key, { format, t, language, now, today }: RowContext): Row {
-  const used = usedMoney(key);
+  const management = key.kind === "management";
+  const used = management ? undefined : usedMoney(key);
   const share = limitShare(used, key.spend_limit);
-  const state = expired(key, now) ? t("keys.expired") : key.disabled ? t("keys.board.disabled") : "";
+  const notes = [maskedKey(key), management ? t("keys.board.managementKey") : "", keyState(key, now, t)].filter(
+    Boolean,
+  );
   return {
     ...drawn,
     key: key.id,
     kind: "0",
     f3: key.name,
-    f5: `${maskedKey(key)}${state ? ` \u00b7 ${state}` : ""}`,
+    f5: notes.join(" \u00b7 "),
     f8: share >= barWarn ? "qpace w" : "qpace ",
     f9: `width: ${Math.min(100, Math.round(share * 100))}%;`,
     f11: used ? format.money(used) : "",
-    f13: key.spend_limit ? ` / ${format.money(key.spend_limit)}${period(key, t)}` : t("keys.noLimit"),
+    f13: management ? issueCeiling(key, format, t) : spendLimit(key, format, t),
     f18: spendPoints(key.daily_spend, today),
     f34: key.models ? t("keys.board.modelCount", { count: key.models.length }) : t("keys.board.allModels"),
     f35: key.ip_allow ? "qlim ok" : "qlim warn",
     f60: key.ip_allow ? t("keys.board.ipRestricted") : t("keys.board.anyIp"),
     f62: key.last_used_at ? relativeTime(key.last_used_at, now, language, t) : t("keys.board.neverUsed"),
   };
+}
+
+function keyState(key: Key, now: number, t: TFunction) {
+  return expired(key, now) ? t("keys.expired") : key.disabled ? t("keys.board.disabled") : "";
+}
+
+function spendLimit(key: Key, format: Format, t: TFunction) {
+  return key.spend_limit ? ` / ${format.money(key.spend_limit)}${period(key, t)}` : t("keys.noLimit");
+}
+
+function issueCeiling(key: Key, format: Format, t: TFunction) {
+  return key.spend_limit
+    ? t("keys.board.issueCeiling", { limit: `${format.money(key.spend_limit)}${period(key, t)}` })
+    : t("keys.board.noIssueCeiling");
 }
 
 // The period a key's limit counts over, as its row says it: the limit is what the key may spend in the window its reset

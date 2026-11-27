@@ -11,14 +11,20 @@ import zhUsers from "../locales/zh/users";
 import { RouteTabs } from "../row-drawer";
 import { AccountsTab } from "../users/accounts-tab";
 import { RolesTab } from "../users/roles-tab";
+import { TiersTab } from "../users/tiers-tab";
 import { UsersTab } from "../users/users-tab";
 
-const tabs = { "/users": UsersTab, "/users/accounts": AccountsTab, "/users/roles": RolesTab } as const;
+const tabs = {
+  "/users": UsersTab,
+  "/users/accounts": AccountsTab,
+  "/users/roles": RolesTab,
+  "/users/tiers": TiersTab,
+} as const;
 type Tab = keyof typeof tabs;
 
-// 用户管理: the people who signed up, the accounts they own and the platform roles that let some of them into the admin,
-// as three tabs of one page. Users and accounts are apart: an account is the money and the limits, a user is a person
-// who signs in. The old /accounts/{id} address leads to the account's drawer (routes/people.ts).
+// 用户管理: the people who signed up, the accounts they own, the platform roles that let some of them into the admin, and
+// the tiers accounts are in, as tabs of one page. Users and accounts are apart: an account is the money and the limits,
+// a user is a person who signs in. The old /accounts/{id} address leads to the account's drawer (routes/people.ts).
 export default function Users() {
   const { t } = useTranslation();
   const path = useLocation({ select: (location) => location.pathname.replace(/\/$/, "") || "/" }) as Tab;
@@ -34,6 +40,7 @@ export default function Users() {
           { key: "/users", to: "/users", label: t("users.tabs.users") },
           { key: "/users/accounts", to: "/users/accounts", label: t("users.tabs.accounts") },
           ...(roles ? [{ key: "/users/roles" as const, to: "/users/roles", label: t("users.tabs.roles") }] : []),
+          { key: "/users/tiers", to: "/users/tiers", label: t("users.tabs.tiers") },
         ]}
       />
       <Current />

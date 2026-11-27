@@ -1,10 +1,11 @@
-"""Keep module-local migration history append-only, except the proved pre-launch squash."""
+"""Keep module-local migration history append-only, except the proved pre-launch squash, and added migrations safe."""
 import re
 import subprocess
 import sys
 from pathlib import PurePosixPath
 
 from compare_migrations import BASELINE, SOURCE
+from migration_safety import problems
 
 MIGRATION = re.compile(r"^(.*/migrations)/(\d+)_[^/]*\.sql$")
 
@@ -65,6 +66,13 @@ def main(base):
         return 1
     if len(versions(after)) != len(after):
         print("duplicate migration versions in a module")
+        return 1
+    # Merged migrations never change, so checking the added ones covers every migration since the pre-production
+    # squash; the files merged before this check run only on development databases and go into the next squash.
+    unsafe = [f"{path}: {problem}" for path in added if MIGRATION.match(path)
+              for problem in problems("\n".join(git("show", f"HEAD:{path}")))]
+    if unsafe:
+        print("migrations unsafe on a populated database (internal/platform/pg/README.md「在线迁移」):\n" + "\n".join(unsafe))
         return 1
     return 0
 

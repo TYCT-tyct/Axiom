@@ -497,3 +497,38 @@ func TestARecordThatCannotBeReadStopsThePass(t *testing.T) {
 		}
 	}
 }
+
+// TestUnstatedFundingFollowsTheSubscription: new-api writes no billing source on a fee it takes after a request (a
+// violation fee) or on a record of a release before subscriptions, and takes such a fee from a subscription when the
+// request drew on one. Such a record is a wallet charge only while the account has no active subscription; with one it
+// is not, which stops the supplier. A page whose records all state their source does not ask.
+func TestUnstatedFundingFollowsTheSubscription(t *testing.T) {
+	t.Parallel()
+	watermark := now.Add(-2 * time.Hour)
+	path := fmt.Sprintf("GET /api/log/self?type=2&page_size=100&p=1&start_timestamp=%d&end_timestamp=%d", watermark.Unix(), watermark.Add(time.Hour).Unix())
+	for _, c := range []struct {
+		name, other, subscriptions string
+		want                       adapter.Funding
+		asks                       bool
+	}{
+		{"a fee, no subscription", `{"violation_fee":true,"fee_quota":23}`, `[]`, adapter.FundingWallet, true},
+		{"a fee under an active subscription", `{"violation_fee":true,"fee_quota":23}`, `[{"subscription":{"id":1}}]`, adapter.FundingOther, true},
+		{"a record before subscriptions", `{"model_ratio":0.075}`, `[]`, adapter.FundingWallet, true},
+		{"a stated wallet charge", `{"billing_source":"wallet"}`, `[{"subscription":{"id":1}}]`, adapter.FundingWallet, false},
+	} {
+		page := clonePage(recordedPage(t))
+		page.Data.Items[0].Other = new(c.other)
+		body, err := jsonx.MarshalCanonical(map[string]any{"success": true, "data": page.Data})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := newFake()
+		f.routes[path] = answer(200, string(body))
+		f.routes["GET /api/subscription/self"] = answer(200, `{"success":true,"data":{"subscriptions":`+c.subscriptions+`}}`)
+		got, _, err := open(t, f, now).Charges(t.Context(), startState(t, watermark))
+		asked := slices.ContainsFunc(f.sent, func(r adapter.Request) bool { return r.Path == "/api/subscription/self" })
+		if err != nil || len(got.Charges) != 1 || got.Charges[0].Funding != c.want || asked != c.asks {
+			t.Errorf("%s: %+v, %v, asked for the subscriptions %v; want funding %v, asking %v", c.name, got.Charges, err, asked, c.want, c.asks)
+		}
+	}
+}

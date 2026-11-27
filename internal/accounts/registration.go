@@ -195,6 +195,18 @@ func (s *Service) verifyRequest(ctx context.Context, d domain, snap *snapshot, r
 	return user, nil
 }
 
+// registrationTier is the tier a verified registration's account joins: the site's default as it is at the click, not
+// when the request was stored, read under a share lock on the site row. A change of default and the disabling of a tier
+// lock that row first (tiers.go), so neither can pass between this read and the account's insert, and the account never
+// joins a disabled tier.
+func registrationTier(ctx context.Context, tx pg.Tx, site uuid.UUID) (uuid.UUID, error) {
+	var tier uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT default_tier_id FROM accounts.sites WHERE id = $1 FOR SHARE`, site).Scan(&tier); err != nil {
+		return uuid.UUID{}, fmt.Errorf("read the default tier: %w", err)
+	}
+	return tier, nil
+}
+
 // verifyInTx locks the request, matches the token once more, and spends the request on one user, account and
 // workspace. taken reports an address registered while the link was pending: the request is deleted and the
 // transaction commits, so the next attempt is refused for the same reason instead of finding the request again.
@@ -217,10 +229,14 @@ func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snap
 	if err != nil {
 		return UserID{}, false, err
 	}
+	tier, err := registrationTier(ctx, tx, pending.SiteID)
+	if err != nil {
+		return UserID{}, false, err
+	}
 	id, account := uuid.NewV7(), uuid.NewV7()
 	now := s.now()
 	if err := createUser(ctx, tx, s.queries, s.opened, newUser{
-		id: id, account: account, site: pending.SiteID, tier: pending.TierID, role: snap.roleIDs["owner"],
+		id: id, account: account, site: pending.SiteID, tier: tier, role: snap.roleIDs["owner"],
 		email: pending.Email, passwordHash: passwordHash, verified: &now, consent: consent,
 	}); err != nil {
 		return UserID{}, false, err

@@ -45,6 +45,7 @@ type chatChoice struct {
 type chatTool struct {
 	index                     int64
 	id, kind, name, arguments []byte
+	extra                     []byte // extra_content, where Google's endpoint puts a call's thought signature
 }
 
 // chatSpan is a choice of the chunk being read, applied once the chunk is read.
@@ -78,10 +79,11 @@ var (
 		"tool_calls":        func(a *chatAggregate) error { return a.eachElement(a.readTool) },
 	}
 	chatAggToolFields = map[string]func(*chatAggregate) error{
-		"index":    func(a *chatAggregate) error { return a.index(&a.tool.index) },
-		"id":       func(a *chatAggregate) error { return a.captureString(&a.tool.id) },
-		"type":     func(a *chatAggregate) error { return a.captureString(&a.tool.kind) },
-		"function": func(a *chatAggregate) error { return walk(&a.reader, a, chatAggFunctionFields) },
+		"index":         func(a *chatAggregate) error { return a.index(&a.tool.index) },
+		"id":            func(a *chatAggregate) error { return a.captureString(&a.tool.id) },
+		"type":          func(a *chatAggregate) error { return a.captureString(&a.tool.kind) },
+		"function":      func(a *chatAggregate) error { return walk(&a.reader, a, chatAggFunctionFields) },
+		"extra_content": func(a *chatAggregate) error { return a.capture(&a.tool.extra) },
 	}
 	chatAggFunctionFields = map[string]func(*chatAggregate) error{
 		"name":      func(a *chatAggregate) error { return a.captureString(&a.tool.name) },
@@ -238,7 +240,7 @@ func (a *chatAggregate) readTool() error {
 	for _, m := range [...]struct {
 		dst *[]byte
 		v   []byte
-	}{{&t.id, a.tool.id}, {&t.kind, a.tool.kind}} {
+	}{{&t.id, a.tool.id}, {&t.kind, a.tool.kind}, {&t.extra, a.tool.extra}} {
 		// An empty id or type is a vendor's filler on the fragments after the first (DashScope, DeepSeek), not a new value that
 		// would empty the call's: sub2api drops them the same way (backend/internal/service/openai_gateway_cc_tool_call_identity.go,
 		// stripEmptyChatToolCallIdentity, 8f2cbb5).

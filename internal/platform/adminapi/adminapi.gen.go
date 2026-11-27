@@ -625,6 +625,15 @@ type ServerInterface interface {
 	// ListTiers The tiers of a site
 	// (GET /api/admin/v1/tiers)
 	ListTiers(w http.ResponseWriter, r *http.Request, params ListTiersParams)
+	// CreateTier Add a tier
+	// (POST /api/admin/v1/tiers)
+	CreateTier(w http.ResponseWriter, r *http.Request, params CreateTierParams)
+	// UpdateTier Rename, disable or enable a tier
+	// (PATCH /api/admin/v1/tiers/{tier_id})
+	UpdateTier(w http.ResponseWriter, r *http.Request, tierId TierId, params UpdateTierParams)
+	// SetDefaultTier Make a tier the one new accounts join
+	// (PUT /api/admin/v1/tiers/{tier_id}/default)
+	SetDefaultTier(w http.ResponseWriter, r *http.Request, tierId TierId, params SetDefaultTierParams)
 	// ListUsers Users
 	// (GET /api/admin/v1/users)
 	ListUsers(w http.ResponseWriter, r *http.Request, params ListUsersParams)
@@ -9875,6 +9884,159 @@ func (siw *ServerInterfaceWrapper) ListTiers(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// CreateTier operation middleware
+func (siw *ServerInterfaceWrapper) CreateTier(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateTierParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTier(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateTier operation middleware
+func (siw *ServerInterfaceWrapper) UpdateTier(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "tier_id" -------------
+	var tierId TierId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tier_id", r.PathValue("tier_id"), &tierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateTierParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateTier(w, r, tierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetDefaultTier operation middleware
+func (siw *ServerInterfaceWrapper) SetDefaultTier(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "tier_id" -------------
+	var tierId TierId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tier_id", r.PathValue("tier_id"), &tierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetDefaultTierParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetDefaultTier(w, r, tierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListUsers operation middleware
 func (siw *ServerInterfaceWrapper) ListUsers(w http.ResponseWriter, r *http.Request) {
 
@@ -10338,6 +10500,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/users/{user_id}/platform-grants/{role}", wrapper.SetPlatformGrant)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/users/{user_id}/platform-grants", wrapper.ListUserPlatformGrants)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/tiers", wrapper.ListTiers)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/tiers", wrapper.CreateTier)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/admin/v1/tiers/{tier_id}", wrapper.UpdateTier)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/tiers/{tier_id}/default", wrapper.SetDefaultTier)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}", wrapper.GetAccount)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/key-limits", wrapper.UpdateAccountKeyLimits)
@@ -32228,6 +32393,360 @@ func (response ListTiersdefaultJSONResponse) VisitListTiersResponse(w http.Respo
 	return err
 }
 
+type CreateTierRequestObject struct {
+	Params CreateTierParams
+	Body   *CreateTierJSONRequestBody
+}
+
+type CreateTierResponseObject interface {
+	VisitCreateTierResponse(w http.ResponseWriter) error
+}
+
+type CreateTier201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateTier201JSONResponse struct {
+	Body    TierRef
+	Headers CreateTier201ResponseHeaders
+}
+
+func (response CreateTier201JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTier400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateTier400JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTier401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CreateTier401JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTier403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateTier403JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTier404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateTier404JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTier409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateTier409JSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTierdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateTierdefaultJSONResponse) VisitCreateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTierRequestObject struct {
+	TierId TierId `json:"tier_id"`
+	Params UpdateTierParams
+	Body   *UpdateTierJSONRequestBody
+}
+
+type UpdateTierResponseObject interface {
+	VisitUpdateTierResponse(w http.ResponseWriter) error
+}
+
+type UpdateTier200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateTier200JSONResponse struct {
+	Body    TierRef
+	Headers UpdateTier200ResponseHeaders
+}
+
+func (response UpdateTier200JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTier400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateTier400JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTier401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateTier401JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTier403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateTier403JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTier404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateTier404JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTier409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateTier409JSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTierdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateTierdefaultJSONResponse) VisitUpdateTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTierRequestObject struct {
+	TierId TierId `json:"tier_id"`
+	Params SetDefaultTierParams
+	Body   *SetDefaultTierJSONRequestBody
+}
+
+type SetDefaultTierResponseObject interface {
+	VisitSetDefaultTierResponse(w http.ResponseWriter) error
+}
+
+type SetDefaultTier204ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetDefaultTier204Response struct {
+	Headers SetDefaultTier204ResponseHeaders
+}
+
+func (response SetDefaultTier204Response) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(204)
+	return nil
+}
+
+type SetDefaultTier400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetDefaultTier400JSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTier401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetDefaultTier401JSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTier403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetDefaultTier403JSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTier404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetDefaultTier404JSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTier422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetDefaultTier422JSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultTierdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetDefaultTierdefaultJSONResponse) VisitSetDefaultTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListUsersRequestObject struct {
 	Params ListUsersParams
 }
@@ -33270,6 +33789,15 @@ type StrictServerInterface interface {
 	// ListTiers The tiers of a site
 	// (GET /api/admin/v1/tiers)
 	ListTiers(ctx context.Context, request ListTiersRequestObject) (ListTiersResponseObject, error)
+	// CreateTier Add a tier
+	// (POST /api/admin/v1/tiers)
+	CreateTier(ctx context.Context, request CreateTierRequestObject) (CreateTierResponseObject, error)
+	// UpdateTier Rename, disable or enable a tier
+	// (PATCH /api/admin/v1/tiers/{tier_id})
+	UpdateTier(ctx context.Context, request UpdateTierRequestObject) (UpdateTierResponseObject, error)
+	// SetDefaultTier Make a tier the one new accounts join
+	// (PUT /api/admin/v1/tiers/{tier_id}/default)
+	SetDefaultTier(ctx context.Context, request SetDefaultTierRequestObject) (SetDefaultTierResponseObject, error)
 	// ListUsers Users
 	// (GET /api/admin/v1/users)
 	ListUsers(ctx context.Context, request ListUsersRequestObject) (ListUsersResponseObject, error)
@@ -39431,6 +39959,107 @@ func (sh *strictHandler) ListTiers(w http.ResponseWriter, r *http.Request, param
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListTiersResponseObject); ok {
 		if err := validResponse.VisitListTiersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateTier operation middleware
+func (sh *strictHandler) CreateTier(w http.ResponseWriter, r *http.Request, params CreateTierParams) {
+	var request CreateTierRequestObject
+
+	request.Params = params
+
+	var body CreateTierJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTier(ctx, request.(CreateTierRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTier")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTierResponseObject); ok {
+		if err := validResponse.VisitCreateTierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateTier operation middleware
+func (sh *strictHandler) UpdateTier(w http.ResponseWriter, r *http.Request, tierId TierId, params UpdateTierParams) {
+	var request UpdateTierRequestObject
+
+	request.TierId = tierId
+	request.Params = params
+
+	var body UpdateTierJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateTier(ctx, request.(UpdateTierRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateTier")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateTierResponseObject); ok {
+		if err := validResponse.VisitUpdateTierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetDefaultTier operation middleware
+func (sh *strictHandler) SetDefaultTier(w http.ResponseWriter, r *http.Request, tierId TierId, params SetDefaultTierParams) {
+	var request SetDefaultTierRequestObject
+
+	request.TierId = tierId
+	request.Params = params
+
+	var body SetDefaultTierJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetDefaultTier(ctx, request.(SetDefaultTierRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetDefaultTier")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetDefaultTierResponseObject); ok {
+		if err := validResponse.VisitSetDefaultTierResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

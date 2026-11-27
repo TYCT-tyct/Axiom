@@ -7,6 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Announcements } from "./announcements";
 
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// The session the entry reads when the newest live announcement began from; a test sets it.
+const session = vi.hoisted(() => ({ latest: undefined as string | undefined }));
+vi.mock("@axiom/app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@axiom/app")>()),
+  useSession: () => ({ latest_announcement_at: session.latest }),
+}));
 
 function render(data?: object, error?: Error) {
   const client = new QueryClient();
@@ -46,6 +52,22 @@ describe("site announcement entry", () => {
     expect(html).toContain('role="alert"');
     expect(html).toContain(message);
     expect(html).toContain("announcements.retry");
+  });
+
+  it("marks an announcement that began after the list was last opened in this browser, without reading the list", () => {
+    expect(render()).not.toContain("announcements.unread");
+    session.latest = "2026-11-25T00:00:00Z";
+    expect(render()).toContain("announcements.unread");
+    const stored = new Map([["axiom.announcements.seen", "2026-11-25T08:00:00+08:00"]]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: () => {} });
+    try {
+      expect(render()).not.toContain("announcements.unread");
+      stored.set("axiom.announcements.seen", "2026-11-21T00:00:00Z");
+      expect(render()).toContain("announcements.unread");
+    } finally {
+      vi.unstubAllGlobals();
+      session.latest = undefined;
+    }
   });
 
   it("shows a permission state instead of cached announcements after access is refused", () => {

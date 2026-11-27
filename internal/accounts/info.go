@@ -25,6 +25,9 @@ type SessionInfo struct {
 	CSRFToken   string
 	ExpiresAt   time.Time
 	Permissions []string // sorted; none while the session waits for its second factor
+	CallsPaused bool     // the account's calls are refused (SetAccountSuspended); signing in and paying still work
+	// LatestAnnouncement is when the newest live announcement of the site began; zero when there is none.
+	LatestAnnouncement time.Time
 }
 
 // SessionInfo reads p's session. The permissions are those of p's roles in its own account that the session's level
@@ -35,7 +38,8 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 	life := s.snapshot.Load().sites[p.site].sessions[p.surface]
 	maxAge, idle := life.seconds()
 	var roles []uuid.UUID
-	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) (err error) {
+	// The home site lets the session read its site's announcements, which belong to the site, not the account.
+	if err := s.db.Tx(ctx, pg.AccountScopeIn(uuid.UUID(p.site), uuid.UUID(p.account)), func(tx pg.Tx) (err error) {
 		if rows, err = s.queries.SessionInfo(ctx, tx, SessionInfoParams{ID: uuid.UUID(p.session), MaxAgeSeconds: maxAge, IdleSeconds: idle}); err != nil {
 			return err
 		}
@@ -57,7 +61,8 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 		// A passkey protects the console but not the admin listener, which cannot run WebAuthn; an admin session
 		// reports only TOTP as its second factor so the page does not claim a protection it cannot use.
 		MFAEnabled: r.Mfa || (r.Passkeys > 0 && p.surface == Console), TOTP: r.Mfa, Passkeys: int(r.Passkeys),
-		CSRFToken: r.CsrfToken, ExpiresAt: r.ExpiresAt.Time, Permissions: s.permissionsOf(p, roles),
+		CSRFToken: r.CsrfToken, ExpiresAt: r.ExpiresAt.Time, Permissions: s.permissionsOf(p, roles), CallsPaused: r.CallsPaused,
+		LatestAnnouncement: r.LatestAnnouncement.Time,
 	}, nil
 }
 

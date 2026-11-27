@@ -47,7 +47,7 @@ func (a *attempt) stream(ctx context.Context, body io.ReadCloser, uc protocol.Us
 		relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
 			ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
 			Memory: s.x.Memory, Aggregate: s.aggregate, Citations: s.citations, Echo: s.echo,
-			ZeroOutput: s.c.Request.ZeroOutput(), ServerTool: a.serverTool(),
+			ZeroOutput: s.c.Request.ZeroOutput(), ServerTool: a.serverTool(), CustomTools: s.customTools(a.entry.Target.Format),
 		})
 		s.live = relay
 		idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })

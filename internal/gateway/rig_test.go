@@ -87,6 +87,7 @@ type rig struct {
 	hold       chan struct{} // when set, Run waits for it to close before it settles; see holdCalls
 	settled    int
 	exec       *Executor       // when set, Run is its Run
+	up         *fakeUpstreams  // when set, the credentials count_tokens asks; none otherwise
 	clientGone <-chan struct{} // closed when the server sees the client of the latest call that reached Run go
 }
 
@@ -226,7 +227,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.memory = protocol.NewMemory(o.memory)
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
-		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
+		Run: r.run, Upstreams: rigUpstreams{r}, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
 		Outstanding: NewOutstanding(), Search: cmp.Or(o.backends, SearchBackends(singleSearch{o.search})), Parser: o.parser,
 	}); err != nil {
 		t.Fatal(err)
@@ -309,6 +310,31 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	if _, err := w.Write(out); err != nil {
 		r.t.Error(err)
 	}
+}
+
+// rigUpstreams are the handler's credentials: the test's fake ones once it gives some (fakeUpstreams), none before.
+type rigUpstreams struct{ r *rig }
+
+func (u rigUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
+	u.r.mu.Lock()
+	up := u.r.up
+	u.r.mu.Unlock()
+	if up == nil {
+		return nil, suppliers.ErrNoEndpoint
+	}
+	return up.Acquire(id)
+}
+
+// fakeUpstreams gives the handler fake credentials for the rig's endpoints, each answering by its script.
+func (r *rig) fakeUpstreams() *fakeUpstreams {
+	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}}
+	for _, e := range r.endpoints {
+		up.eps[uuid.UUID(e.ID)] = &fakeEndpoint{}
+	}
+	r.mu.Lock()
+	r.up = up
+	r.mu.Unlock()
+	return up
 }
 
 // holdCalls makes Run wait before it settles, until the returned function is called (or the test ends, which must not

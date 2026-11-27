@@ -67,6 +67,8 @@ docker() {
     'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
     'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
     'compose -f deploy/compose.yaml exec -T axiom /axiom user create --email statement@example.com') cat > /dev/null ;;
+    'compose -f deploy/compose.yaml exec -T axiom /axiom user create --email admin@example.com') cat > /dev/null ;;
+    'inspect --format {{.State.Health.Status}} '*) echo healthy ;;
     'compose -f deploy/compose.yaml ps --quiet postgres') cat db ;;
     'compose -f deploy/compose.yaml ps --quiet axiom') cat node ;;
     'ps -aq --filter label=com.docker.compose.project=axiom-ci-fixture') echo axiom ;;
@@ -96,6 +98,20 @@ curl() {
     *'/api/console/v1/statement/daily?time_zone=Asia%2FShanghai')
       [ "${!#}" = "http://localhost:$(cat public.port)/api/console/v1/statement/daily?time_zone=Asia%2FShanghai" ] || return 7
       echo '{"data":[],"next_cursor":null}' ;;
+    # The first administrator on the admin domain: a password's session is refused the users, a verified one reads them.
+    *'Host: localhost:8082'*'/api/admin/v1/auth/sign-in')
+      cat > /dev/null
+      printf 'Set-Cookie: axiom_session=password; Path=/\r\n\r\n{"csrf_token":"fixture"}\n' ;;
+    *'Host: localhost:8082'*'/api/admin/v1/auth/totp/setup') echo '{"secret":"GEZDGNBVGY3TQOJQ"}' ;;
+    *'Host: localhost:8082'*'/api/admin/v1/auth/totp/confirm')
+      cat > /dev/null
+      printf 'Set-Cookie: axiom_session=verified; Path=/\r\n\r\n{}\n' ;;
+    *'Host: localhost:8082'*'/api/admin/v1/users')
+      case "$*" in
+        *'Cookie: axiom_session=verified'*) echo '{"data":[{"email":"admin@example.com"}]}' ;;
+        *'-w %{http_code}'*) echo 403 ;;
+        *) return 22 ;;
+      esac ;;
     *'/api/console/v1/site'|*'/api/admin/v1/users') echo '{"error":{"code":"not_found"}}' ;;
     *'-w '*'/assets/'*) echo 404 ;;
     *'-H Accept-Encoding: br'*"${UNCACHED:-no script is named like this}"*) printf 'cache-control: no-store\n' ;;

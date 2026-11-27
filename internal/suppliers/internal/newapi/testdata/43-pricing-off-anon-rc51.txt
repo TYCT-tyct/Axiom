@@ -1,0 +1,6 @@
+# 43-pricing-off-anon-rc51
+GET /api/pricing
+< status: 403  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"message":"pricing is disabled","success":false}

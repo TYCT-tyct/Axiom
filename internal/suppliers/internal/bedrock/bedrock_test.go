@@ -81,16 +81,16 @@ func TestSign(t *testing.T) {
 	}{
 		{
 			`{"model":"anthropic.claude-x-v1:0","stream":true,"max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke-with-response-stream",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, eventStream,
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["context-1m-2025-08-07","compact-2026-01-12"]}`, eventStream,
 		},
 		{
 			`{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["context-1m-2025-08-07","compact-2026-01-12"]}`, "application/json",
 		},
 	} {
 		req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
 			Format: protocol.Messages, Region: "eu-central-1", Model: "eu.anthropic.claude-x-v1:0", Body: []byte(tc.body),
-			Header: http.Header{"Anthropic-Beta": {"a-1, b-2"}}, Key: example, At: at,
+			Header: http.Header{"Anthropic-Beta": {"context-1m-2025-08-07, claude-code-20250219", "compact-2026-01-12"}}, Key: example, At: at,
 		})
 		if f != nil {
 			t.Fatalf("%+v", f)
@@ -103,6 +103,27 @@ func TestSign(t *testing.T) {
 		if req.URL.String() != strings.Replace(tc.url, "v1:0", "v1%3A0", 1) || string(body) != tc.want || req.Header.Get("Accept") != tc.accept ||
 			!strings.HasPrefix(auth, "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20261126/eu-central-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date, Signature=") {
 			t.Errorf("sent %s %s, accept %s, %s", req.URL, body, req.Header.Get("Accept"), auth)
+		}
+	}
+}
+
+// TestBetas: the features Bedrock takes stay once each, Anthropic's tool search under Bedrock's name and with its
+// examples; the rest go, and with none left there is no anthropic_beta at all.
+func TestBetas(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{"kept and dropped", []string{"claude-code-20250219,context-1m-2025-08-07", "interleaved-thinking-2025-05-14, context-1m-2025-08-07"}, `["context-1m-2025-08-07","interleaved-thinking-2025-05-14"]`},
+		{"interleaved thinking with a budget past max_tokens", []string{"interleaved-thinking-2025-05-14"}, `["interleaved-thinking-2025-05-14"]`},
+		{"tool search renamed, examples added", []string{"advanced-tool-use-2025-11-20"}, `["tool-search-tool-2025-10-19","tool-examples-2025-10-29"]`},
+		{"none left", []string{"claude-code-20250219, oauth-2025-04-20"}, ``},
+		{"none given", nil, ``},
+	} {
+		if got := string(betas(tc.values)); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
 		}
 	}
 }

@@ -97,9 +97,10 @@ type canonFile struct {
 }
 
 type canonToolCall struct {
-	ID       string            `json:"id"`
-	Type     string            `json:"type"`
-	Function canonCallFunction `json:"function"`
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`
+	Function     canonCallFunction `json:"function"`
+	ExtraContent jsontext.Value    `json:"extra_content"` // read for Gemini's thought signature (geminiCallPart)
 }
 
 type canonCallFunction struct {
