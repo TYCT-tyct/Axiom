@@ -41,6 +41,8 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 		{"ark", "/api/v3/models", "/api/v3/chat/completions", "", []string{"doubao-seed-2-1-pro-260915"}},
 		{"qianfan", "/v2/models", "/v2/chat/completions", "", []string{"deepseek-v3.2"}},
 		{"minimax", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"MiniMax-M3", "MiniMax-M3.1-Flash"}},
+		{"zhipu", "/api/paas/v4/models", "/api/paas/v4/chat/completions", "/api/anthropic/v1/messages", []string{"glm-5.3", "glm-5.3-flash"}},
+		{"bailian", "/compatible-mode/v1/models", "/compatible-mode/v1/chat/completions", "/apps/anthropic/v1/messages", []string{"qwen3.8-flash", "qwen4-max", "text-embedding-v4"}},
 		{"xai", "/v1/models", "/v1/chat/completions", "", []string{"grok-420-reasoning", "grok-imagine-image", "latest"}},
 		{"mistral", "/v1/models", "/v1/chat/completions", "", []string{"mistral-large-4"}},
 	}

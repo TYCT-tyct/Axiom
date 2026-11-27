@@ -96,6 +96,37 @@ var rows = []direct.Provider{
 	},
 	{
 		Type: adapter.Type{
+			Kind: "zhipu", Name: "智谱", Vendor: "z-ai", Serves: []string{"z-ai"}, Group: adapter.GroupDomestic,
+			Entries: []adapter.PriceEntry{
+				{ID: "cn", Origin: "https://open.bigmodel.cn", Currency: "CNY"},
+				{ID: "global", Origin: "https://api.z.ai", Currency: "USD"},
+			},
+			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
+		},
+		// The list at the root's /models is not in Zhipu's reference, but it answers a key that is not valid with a
+		// 401, as the check needs (probed 2026-11-27 at both origins).
+		Root:      "/api/paas/v4",
+		Anthropic: &direct.Anthropic{Root: "/api/anthropic", Models: []string{"glm-5.3", "glm-5.3-flash", "glm-5.2"}},
+	},
+	{
+		Type: adapter.Type{
+			Kind: "bailian", Name: "阿里云百炼", Vendor: "qwen", Serves: []string{"qwen"}, Group: adapter.GroupDomestic,
+			Entries: []adapter.PriceEntry{
+				{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY"},
+				{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD"},
+			},
+			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
+		},
+		Root: "/compatible-mode/v1",
+		// Bailian also sells other authors' models (DeepSeek, Kimi, GLM) at prices of its own; they are listed and stay
+		// unpriced, since the type serves Qwen alone.
+		Anthropic: &direct.Anthropic{Root: "/apps/anthropic", Models: []string{
+			"qwen4-max", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus", "qwen-plus", "qwen-plus-latest",
+			"qwen3.8-flash", "qwen3.7-flash", "qwen3.6-flash", "qwen3.5-flash", "qwen-flash", "qwen3-coder-flash", "qwen3-vl-plus",
+		}},
+	},
+	{
+		Type: adapter.Type{
 			Kind: "xai", Name: "xAI", Vendor: "x-ai", Serves: []string{"x-ai"}, Group: adapter.GroupOfficial,
 			Entries:  []adapter.PriceEntry{{ID: "global", Origin: "https://api.x.ai", Currency: "USD"}},
 			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
