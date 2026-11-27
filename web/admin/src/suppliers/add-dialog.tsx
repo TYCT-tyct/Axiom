@@ -212,6 +212,15 @@ function NewFields(props: ChoiceProps) {
   );
 }
 
+// An entry as the choice of entries shows it: a vendor whose account, not the address, decides the price list names the
+// account the entry is for.
+function entryLabel(t: T, e: SupplierType["entries"][number]): string {
+  const where = { origin: e.origin, currency: e.currency };
+  return e.account === undefined
+    ? t("upstream.types.entryOption", where)
+    : t("upstream.types.entryAccountOption", { ...where, account: e.account });
+}
+
 // Where a new supplier is connected: a choice of price entry when the type has several, or, for a type without
 // entries, the address, the currency and (for a direct API) the family a person gives.
 function WhereFields({ type, choice, onChoose, error }: ChoiceProps) {
@@ -228,18 +237,7 @@ function WhereFields({ type, choice, onChoose, error }: ChoiceProps) {
           name="entry"
           value={choice.entry}
           onChange={(event) => onChoose({ entry: event.target.value })}
-          options={type.entries.map((e) => ({
-            value: e.id,
-            // A vendor whose account, not the address, decides the price list names the account the entry is for.
-            label:
-              e.account === undefined
-                ? t("upstream.types.entryOption", { origin: e.origin, currency: e.currency })
-                : t("upstream.types.entryAccountOption", {
-                    account: e.account,
-                    origin: e.origin,
-                    currency: e.currency,
-                  }),
-          }))}
+          options={type.entries.map((e) => ({ value: e.id, label: entryLabel(t, e) }))}
         />
       ) : null}
       {type.entries.length === 0 ? (
