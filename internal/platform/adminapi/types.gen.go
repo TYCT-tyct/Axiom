@@ -3715,6 +3715,39 @@ type Balance struct {
 	SpentThisMonth Money `json:"spent_this_month"`
 }
 
+// BasePriceConfirmation defines model for BasePriceConfirmation.
+type BasePriceConfirmation struct {
+	Items []struct {
+		// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		EndpointId Uuid `json:"endpoint_id"`
+
+		// Price The base in USD, per unit of each item; absent takes the model's official price.
+		Price *PriceSchedule `json:"price,omitempty"`
+	} `json:"items"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// BasePriceList defines model for BasePriceList.
+type BasePriceList struct {
+	Data []struct {
+		// Base In the supplier's own unit (currency XXX), before the group's ratio.
+		Base PriceSchedule `json:"base"`
+
+		// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		EndpointId Uuid `json:"endpoint_id"`
+	} `json:"data"`
+}
+
+// BasePriceRemoval defines model for BasePriceRemoval.
+type BasePriceRemoval struct {
+	EndpointIds []Uuid `json:"endpoint_ids"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // BillingItem defines model for BillingItem.
 type BillingItem string
 
@@ -9523,6 +9556,18 @@ type TestSupplierEndpointParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ClearSupplierBasePricesParams defines parameters for ClearSupplierBasePrices.
+type ClearSupplierBasePricesParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ConfirmSupplierBasePricesParams defines parameters for ConfirmSupplierBasePrices.
+type ConfirmSupplierBasePricesParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ReplaceSupplierCloudCredentialParams defines parameters for ReplaceSupplierCloudCredential.
 type ReplaceSupplierCloudCredentialParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -9987,6 +10032,12 @@ type CreateDirectSupplierJSONRequestBody = DirectSupplierCreate
 
 // TestSupplierEndpointJSONRequestBody defines body for TestSupplierEndpoint for application/json ContentType.
 type TestSupplierEndpointJSONRequestBody = EndpointTestRequest
+
+// ClearSupplierBasePricesJSONRequestBody defines body for ClearSupplierBasePrices for application/json ContentType.
+type ClearSupplierBasePricesJSONRequestBody = BasePriceRemoval
+
+// ConfirmSupplierBasePricesJSONRequestBody defines body for ConfirmSupplierBasePrices for application/json ContentType.
+type ConfirmSupplierBasePricesJSONRequestBody = BasePriceConfirmation
 
 // ReplaceSupplierCloudCredentialJSONRequestBody defines body for ReplaceSupplierCloudCredential for application/json ContentType.
 type ReplaceSupplierCloudCredentialJSONRequestBody = CloudCredentialReplace

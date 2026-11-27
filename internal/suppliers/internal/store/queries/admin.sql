@@ -46,6 +46,13 @@ FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
 
+-- name: EndpointKeysOf :many
+-- The endpoints of a supplier among ids with what the sync names each by: the group's ref and the upstream name
+-- (syncer.PlanKey), and the model a default base price is read from.
+SELECT e.id, e.model_id, e.upstream_name, g.upstream_ref
+FROM suppliers.endpoints e JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id
+WHERE e.supplier_id = @supplier_id AND e.id = ANY(@ids::uuid[]);
+
 -- name: GetEndpointOf :many
 SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id AND id = @id;

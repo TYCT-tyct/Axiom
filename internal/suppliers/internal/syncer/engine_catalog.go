@@ -102,13 +102,13 @@ func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[st
 	var schedule catalog.Schedule
 	var derivation adapter.Derivation
 	var basis string
-	switch base, confirmed := c.State.Confirmed[m.UpstreamName]; {
+	switch base, confirmed := c.State.Confirmed[key]; {
 	case m.Cost != nil:
 		schedule, derivation, basis = *m.Cost, m.Derivation, "published"
 	case confirmed:
 		parsed, err := catalog.ParseSchedule([]byte(base))
 		if err != nil {
-			return "", fmt.Errorf("syncer: the confirmed base of %s: %w", m.UpstreamName, err)
+			return "", fmt.Errorf("syncer: the confirmed base of %s: %w", key, err)
 		}
 		if schedule, err = adapter.ScaleSchedule(parsed, g.Ratio); err != nil {
 			return "", err

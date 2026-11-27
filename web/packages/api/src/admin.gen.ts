@@ -2389,6 +2389,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/{supplier_id}/base-prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the base price of endpoints whose supplier shows no prices
+         * @description For a relay that does not publish its prices (new-api with pricing hidden, sub2api, CPA), a person's base price per endpoint, in US dollars as the relay prices: the model's official price in the catalog when `price` is absent, or the price given. It is kept in the supplier's own unit (a new-api quota is 1/500,000 dollar of its ratios) and the sync makes the endpoint's cost plan of it times the group's ratio, rounded up once, at its next catalog round, which this makes due now; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier publishes still wins. Confirming again replaces the base. A model with no official price in USD needs `price` (422), as does a price not in USD or charging nothing. Not for a direct or cloud supplier (409). At most 500 endpoints.
+         */
+        post: operations["confirmSupplierBasePrices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/base-price-removals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take confirmed base prices away
+         * @description Removes the confirmed base of each endpoint named; at the sync's next catalog round, made due now, an endpoint the supplier shows no price for has its cost unknown again and leaves routing. The answer is the bases removed; an endpoint that had none is left out, and if none had one nothing changes and nothing is recorded. At most 500.
+         */
+        post: operations["clearSupplierBasePrices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/suppliers/{supplier_id}/keys": {
         parameters: {
             query?: never;
@@ -7076,6 +7116,25 @@ export interface components {
             plan_id?: components["schemas"]["Uuid"];
             lines: components["schemas"]["CostLine"][];
             break_even?: components["schemas"]["CostBreakEven"];
+        };
+        BasePriceConfirmation: {
+            items: {
+                endpoint_id: components["schemas"]["Uuid"];
+                /** @description The base in USD, per unit of each item; absent takes the model's official price. */
+                price?: components["schemas"]["PriceSchedule"];
+            }[];
+            reason: components["schemas"]["Reason"];
+        };
+        BasePriceRemoval: {
+            endpoint_ids: components["schemas"]["Uuid"][];
+            reason: components["schemas"]["Reason"];
+        };
+        BasePriceList: {
+            data: {
+                endpoint_id: components["schemas"]["Uuid"];
+                /** @description In the supplier's own unit (currency XXX), before the group's ratio. */
+                base: components["schemas"]["PriceSchedule"];
+            }[];
         };
         /** @description A family of models within its author, such as gpt-6.1 or claude-sonnet. */
         ModelFamily: string;
@@ -12131,6 +12190,79 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    confirmSupplierBasePrices: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BasePriceConfirmation"];
+            };
+        };
+        responses: {
+            /** @description The bases as stored, in the supplier's own unit. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasePriceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    clearSupplierBasePrices: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BasePriceRemoval"];
+            };
+        };
+        responses: {
+            /** @description The bases removed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasePriceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

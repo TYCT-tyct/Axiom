@@ -44,4 +44,6 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrIntakeRevision, http.StatusConflict, codeStaleRevision, "the intake rule changed since it was read"},
 	{suppliers.ErrNotSynced, http.StatusConflict, codeConflict, "a direct API or a cloud supplier is not synced: its models come from its keys"},
 	{suppliers.ErrNoInboxItem, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrNoOfficialPrice, http.StatusUnprocessableEntity, codeUnprocessable, "a model has no official price in USD to confirm: give one"},
+	{suppliers.ErrBasePrice, http.StatusUnprocessableEntity, codeUnprocessable, "a base price is in USD, charges something, and stays within a unit price in the supplier's unit"},
 }

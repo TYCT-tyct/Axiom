@@ -89,10 +89,13 @@ type State struct {
 	Funding     adapter.Funding
 	LowNotified bool // a BalanceLow event has been sent and the balance has not recovered
 
-	Groups    []GroupSnap // sorted by Ref
-	Keys      []adapter.KeyState
-	Plans     map[string]string // "group/model" -> fingerprint of the current cost plan
-	Confirmed map[string]string // model -> a person's confirmed base schedule (JSON); scaled by the group's ratio
+	Groups []GroupSnap // sorted by Ref
+	Keys   []adapter.KeyState
+	Plans  map[string]string // "group/model" -> fingerprint of the current cost plan
+	// Confirmed is a person's base price of an endpoint, by PlanKey: a schedule in the supplier's own unit (canonical
+	// JSON) that the group's ratio scales into the endpoint's cost plan when the supplier publishes no price of its own.
+	// Only the admin writes it (persist.ConfirmBases); the engine reads it.
+	Confirmed map[string]string
 
 	// Pool is what the management API of a pool last said of each group's accounts and windows, sorted by group ref.
 	// It lives in the groups' own columns, not in the stored state (json:"-"): the state's format is what an older node
