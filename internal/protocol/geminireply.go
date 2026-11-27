@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"cmp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -202,6 +203,9 @@ type GeminiReply struct {
 	// held is the event that finished the candidate, kept for the usage the relay sends after it: Google's stream ends
 	// with one event holding both, and the Google SDKs refuse a turn whose last event has no candidate.
 	held *geminiFrame
+	// last is the latest content part, held back for the finishing event: Google's last event carries the candidate's
+	// final parts, and the Google SDKs refuse a candidate without any.
+	last []geminiPart
 }
 
 // geminiFrame is an event's makings: the chunk it came of, its parts and the finish reason.
@@ -228,6 +232,7 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 		return geminiErrorEvent(*c.Error), nil
 	}
 	parts, finish := g.chunkParts(c)
+	parts, g.last = append(g.last, parts...), nil
 	switch {
 	case g.held != nil:
 		g.held.parts = append(g.held.parts, parts...)
@@ -235,7 +240,10 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	case finish != "" && c.Usage == nil:
 		g.held = &geminiFrame{c, parts, finish}
 		return nil, nil
-	case len(parts) == 0 && finish == "" && c.Usage == nil:
+	case finish == "" && len(parts) > 0:
+		parts, g.last = parts[:len(parts)-1], slices.Clone(parts[len(parts)-1:])
+	}
+	if len(parts) == 0 && finish == "" && c.Usage == nil {
 		return nil, nil
 	}
 	return geminiResponseOf(c, parts, finish), nil
@@ -260,6 +268,10 @@ func (g *GeminiReply) chunkParts(c chatReply) ([]geminiPart, string) {
 // release gives the held finishing event with the usage, if one is held.
 func (g *GeminiReply) release(usage *chatUsageCounts) []byte {
 	h := g.held
+	if h == nil && g.last != nil { // the stream ended unfinished: what was held back still goes out
+		h = &geminiFrame{parts: g.last}
+	}
+	g.last = nil
 	if h == nil {
 		return nil
 	}
@@ -329,9 +341,11 @@ func geminiResponseOf(c chatReply, parts []geminiPart, finish string) jsonx.Raw 
 	out := requestObject{"modelVersion": jsonValue(c.Model), "responseId": jsonValue(c.ID)}
 	if len(parts) > 0 || finish != "" {
 		candidate := requestObject{"index": jsonx.Raw("0")}
-		if len(parts) > 0 {
-			candidate["content"] = jsonValue(geminiContent{Role: "model", Parts: parts})
+		if len(parts) == 0 { // a reply with nothing in it still finishes with a part, as every candidate must have one
+			empty := ""
+			parts = []geminiPart{{Text: &empty}}
 		}
+		candidate["content"] = jsonValue(geminiContent{Role: "model", Parts: parts})
 		if finish != "" {
 			candidate["finishReason"] = jsonValue(finish)
 		}

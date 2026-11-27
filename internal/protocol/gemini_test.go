@@ -10,6 +10,7 @@ import (
 	"testing/iotest"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/protocol/internal/sse"
 )
@@ -194,24 +195,29 @@ func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 				`"promptTokensDetails":[{"modality":"TEXT","tokenCount":4},{"modality":"AUDIO","tokenCount":3},{"modality":"IMAGE","tokenCount":2}],` +
 				`"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}]}}` + "\n\n",
 			false,
-			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2}, false,
+			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2},
+			false,
 		},
 		{
 			"cut off after reporting",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
 			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, false,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+			false,
 		},
 		{
 			"reset after reporting",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
-			true, map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, true,
+			true,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+			true,
 		},
 		{
 			"a malformed call after reporting",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}],` + usage + `}` + "\n\n",
 			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}, false,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+			false,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -244,11 +250,49 @@ func TestGeminiReply(t *testing.T) {
 	// The last event is the candidate's finish with the usage, as Google's own stream ends: a client that keeps the
 	// chat's history (the Google SDKs) refuses a turn whose last event has no candidate.
 	last := events[len(events)-1]
-	if len(events) != 2 || strings.Contains(all, "Weighing") || !strings.Contains(events[0], `{"text":"Checking."}`) ||
+	if len(events) != 1 || strings.Contains(all, "Weighing") || !strings.Contains(last, `{"text":"Checking."}`) ||
 		!strings.Contains(last, `"functionCall":{"args":{"city":"Paris"},"id":"call_r1_0","name":"get_weather"},"thoughtSignature":"c2ln"`) ||
 		strings.Count(all, `"finishReason":"STOP"`) != 1 || !strings.Contains(last, `"finishReason":"STOP"`) ||
 		!strings.Contains(last, `"usageMetadata":{"cachedContentTokenCount":4,"candidatesTokenCount":5,"promptTokenCount":10,"thoughtsTokenCount":7,"totalTokenCount":22}`) {
 		t.Errorf("Gemini events:\n%s", all)
+	}
+}
+
+// Every candidate a Gemini client is streamed holds parts, the last one with its finish and the usage, as Google's own
+// stream does: the Google SDKs refuse a turn with a candidate that has none, so the text of a reply without calls has
+// its last piece held for the finishing event.
+func TestGeminiReplyEndsTextWithParts(t *testing.T) {
+	t.Parallel()
+	chat := relayTo(t, protocol.Chat, protocol.Chat, bytes.NewReader(sample(t, "chat/text/upstream.sse")), protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
+	if chat.err != nil {
+		t.Fatal(chat.err)
+	}
+	events := geminiEvents(t, protocol.NewGeminiReply(protocol.GeminiOptions{}), chat.out)
+	var text strings.Builder
+	for i, e := range events {
+		var r struct {
+			Candidates []struct {
+				Content *struct {
+					Parts []struct {
+						Text string `json:"text"`
+					} `json:"parts"`
+				} `json:"content"`
+				FinishReason string `json:"finishReason"`
+			} `json:"candidates"`
+			Usage *struct{} `json:"usageMetadata"`
+		}
+		if err := jsonx.Unmarshal([]byte(e), &r); err != nil || len(r.Candidates) != 1 || r.Candidates[0].Content == nil || len(r.Candidates[0].Content.Parts) == 0 {
+			t.Fatalf("event %d has no candidate with parts (%v): %s", i, err, e)
+		}
+		for _, p := range r.Candidates[0].Content.Parts {
+			text.WriteString(p.Text)
+		}
+		if last := i == len(events)-1; last != (r.Candidates[0].FinishReason == "STOP") || last != (r.Usage != nil) {
+			t.Errorf("event %d of %d: finish %q, usage %v: %s", i, len(events), r.Candidates[0].FinishReason, r.Usage != nil, e)
+		}
+	}
+	if text.String() != "Hello" {
+		t.Errorf("the events say %q, want the sample's Hello", text.String())
 	}
 }
 
