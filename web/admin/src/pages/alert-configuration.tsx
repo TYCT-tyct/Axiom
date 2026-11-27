@@ -16,10 +16,11 @@ import {
   TextArea,
   useFormat,
 } from "@axiom/ui";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { BalanceLinesCard } from "../alert-balance-lines";
 import { ChangeDialog, useSnapshot } from "../change";
 import en from "../locales/en/alert-configuration";
 import settingWords from "../locales/settings";
@@ -27,7 +28,6 @@ import zh from "../locales/zh/alert-configuration";
 import { formatJSON, parseJSONLossless } from "../lossless";
 import { Code, PageBody } from "../parts";
 import { alertConfigurationQuery } from "../policy-queries";
-import { suppliersQuery } from "../queries";
 import { type NumberSpec, numberOf, numberText, numberValid } from "../setting-fields";
 import { NumberSetting, SettingsCard, SwitchSetting } from "../setting-rows";
 import { SettingsSubmit, type SettingValue, useSettingDrafts } from "../settings-drafts";
@@ -43,7 +43,6 @@ type Spend = AdminSchemas["SpendDetection"];
 type ConfigInput = Omit<AdminSchemas["AlertConfigurationRequest"], "reason">;
 type Channel = AdminSchemas["AlertChannel"];
 type Rule = AdminSchemas["AlertRule"];
-type Line = AdminSchemas["LowBalanceThreshold"];
 type Edit = { kind: "configuration" | "add" } | { kind: "test"; id: string } | { kind: "secret"; channel: Channel };
 
 // The channel kinds, each named by the one destination member it sets (api/admin.yaml AlertChannel), and the secret it
@@ -217,17 +216,7 @@ function Configuration({ view }: { view: Config }) {
           <Rules rules={view.rules ?? []} />
         </SettingsCard>
         <ChannelsCard view={view} edit={setEdit} />
-        <SettingsCard
-          scope="platform"
-          title={t("alertConfig.balanceLines")}
-          actions={
-            <ActionButton size="sm" icon="pencil" onClick={() => setEdit({ kind: "configuration" })}>
-              {t("alertConfig.edit")}
-            </ActionButton>
-          }
-        >
-          <BalanceLines lines={view.low_balance_thresholds ?? []} />
-        </SettingsCard>
+        <BalanceLinesCard lines={view.low_balance_thresholds ?? []} onEdit={() => setEdit({ kind: "configuration" })} />
         {spend ? (
           <SettingsCard scope="platform" title={t("alertConfig.spend")}>
             <SwitchSetting drafts={drafts} setting="alerts.spendOn" />
@@ -279,30 +268,6 @@ function Rules({ rules }: { rules: Rule[] }) {
           </Tag>
         </SettingRow>
       ))}
-    </>
-  );
-}
-
-// BalanceLines names each supplier a line is set for by the first page of suppliers, and by its ID past it.
-function BalanceLines({ lines }: { lines: Line[] }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const suppliers = useInfiniteQuery(suppliersQuery());
-  const names = new Map((suppliers.data?.pages ?? []).flatMap((page) => page.data ?? []).map((s) => [s.id, s.name]));
-  return (
-    <>
-      {lines.map((line) => (
-        <SettingRow
-          key={line.supplier_id}
-          title={names.get(line.supplier_id) ?? line.supplier_id}
-          detail={t("alertConfig.balanceLine")}
-        >
-          <Code>{format.decimal(line.threshold)}</Code>
-        </SettingRow>
-      ))}
-      <Text size="sm" tone="faint">
-        {t("alertConfig.balanceDefault")}
-      </Text>
     </>
   );
 }

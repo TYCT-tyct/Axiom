@@ -13,7 +13,8 @@ export default {
   noChannels: "No notification channels",
   edit: "Edit rules and channels",
   save: "Save alert configuration",
-  editIntro: "Enter rules, channels and supplier balance lines as JSON arrays. Unusual spend detection is edited in the rows of this page.",
+  editIntro:
+    "Enter rules, channels and supplier balance lines as JSON arrays. Unusual spend detection is edited in the rows of this page.",
   invalid: "Check the rules, channels and balance lines JSON arrays.",
   saved: "Alert configuration saved.",
   testChannel: "Send test",

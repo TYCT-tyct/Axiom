@@ -77,10 +77,24 @@ func emitBalanceAlerts(ctx context.Context, tx pg.Tx, lines LowBalanceLines) err
 	if err != nil {
 		return err
 	}
+	signals, low := balanceCrossings(readings, p.Low)
+	for _, signal := range signals {
+		if err = alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
+			return err
+		}
+	}
+	return alert.SavePosition(ctx, tx, source, balanceAlertPosition{Initialized: true, Low: low})
+}
+
+// balanceCrossings is the signals of the keys whose side of the line differs from what was last reported, and the keys
+// low now. A key reported low that is no longer read (removed, disabled, or its supplier paused) has no balance to be
+// low, and is resolved.
+func balanceCrossings(readings []balanceReading, reportedLow []string) ([]alert.Signal, []string) {
 	reported := map[string]bool{}
-	for _, key := range p.Low {
+	for _, key := range reportedLow {
 		reported[key] = true
 	}
+	var signals []alert.Signal
 	low := []string{}
 	for _, r := range readings {
 		was := reported[r.key]
@@ -88,26 +102,19 @@ func emitBalanceAlerts(ctx context.Context, tx pg.Tx, lines LowBalanceLines) err
 		if r.low {
 			low = append(low, r.key)
 		}
-		if r.low == was {
-			continue
-		}
-		signal := alert.Signal{Kind: "suppliers.low_balance", Key: r.key, Severity: "warning", Fields: r.fields, Resolved: !r.low}
-		if err = alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
-			return err
+		if r.low != was {
+			signals = append(signals, alert.Signal{Kind: "suppliers.low_balance", Key: r.key, Severity: "warning", Fields: r.fields, Resolved: !r.low})
 		}
 	}
-	// A key reported low that is no longer read (removed, disabled, or its supplier paused) has no balance to be low.
 	gone := make([]string, 0, len(reported))
 	for key := range reported {
 		gone = append(gone, key)
 	}
 	slices.Sort(gone)
 	for _, key := range gone {
-		if err = alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "suppliers.low_balance", Key: key, Severity: "warning", Resolved: true}); err != nil {
-			return err
-		}
+		signals = append(signals, alert.Signal{Kind: "suppliers.low_balance", Key: key, Severity: "warning", Resolved: true})
 	}
-	return alert.SavePosition(ctx, tx, source, balanceAlertPosition{Initialized: true, Low: low})
+	return signals, low
 }
 
 func readBalances(ctx context.Context, tx pg.Tx, lines LowBalanceLines) ([]balanceReading, error) {
