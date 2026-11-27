@@ -189,14 +189,18 @@ func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, re
 	return RegisterResult{Pending: true}, nil
 }
 
-// storeRegistrationRequest writes the pending request with the inviter code names, if any, and queues its mail.
+// storeRegistrationRequest writes the pending request and queues its mail. The inviter is the active user of the site
+// whose invite code it is; an unusable code is ignored rather than refused, so the answer does not tell an anonymous
+// caller which codes are valid.
 func (s *Service) storeRegistrationRequest(ctx context.Context, tx pg.Tx, code string, request InsertRegistrationRequestParams) error {
 	if code != "" {
-		inviter, err := s.registrationInviter(ctx, tx, request.SiteID, code)
+		inviters, err := s.queries.RegistrationInviter(ctx, tx, RegistrationInviterParams{SiteID: request.SiteID, Code: code})
 		if err != nil {
 			return err
 		}
-		request.InviterUserID = inviter
+		if len(inviters) == 1 {
+			request.InviterUserID = &inviters[0]
+		}
 	}
 	id, err := s.queries.InsertRegistrationRequest(ctx, tx, request)
 	if err != nil {
@@ -204,19 +208,6 @@ func (s *Service) storeRegistrationRequest(ctx context.Context, tx pg.Tx, code s
 	}
 	_, err = s.registration.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: registrationArgs{ID: id}}})
 	return err
-}
-
-// registrationInviter is the user an open registration's invite code names, or ErrInvalidInvite for a code that would
-// not admit an invitation: unknown, of a disabled user, or of another site.
-func (s *Service) registrationInviter(ctx context.Context, tx pg.Tx, site uuid.UUID, code string) (*uuid.UUID, error) {
-	inviters, err := s.queries.RegistrationInviter(ctx, tx, RegistrationInviterParams{SiteID: site, Code: code})
-	if err != nil {
-		return nil, err
-	}
-	if len(inviters) == 0 {
-		return nil, ErrInvalidInvite
-	}
-	return &inviters[0], nil
 }
 
 // registrationSite reads the site's mode from the database, where a closed or disabled site is authoritative.

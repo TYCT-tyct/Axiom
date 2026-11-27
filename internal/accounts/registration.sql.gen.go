@@ -128,8 +128,8 @@ type RegistrationInviterParams struct {
 	Code   string
 }
 
-// The user whose invite code admits an open registration: an active user of the site, as invite_tenant requires for
-// an invitation. No row is an invalid code.
+// The inviter an open registration's invite code names: an active user of the site, as invite_tenant requires for an
+// invitation. No row is an unusable code, which the registration ignores.
 func (q *Queries) RegistrationInviter(ctx context.Context, db DBTX, arg RegistrationInviterParams) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, registrationInviter, arg.SiteID, arg.Code)
 	if err != nil {

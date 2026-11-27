@@ -483,9 +483,9 @@ func TestVerificationJoinsTheDefaultTierOfTheClick(t *testing.T) {
 	}
 }
 
-// TestOpenRegistrationKeepsTheInviter: the invite code of an open registration is checked at the request like an
-// invitation's, kept on the pending request, replaced by a repeated request, and written as the user's inviter when the
-// link is clicked.
+// TestOpenRegistrationKeepsTheInviter: the inviter an open registration's invite code names is kept on the pending
+// request, replaced by a repeated request, and written as the user's inviter when the link is clicked. A code that
+// would not admit an invitation is ignored, with the same answer, so the answer does not tell which codes are valid.
 func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
@@ -500,25 +500,21 @@ func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
 	x.open(t, false, 100, 1000)
 	first, second := inviteCode(t, x.db, ":u1"), inviteCode(t, x.db, "'"+uuid.UUID(x.user).String()+"'")
 	for name, c := range map[string]struct {
-		codes   []string // one request per code, in order; all but the last succeed
-		refused error    // the last request's error; a refused request leaves no pending request
+		codes   []string // one request per code, in order; each is a pending registration
 		inviter string   // the verified user's inviter, "" for none
 	}{
 		"an invite through verification":         {codes: []string{first}, inviter: u1.String()},
 		"a repeated request with another invite": {codes: []string{first, second}, inviter: uuid.UUID(x.user).String()},
 		"a repeated request with no invite":      {codes: []string{first, ""}},
 		"no invite":                              {codes: []string{""}},
-		"an unknown code":                        {codes: []string{"nosuchcode0000"}, refused: accounts.ErrInvalidInvite},
-		"a disabled inviter's code":              {codes: []string{goneCode}, refused: accounts.ErrInvalidInvite},
-		"another site's code":                    {codes: []string{inviteCode(t, x.db, ":u2")}, refused: accounts.ErrInvalidInvite},
+		"an unknown code":                        {codes: []string{"nosuchcode0000"}},
+		"a disabled inviter's code":              {codes: []string{goneCode}},
+		"another site's code":                    {codes: []string{inviteCode(t, x.db, ":u2")}},
+		"a valid code then an unknown one":       {codes: []string{first, "nosuchcode0000"}},
 	} {
 		email := strings.ReplaceAll(strings.ReplaceAll(name, "'", ""), " ", "-") + "@example.com"
-		x.requestAll(t, email, c.codes, c.refused)
-		if c.refused != nil {
-			if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests WHERE email = '"+email+"'"); got != 0 {
-				t.Errorf("%s: %d pending requests, want none", name, got)
-			}
-			continue
+		for _, code := range c.codes {
+			x.registerInvited(t, email, code)
 		}
 		if got := x.verifiedInviter(t, email); got != c.inviter {
 			t.Errorf("%s: inviter %q, want %q", name, got, c.inviter)
@@ -526,18 +522,12 @@ func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
 	}
 }
 
-// requestAll makes one open registration of email per code, in order: all but the last succeed, and the last fails
-// with refused.
-func (x registrationWorld) requestAll(t *testing.T, email string, codes []string, refused error) {
+// registerInvited makes an open registration of email with code, and fails the test unless it is pending.
+func (x registrationWorld) registerInvited(t *testing.T, email, code string) {
 	t.Helper()
-	for i, code := range codes {
-		var want error
-		if i == len(codes)-1 {
-			want = refused
-		}
-		if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client}); !errors.Is(err, want) {
-			t.Fatalf("%s: request %d = %v, want %v", email, i, err, want)
-		}
+	out, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client})
+	if err != nil || !out.Pending {
+		t.Fatalf("register %s with %q: %+v, %v", email, code, out, err)
 	}
 }
 

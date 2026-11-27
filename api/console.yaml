@@ -2068,7 +2068,8 @@ paths:
         when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot
         send mail answers `unavailable`, and a closed site `registration_closed`. An invite code given there names the
         inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown,
-        its user disabled, or of another site) is `invalid_invite` and stores nothing.
+        its user disabled, or of another site) is ignored with the same 202, so the answer does not tell which codes
+        work.
 
 
         Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.

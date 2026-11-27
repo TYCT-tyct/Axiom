@@ -18,8 +18,8 @@ ON CONFLICT (site_id, email_hash) DO UPDATE SET tier_id = excluded.tier_id, doma
 RETURNING id;
 
 -- name: RegistrationInviter :many
--- The user whose invite code admits an open registration: an active user of the site, as invite_tenant requires for
--- an invitation. No row is an invalid code.
+-- The inviter an open registration's invite code names: an active user of the site, as invite_tenant requires for an
+-- invitation. No row is an unusable code, which the registration ignores.
 SELECT id FROM accounts.users WHERE site_id = @site_id AND invite_code = @code AND status = 'active';
 
 -- name: LockRegistrationRequest :many
