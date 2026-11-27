@@ -10,6 +10,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 )
 
@@ -141,13 +142,41 @@ func encodeOREndpointPrices(m orEntry, sold billing.Sold, abilities catalog.Abil
 			surface := e.Surface()
 			parameters, context, maxOutput = orParameters(surface.Parameters), surface.Context, surface.MaxOutput
 		}
+		r := e.Recent
+		latency, latencyOK := r.LatencyMS()
+		speeds, speedsOK := r.Speeds()
 		data.Endpoints = append(data.Endpoints, orEndpoint{
 			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: e.Codename,
 			ContextLength: context, MaxCompletionTokens: maxOutput, Pricing: newORPricing(price, endpointAbilities), SupportedParameters: parameters,
-			Quantization: quantization,
+			Quantization: quantization, Uptime5m: orUptime(r, 0), Uptime30m: orUptime(r, 1), Uptime1d: orUptime(r, 2),
+			Latency: orStats(latency, latencyOK), Throughput: orStats(speeds, speedsOK),
 		})
 	}
 	return jsonx.MarshalCanonical(struct {
 		Data orEndpointModel `json:"data"`
 	}{Data: data})
+}
+
+// orPercentiles is OpenRouter's PercentileStats: latency in milliseconds, throughput in tokens a second.
+type orPercentiles struct {
+	P50 float64 `json:"p50"`
+	P75 float64 `json:"p75"`
+	P90 float64 `json:"p90"`
+	P99 float64 `json:"p99"`
+}
+
+// orUptime is window i's uptime as OpenRouter's percentage, null while it is not known.
+func orUptime(r quality.Recent, i int) any {
+	if percent, ok := r.Percent(i); ok {
+		return percent
+	}
+	return nil
+}
+
+// orStats is four percentiles in OpenRouter's shape, null unless measured.
+func orStats(p [4]float64, measured bool) any {
+	if !measured {
+		return nil
+	}
+	return orPercentiles{P50: p[0], P75: p[1], P90: p[2], P99: p[3]}
 }

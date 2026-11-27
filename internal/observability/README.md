@@ -47,10 +47,10 @@ func RegisterAlerts(db, scope, q, m *mail.Mailer, keys *secret.Keyring, exit *eg
 // 告警配置
 func GetAlertConfiguration(ctx, tx) (AlertConfiguration, error); func SetAlertConfiguration(ctx, tx, AlertConfiguration) error
 func ListAlertEvents(ctx, tx, AlertEventPage) ([]AlertEvent, error)
-func SendAlertTest(ctx, tx, channel string, now time.Time) (uuid.UUID, error)
-func ResolveAlertEvent(ctx, tx, id uuid.UUID, now time.Time) error
-func RotateAlertWebhookSecret(ctx, tx, keys, channel string, rev int64, value secret.Secret, now time.Time) (uuid.UUID, error)
-func ValidateAlertWebhookURL(raw string) (string, error)
+func SendAlertTest(ctx, tx, channel string, now) (uuid.UUID, error)
+func ResolveAlertEvent(ctx, tx, id uuid.UUID, now) error
+func RotateAlertWebhookSecret(ctx, tx, keys, channel string, rev int64, value secret.Secret, now) (uuid.UUID, error)
+func AlertChannelHost(AlertChannel) (string, error); func SealAlertAddresses(ctx, tx, keys, *AlertConfiguration) error
 // 对话内容（平台范围）
 func StreamContentMeta(ctx, tx, ContentQuery, each func(ContentMeta) error) (ContentStats, error)
 func ReadContentKey(ctx, tx, keys *secret.Keyring, account uuid.UUID) ([32]byte, error)
@@ -59,7 +59,7 @@ func (r *ContentReader) Open(ctx, ContentMeta) ([]byte, error) // ErrNoContentKe
 func ValidContentPart(part string) bool; func (m ContentMeta) TarPath() string
 ```
 
-`CallRecord` 是一次调用和它的 `[]AttemptRecord`，结算金额在内嵌的 `Amounts`，待定记录（`BillingPending`）没有它。sqlc 代码在 `internal/store`，包外引用不到。`GetTrace` 带成本、端点和路由，只能从运营或管理的处理器以平台范围调用：函数本身判断不了范围。`OwnCallDetail` 里的内部 ID 必须由 HTTP 层换成公开代号，不能直接序列化。
+`CallRecord` 是一次调用和它的 `[]AttemptRecord`，结算金额在内嵌的 `Amounts`，待定记录没有它。sqlc 代码在 `internal/store`，包外不可见。`GetTrace` 带成本、端点和路由，只能由运营或管理的处理器以平台范围调用。`OwnCallDetail` 里的内部 ID 必须由 HTTP 层换成公开代号。
 
 ## 表
 
@@ -69,7 +69,7 @@ schema `observability`，全部强制行级安全。
 - `call_attempt`：一次尝试一行，按调用的 `at` 分区，主键 `(request_id, at, attempt_seq)`；`outcome` 是 `committed`、`failed` 或 `unknown`；成本在 suppliers 的 `attempt_costs`。
 - `usage_hourly`、`usage_journal`、`usage_backfill`：用量小时汇总、待汇总事件（含待定的）和单例回填位置；金额和计数是 numeric。`monitor_*`、`first_token_hourly`、`plugin_hourly`：平台范围的[监控汇总](../../docs/domains/observability.md#监控汇总)。
 - `retention`、`spend_detection`：单行 jsonb 的管理员数据，第一次保存前读代码默认值。`spend_anomalies`：正在发生的花费异常，主键 `(account_id, kind)`。
-- `alert_configuration`、`alert_events`、回执、持续窗口、`webhook_keys`、渠道探测位置：告警。
+- `alert_configuration`、`alert_events`、回执、持续窗口、`webhook_keys`、`channel_addresses`、渠道探测：告警。
 - `content_keys`（每账户一行，封套列 `wrapped_key`，AAD `observability.content_keys/<account_id>/content_key`）、`content_blobs`（`UNIQUE (account_id, digest)`）、`content_refs`（主键 `(request_id, kind, part)`，外键 `(blob_id, site_id, account_id)`）、`content_exports`（`approval_digest` 唯一）。
 
 ## 不变量
@@ -100,7 +100,7 @@ schema `observability`，全部强制行级安全。
 | 同一 `(kind, key)` 只有一个未恢复事件，同一事件、规则和序号只有一条回执 | 部分唯一索引和唯一约束。`TestAlertStormAcrossNodesAndRecovery` |
 | 告警评估不用已替换的规则 | 评估读配置持 FOR SHARE，替换配置的 UPDATE 与之互斥；待发通知保留渠道快照。`TestAlertConfigurationReplacementWaitsForEvaluation` |
 | 无效信号不堵后续信号 | 隔离成 quarantined 行 |
-| Webhook 密钥不能挪到别的目标，已退役的密钥版本写不进 | 主键含渠道/目标的摘要，读取时重建验证；`fence_envelope_key_version` 触发器（[平台的凭证加密](../platform/README.md#凭证加密)）。`TestWebhookKeyCannotBeRelabelledToAnotherDestination` |
+| 渠道密钥和带凭证的地址不能挪到别的目标，配置只存脱敏的 | 主键含渠道/目标的摘要，读取时重建验证；`fence_envelope_key_version` 触发器。`TestWebhookKeyCannotBeRelabelledToAnotherDestination`、`TestBotAddressesAreWriteOnly` |
 | 一次花费异常只通知一次 | `spend_anomalies` 主键去重，首次插入才持久化信号和提醒。`TestSpendAnomalyDetectsRaisesNotifiesAndResolves` |
 | 所有表和分区都过启动检查 | 分区不继承 RLS，各自开启并有策略。`TestStartupCheckAcceptsTheModule` |
 

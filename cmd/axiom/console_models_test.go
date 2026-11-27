@@ -15,7 +15,9 @@ import (
 	"axiom/internal/gateway"
 	"axiom/internal/platform"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/quality"
 )
 
 type fakeModelProjection struct {
@@ -362,5 +364,33 @@ func TestModelsEndpoints(t *testing.T) {
 	}
 	if rec := c.do(http.MethodGet, "/models", "", atHost("unknown.example")); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown host: %d", rec.Code)
+	}
+}
+
+// TestEndpointRecordLeavesOutWhatIsNotKnown: an endpoint's class is published by its names, its score, uptime and speeds
+// as measured, a valid score of 0 too; a class no longer live, a score not measured and a window not known are left
+// out, not sent as zero.
+func TestEndpointRecordLeavesOutWhatIsNotKnown(t *testing.T) {
+	classes := map[string]consoleapi.SourceClassName{"relay": {Slug: "relay", Name: "Relay", NameZh: "中转"}}
+	score, zero := 87.25, 0.0
+	measured := gateway.PublicEndpoint{SourceClass: "relay", Score: &score, Recent: quality.Recent{
+		Uptime: [3]float64{1, 0.5, 0.9}, UptimeKnown: [3]bool{true, false, true},
+		Latency: [4]time.Duration{time.Second, time.Second, time.Second, time.Second}, Throughput: [4]float64{40, 30, 20, 10},
+	}}
+	for _, tc := range []struct {
+		name string
+		in   gateway.PublicEndpoint
+		want string
+	}{
+		{"measured", measured, `{"abilities":[],"context_length":0,"latency_last_30m":{"p50":1000,"p75":1000,"p90":1000,"p99":1000},"max_output":0,"name":"","quality_score":87.3,"source_class":{"name":"Relay","name_zh":"中转","slug":"relay"},"streams":false,"throughput_last_30m":{"p50":40,"p75":30,"p90":20,"p99":10},"uptime_last_1d":90,"uptime_last_5m":100,"verified":false}`},
+		{"unknown", gateway.PublicEndpoint{SourceClass: "retired"}, `{"abilities":[],"context_length":0,"max_output":0,"name":"","streams":false,"verified":false}`},
+		{"scored zero", gateway.PublicEndpoint{Score: &zero}, `{"abilities":[],"context_length":0,"max_output":0,"name":"","quality_score":0,"streams":false,"verified":false}`},
+	} {
+		var out consoleapi.PublicEndpoint
+		endpointRecord(&out, tc.in, classes)
+		got, err := jsonx.MarshalCanonical(out)
+		if err != nil || string(got) != tc.want {
+			t.Errorf("%s: %s %v\nwant %s", tc.name, got, err, tc.want)
+		}
 	}
 }

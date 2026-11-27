@@ -178,6 +178,12 @@ export default {
     verified: "Verified",
     unverified: "Unverified",
     quantization: "Quantization",
+    score: "Score {{score}}",
+    uptime: "Uptime (5 min / 30 min / 1 day)",
+    latency: "First token p50",
+    throughput: "Speed p50",
+    milliseconds: "{{value}} ms",
+    tokensPerSecond: "{{value}} tok/s",
     note: "These are the site’s sale prices. Reseller endpoints use anonymous codenames; no supplier, upstream or cost data is shown.",
     tierNote: "These are your account’s prices at its current tier.",
     item: {
