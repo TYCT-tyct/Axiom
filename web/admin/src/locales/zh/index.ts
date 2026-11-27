@@ -5,6 +5,7 @@ import approvals from "./approvals";
 import audit from "./audit";
 import auditEvents from "./audit-events";
 import calls from "./calls";
+import egress from "./egress";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
 import me from "./me";
@@ -173,6 +174,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   announcements,
   legalDocs,
   rateLimits,
+  egress,
   plugins,
   me,
   auditEvents,

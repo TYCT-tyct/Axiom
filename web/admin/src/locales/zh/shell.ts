@@ -45,6 +45,7 @@ export default {
     inbox: "待处理",
     upstreamModels: "按模型",
     upstreamKeys: "全部 Key",
+    egressProxies: "出口代理",
     modelAuthors: "作者",
     routingDefaults: "默认与上限",
     pricingRules: "价格规则",

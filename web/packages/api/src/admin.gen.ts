@@ -6837,7 +6837,9 @@ export interface components {
             origin: string;
             /** @description The price list's currency: the settlement currency. */
             currency: string;
-            /** @description Listed catalog models of the type's makers with a reference price in the currency; absent for a type that sells any maker's models. */
+            /** @description The account whose keys belong at the entry, in the vendor's words, for a vendor whose account and not the address decides the price list (Alibaba Cloud's China and international sites); the page shows it with the entry. Absent otherwise. */
+            account?: string;
+            /** @description Listed catalog models of the type's makers with a reference price in the currency from a source other than OpenRouter's dataset, an aggregator's selling price; absent for a type that sells any maker's models. */
             models?: number;
         };
         SupplierTypeForm: {

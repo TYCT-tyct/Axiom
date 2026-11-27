@@ -13,6 +13,7 @@ export const supplyRoutes = [
       credential: text(search.credential),
     }),
   ),
+  shellPage("/suppliers/egress-proxies", () => loadTranslatedPage(import("../egress/page"))),
   shellPage(
     "/suppliers/$supplierId",
     () => loadTranslatedPage(import("../pages/supplier")),
