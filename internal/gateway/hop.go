@@ -15,6 +15,15 @@ func (a *attempt) serverTool() bool {
 	return a.s.loop != nil
 }
 
+// customTools are the Responses client's custom tools when the reply comes in another format, whose request had them as
+// functions (protocol.CustomTools); a same-format reply never scans the body for them.
+func (s *session) customTools(upstream protocol.Format) []string {
+	if s.c.Format != protocol.Responses || upstream == protocol.Responses {
+		return nil
+	}
+	return protocol.CustomTools(s.c.Body)
+}
+
 // readHop reads one upstream reply. A hop that calls the web search tool is not the answer: its events were held, the
 // searches run, and the next request is prepared; next tells stream to read that request. The answering hop's events
 // are written here, so a tool hop never reaches the client, which sees one stream with one ending.

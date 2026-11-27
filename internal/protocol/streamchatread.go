@@ -104,6 +104,8 @@ func (s *chatToNative) readNativeTool() error {
 			}
 		case "function":
 			err = s.readNativeFunction(&call.Function)
+		case "extra_content":
+			err = s.readExtraContent(&call.Signature)
 		default:
 			err = s.skip()
 		}
@@ -116,6 +118,24 @@ func (s *chatToNative) readNativeTool() error {
 		s.chunk.Delta.Tools = append(tools, call)
 	}
 	return err
+}
+
+// readExtraContent reads the thought signature Google's OpenAI-compatible endpoint puts on a tool call, at
+// extra_content.google.thought_signature; the rest of extra_content is vendor data the client's format has no member for.
+func (s *chatToNative) readExtraContent(signature *string) error {
+	return s.eachMember(func() error {
+		if string(s.name) != "google" {
+			return s.skip()
+		}
+		return s.eachMember(func() error {
+			if string(s.name) != "thought_signature" {
+				return s.skip()
+			}
+			v, err := s.str()
+			*signature = string(v)
+			return err
+		})
+	})
 }
 
 func (s *chatToNative) readNativeFunction(fn *nativeChatFunction) error {

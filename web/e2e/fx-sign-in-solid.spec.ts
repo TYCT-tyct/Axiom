@@ -9,10 +9,6 @@ import { knownEmail, knownPassword, mfaEmail } from "./mock-auth.ts";
 // an answer is refused. What is typed lighting it is fx-sign-in.spec.ts's.
 const signInPage = `${apps[0].url.replace(/\/$/, "")}/console/sign-in`;
 const stageCanvas = (page: Page) => page.locator(".lg-sea > canvas.lg-stg");
-// The sharks are called in and taken in before the solid is whole: up to 3.4 s for the far ones to give up, and a second
-// to be taken in.
-const formed = { timeout: 15_000 };
-
 // The solid's opaque pixels: how many, and the box they fill, in the canvas's pixels.
 const solid = (page: Page) =>
   stageCanvas(page).evaluate((element) => {
@@ -49,30 +45,18 @@ const pictureHash = (page: Page) =>
     return hash >>> 0;
   });
 
-// stopClock waits until the solid is whole and settled in hold phase, then leaves the fake clock paused (installed
-// before goto so performance.now() never jumps backwards behind Morph's cached timestamps).
+// stopClock stops the page's clock once the solid is on the sea and runs it until the solid is whole and settled in its
+// hold phase, where it leaves the clock paused (installed before goto, so performance.now() never jumps backwards
+// behind Morph's cached timestamps). The sharks are called in on the first frames; those not in reach give up 3.4 s
+// after (6 s once one has been taken in) and are taken in, in 950 ms. The solid steps on its own clock, but only on a
+// frame the sea draws, and a slow sea draws every other frame (ocean.ts pacedTick): a jump of the clock is one frame,
+// which may be skipped, so a run of frames follows each jump. Nothing waits on the machine's own time.
 async function stopClock(page: Page) {
   await expect(stageCanvas(page)).toBeAttached();
-  await expect.poll(async () => (await solid(page)).count, formed).toBeGreaterThan(400);
   await pauseAhead(page, 100);
-  await page.clock.fastForward(4500);
-  await page.clock.fastForward(1000);
-  await page.clock.runFor(1000);
-}
-
-// How much the solid's middle oscillates across 12 samples 35 ms apart, as the summed second differences: the solid's
-// own turning drifts its middle smoothly, which they cancel, while a shake (420 ms, three cycles, a quarter cycle per
-// sample) reverses direction at every other sample. Summed first differences counted the drift too: a train measured
-// 60 px of quiet drift against 52.5 px with the shake (train 44822730292).
-async function sway(page: Page) {
-  const middles: number[] = [];
-  for (let i = 0; i < 12; i++) {
-    await page.clock.runFor(35);
-    middles.push((await solid(page)).cx);
-  }
-  return middles
-    .slice(2)
-    .reduce((total, x, i) => total + Math.abs(x - 2 * (middles[i + 1] ?? x) + (middles[i] ?? x)), 0);
+  await page.clock.runFor(100);
+  await page.clock.fastForward(6000);
+  await page.clock.runFor(2000);
 }
 
 test("the sea's sharks form the step's solid, which keeps turning, and the old stage does not draw", async ({
@@ -90,6 +74,7 @@ test("the sea's sharks form the step's solid, which keeps turning, and the old s
   await mockConsole(page);
   await page.goto(signInPage);
   await stopClock(page);
+  expect((await solid(page)).count).toBeGreaterThan(400);
   await expect(stageCanvas(page)).toHaveCount(1);
   // Morph draws shaded tiles with fillRect only; the old Stage drew cycling glyphs with fillText.
   expect(await page.evaluate(() => (window as unknown as { stageGlyphs: number }).stageGlyphs)).toBe(0);
@@ -127,50 +112,87 @@ test("the solid melts across steps: envelope to key on sign-in, padlock to key o
   expect(key.w).toBeGreaterThan(key.h * 1.5);
 });
 
-// The shake is read from the solid's middle on a 7.5 px character grid while the solid turns, and on CI's runners the
-// quiet turning alone now reaches what the shake adds, so the case fails whatever the code does (#908). It comes back
-// when it asserts that the solid hears the refusal instead of reading pixels.
-test.fixme("a refused password shakes the solid", async ({ page }) => {
-  await page.clock.install();
+// What the solid (login-ui.js's Morph, the design's engine as it is) is told and what it does, read at the engine's own
+// doors as its code defines them: the refusals it hears, and the phases its frames pass through (off, gather, hold, back
+// into the sharks, rest). The class is wrapped as the page defines it, so neither the engine's code nor the page's
+// changes.
+type Morph = { phase: string; hear(heard: { type?: string }): void; tick(...args: unknown[]): void };
+type Seen = { refusals: number; phases: string[] };
+function watchSolid() {
+  const seen: Seen = { refusals: 0, phases: ["off"] };
+  (window as unknown as { solidSeen: Seen }).solidSeen = seen;
+  let engine: { prototype: Morph } | undefined;
+  Object.defineProperty(window, "AxiomLoginMorph", {
+    configurable: true,
+    get: () => engine,
+    set(value: { prototype: Morph }) {
+      const { hear, tick } = value.prototype;
+      value.prototype.hear = function (this: Morph, heard) {
+        if (heard?.type === "bad") seen.refusals++;
+        return hear.call(this, heard);
+      };
+      value.prototype.tick = function (this: Morph, ...args) {
+        tick.apply(this, args);
+        if (this.phase !== seen.phases.at(-1)) seen.phases.push(this.phase);
+      };
+      engine = value;
+    },
+  });
+}
+const solidSeen = (page: Page) => page.evaluate(() => (window as unknown as { solidSeen: Seen }).solidSeen);
+
+// A refused answer shakes the solid, as the engine's code does on hearing it. The page's part is to tell the solid of
+// the refusal, once: read from the canvas instead, the shake is a few pixels on a 7.5 px grid under a turning solid,
+// which no threshold tells apart from the turning on a busy machine (#908).
+test("a refused password is told to the solid once", async ({ page }) => {
+  await page.addInitScript(watchSolid);
   await mockConsole(page);
   await page.goto(signInPage);
+  // the solid is on the sea: a refusal before its code is in has nothing to shake, and is not kept for it
+  await expect(stageCanvas(page)).toBeAttached();
   await page.getByLabel("邮箱").fill(knownEmail);
   await page.getByRole("button", { name: "继续", exact: true }).click();
   await page.getByLabel("密码", { exact: true }).fill("not the password");
-  await stopClock(page);
-  const still = await sway(page);
+  expect((await solidSeen(page)).refusals).toBe(0);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
-  const shaken = await sway(page);
-  expect(shaken).toBeGreaterThan(still + 12);
+  expect((await solidSeen(page)).refusals).toBe(1);
 });
 
+// Each jump of the clock is followed by a run of frames (stopClock says why), and the case reads the phases the solid
+// went through rather than a picture at a moment a frame early or late (#911).
 test("the solid disperses back into sharks after 20 s idle and re-forms", async ({ page }) => {
+  await page.addInitScript(watchSolid);
   await page.clock.install();
   await mockConsole(page);
   await page.goto(signInPage);
   await stopClock(page);
-  // 20 s idle triggers release (760 ms disperse into rest), then 5.2 s rest, then sharks gather again
-  await page.clock.fastForward(21_000);
-  await page.clock.fastForward(900);
-  await page.clock.runFor(100);
+  expect((await solidSeen(page)).phases).toEqual(["off", "gather", "hold"]);
+  // 20 s left alone, it comes apart into the sharks (760 ms) and leaves them to swim
+  await page.clock.fastForward(20_000);
+  await page.clock.runFor(1000);
+  expect((await solidSeen(page)).phases).toEqual(["off", "gather", "hold", "back", "rest"]);
   expect((await solid(page)).count).toBe(0);
-  await page.clock.fastForward(5500);
-  await page.clock.fastForward(6200);
+  // after 5.2 s at rest they are called in again; those not in reach within 6 s give up, and are taken in (950 ms)
+  await page.clock.fastForward(5200);
+  await page.clock.runFor(100);
+  await page.clock.fastForward(6000);
   await page.clock.runFor(1200);
+  expect((await solidSeen(page)).phases).toEqual(["off", "gather", "hold", "back", "rest", "gather", "hold"]);
   expect((await solid(page)).count).toBeGreaterThan(400);
 });
 
 test("on a phone viewport the sea is a narrow band with the small tile solid in its corner", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.install();
   await mockConsole(page);
   await page.goto(signInPage);
   const sea = page.locator(".lg-sea");
   await expect(sea).toBeVisible();
   expect((await sea.boundingBox())?.height).toBe(208);
-  await expect(stageCanvas(page)).toBeAttached();
-  await expect.poll(async () => (await solid(page)).count, formed).toBeGreaterThan(100);
+  await stopClock(page);
   const box = await solid(page);
+  expect(box.count).toBeGreaterThan(100);
   const width = await stageCanvas(page).evaluate((el) => (el as HTMLCanvasElement).width);
   expect(box.cx).toBeGreaterThan(width / 2);
 });

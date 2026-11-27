@@ -33,7 +33,7 @@
 | `review`（只有 page_changed） | 每页最多一个 open 项；带 `content_seq` | 平台 | 改差异与状态 |
 
 - 标准 ID 是 slug 去掉 `@版本`，存成一个 public 名字，格式 `^<厂商>/[a-z0-9][a-z0-9._-]{0,99}(:free)?$`；厂商部分 `^[a-z0-9][a-z0-9-]{0,39}$`。slug 本身不进 `name` 表。
-- `name` 的 CHECK 只是兜底。改 `Normalize` 要随迁移重算 `norm` 并重查唯一性。
+- `name` 的 CHECK 只是兜底，`AddName` 先拒为 `ErrInvalid`。改 `Normalize` 要随迁移重算 `norm` 并重查唯一性。
 - 当前参考价是时间线上没被替代的那一行；它是撤下行时这个币种没有当前价。更正也是发布新的一行。
 - `spec` 原地更新，旧值在 `change`；键的含义见[领域文档的「目录基线」](../../docs/domains/catalog.md#目录基线)。
 - `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:catalog.sync`），待 #23 替换。

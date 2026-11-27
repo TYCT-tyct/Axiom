@@ -170,18 +170,25 @@ func (s *chatInputItems) item(o requestObject) error {
 	case "", `"message"`:
 		return s.message(o)
 	case `"function_call"`:
-		s.call(o)
-	case `"function_call_output"`:
+		s.call(o, o.take("arguments"))
+	case `"custom_tool_call"`:
+		input := o.take("input")
+		if _, err := requestString(input); err != nil {
+			return err
+		}
+		s.call(o, jsonValue(`{"input":`+string(input)+`}`))
+	case `"function_call_output"`, `"custom_tool_call_output"`:
 		s.reasoning = joined{} // A tool result must immediately follow the assistant call it answers.
 		v, err := nativeContent(o.take("output"), Responses, "tool")
 		if err != nil {
 			return err
 		}
-		s.out = append(s.out, requestObject{"role": jsonValue("tool"), "tool_call_id": o.take("call_id"), "content": v})
+		id, _ := unsignedID(o.take("call_id"))
+		s.out = append(s.out, requestObject{"role": jsonValue("tool"), "tool_call_id": id, "content": v})
 	case `"reasoning"`:
 		return reasoningSummary(o, &s.reasoning)
 	default:
-		return &NotSupported{Reason: "input item has no Chat counterpart"}
+		return &NotSupported{Reason: "the Responses input item " + string(kind) + " has no counterpart on this model"}
 	}
 	return nil
 }
@@ -208,10 +215,15 @@ func (s *chatInputItems) message(o requestObject) error {
 	return nil
 }
 
-func (s *chatInputItems) call(o requestObject) {
+// call adds a function call, or a custom tool's with its input wrapped as customFunction declares it.
+func (s *chatInputItems) call(o requestObject, arguments jsontext.Value) {
+	id, signature := unsignedID(o.take("call_id"))
 	call := requestObject{
-		"id": o.take("call_id"), "type": jsonValue("function"),
-		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": o.take("arguments")}),
+		"id": id, "type": jsonValue("function"),
+		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": arguments}),
+	}
+	if signature != "" {
+		call["extra_content"] = googleExtra(signature)
 	}
 	if len(s.out) == 0 || string(s.out[len(s.out)-1]["role"]) != `"assistant"` {
 		s.out = append(s.out, requestObject{"role": jsonValue("assistant"), "content": jsonValue("")})

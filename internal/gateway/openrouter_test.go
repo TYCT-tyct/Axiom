@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
@@ -120,10 +121,10 @@ func (r *rig) orModel(a account, id string) listedOR {
 	return listedOR{}
 }
 
-// orEntry is the model's object exactly as it is served, for a comparison of the whole of it.
-func (r *rig) orEntry(a account, id string) string {
+// orEntry is the model's object exactly as the list at path serves it, for a comparison of the whole of it.
+func (r *rig) orEntry(a account, path, id string) string {
 	r.t.Helper()
-	resp, body := r.do(http.MethodGet, orListPath, a.key, nil)
+	resp, body := r.do(http.MethodGet, path, a.key, nil)
 	var list struct {
 		Data []jsonx.Raw `json:"data"`
 	}
@@ -141,7 +142,7 @@ func (r *rig) orEntry(a account, id string) string {
 			return string(raw)
 		}
 	}
-	r.t.Fatalf("%s does not list %s", orListPath, id)
+	r.t.Fatalf("%s does not list %s", path, id)
 	return ""
 }
 
@@ -178,7 +179,6 @@ const (
 			"output_modalities": ["text"]},
 		"canonical_slug": "acme/golden",
 		"context_length": 200000,
-		"created": 0,
 		"default_parameters": null,
 		"id": "acme/golden",
 		"links": {"details": "/api/v1/models/acme/golden/endpoints"},
@@ -215,17 +215,15 @@ func goldenRig(t *testing.T) *rig {
 // the members it has no data for absent rather than zero.
 func TestOpenRouterModelShape(t *testing.T) {
 	t.Parallel()
+	start := time.Now().Unix()
 	r := goldenRig(t)
 	a := r.newAccount(1e9)
 	list := r.orList(a, "/api/v1/models")
 	if list.TotalCount != 4 || len(list.Data) != 4 || list.Links.Next != nil {
 		t.Errorf("%d models, total %d, next %v; want the four of the catalog", len(list.Data), list.TotalCount, list.Links.Next)
 	}
-	if diff := cmp.Diff(decode(t, golden), decode(t, r.orEntry(a, "acme/golden"))); diff != "" {
-		t.Errorf("acme/golden (-want +got):\n%s", diff)
-	}
-	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "acme/golden"}
-	if diff := cmp.Diff(want, r.orIDs(a)); diff != "" {
+	checkGolden(t, r, a, start)
+	if diff := cmp.Diff([]string{"acme/alpha", "acme/beta", "anthropic/claude-live", "acme/golden"}, r.orIDs(a)); diff != "" {
 		t.Errorf("the catalog's order (-want +got):\n%s", diff)
 	}
 	// The seeded model prices the prompt, the completion and a cache write, and nothing else.
@@ -243,6 +241,27 @@ func TestOpenRouterModelShape(t *testing.T) {
 	parameters := []string{"temperature", "top_p", "max_tokens", "max_completion_tokens", "stop"}
 	if diff := cmp.Diff(parameters, alpha.SupportedParameters); diff != "" {
 		t.Errorf("a text-only model's parameters (-want +got):\n%s", diff)
+	}
+}
+
+// checkGolden: acme/golden is the golden object, created when the test added it, and under /v1 the same object carries
+// OpenAI's and Anthropic's members beside OpenRouter's, created at the same moment.
+func checkGolden(t *testing.T, r *rig, a account, start int64) {
+	t.Helper()
+	got, ok := decode(t, r.orEntry(a, orListPath, "acme/golden")).(map[string]any)
+	created, _ := got["created"].(float64)
+	if !ok || int64(created) < start || int64(created) > time.Now().Unix() {
+		t.Errorf("acme/golden was created at %v, want when the test added it", got["created"])
+	}
+	want, _ := decode(t, golden).(map[string]any)
+	want["created"] = created
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("acme/golden (-want +got):\n%s", diff)
+	}
+	want["object"], want["type"], want["display_name"], want["owned_by"] = "model", "model", "golden", "acme"
+	want["created_at"] = time.Unix(int64(created), 0).UTC().Format(time.RFC3339)
+	if diff := cmp.Diff(want, decode(t, r.orEntry(a, "/v1/models", "acme/golden"))); diff != "" {
+		t.Errorf("acme/golden under /v1 (-want +got):\n%s", diff)
 	}
 }
 
@@ -281,6 +300,7 @@ func TestOpenRouterListFilters(t *testing.T) {
 		"cheapest first":            {"?sort=pricing-low-to-high", all, "", 4},
 		"dearest first":             {"?sort=pricing-high-to-low", []string{"acme/golden", "acme/alpha", "acme/beta", "anthropic/claude-live"}, "", 4},
 		"longest context first":     {"?sort=context-high-to-low", []string{"acme/golden", "acme/alpha", "acme/beta", "anthropic/claude-live"}, "", 4},
+		"newest first":              {"?sort=newest", []string{"acme/golden", "anthropic/claude-live", "acme/beta", "acme/alpha"}, "", 4},
 		"a name nobody documents":   {"?utm_source=twitter", all, "", 4},
 		"a filter and a sort":       {"?input_modalities=image&sort=pricing-low-to-high", []string{"acme/golden"}, "", 1},
 	} {
@@ -379,7 +399,7 @@ func TestOpenRouterRetrieve(t *testing.T) {
 	t.Parallel()
 	r := goldenRig(t)
 	a := r.newAccount(1e9)
-	listed := r.orEntry(a, "acme/golden")
+	listed := r.orEntry(a, orListPath, "acme/golden")
 	resp, body := r.do(http.MethodGet, "/api/v1/models/acme/golden", a.key, nil)
 	var one struct {
 		Data jsonx.Raw `json:"data"`

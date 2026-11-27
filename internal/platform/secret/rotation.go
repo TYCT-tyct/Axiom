@@ -24,11 +24,13 @@ type Rotation struct {
 	Stores []EnvelopeStore
 }
 
-// KeyStatus contains only version identifiers, never key material or fingerprints.
+// KeyStatus contains only version identifiers and column names, never key material or fingerprints. Unregistered lists
+// the envelope columns this binary's stores do not cover (see ErrUnregistered); only Check and CheckRing fill it.
 type KeyStatus struct {
-	Active   uint32   `json:"active"`
-	Readable []uint32 `json:"readable"`
-	Retired  []uint32 `json:"retired"`
+	Active       uint32   `json:"active"`
+	Readable     []uint32 `json:"readable"`
+	Retired      []uint32 `json:"retired"`
+	Unregistered []string `json:"unregistered,omitempty"`
 }
 
 // transaction serializes lifecycle changes and each rewrap batch, and bounds lock waits and database work.
@@ -129,7 +131,7 @@ func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus
 		if snapshot, status, err = r.reconcile(ctx, tx, snapshot); err != nil {
 			return err
 		}
-		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
+		if status.Unregistered, err = r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
 		ring.install(snapshot.withActive(status.Active).withConfirmed(status.Readable))
@@ -145,19 +147,30 @@ func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus
 // the state a retirement leaves when its process stops between the commit and the file edit; when no envelope references
 // it, the file is pruned and read again so the caller installs the ring the database describes. A referenced version is
 // never deleted: that state means the tombstone and the stored envelopes disagree, and the key may still be the only way
-// to read them.
+// to read them. A binary that does not register every envelope column cannot confirm that, which is the normal state of an
+// older node whose own file still holds a version a newer node retired during the rollout: it keeps the file as it is and
+// serves the versions the database describes, and a node that registers every store deletes the key later.
 func (r Rotation) reconcile(ctx context.Context, tx pg.Tx, snapshot *keySnapshot) (*keySnapshot, KeyStatus, error) {
-	status, err := checkVersions(ctx, tx, snapshot, 0)
+	status, err := checkVersions(ctx, tx, snapshot, nil)
 	if !errors.Is(err, errHeldRetired) {
 		return snapshot, status, err
 	}
-	if err := r.pruneRetired(ctx, tx); err != nil {
+	retired, err := retiredVersions(ctx, tx)
+	if err != nil {
+		return nil, KeyStatus{}, err
+	}
+	err = r.pruneRetired(ctx, tx, retired)
+	if errors.Is(err, ErrUnregistered) {
+		status, err = checkVersions(ctx, tx, snapshot, retired)
+		return snapshot, status, err
+	}
+	if err != nil {
 		return nil, KeyStatus{}, err
 	}
 	if snapshot, err = loadSnapshot(r.Path); err != nil {
 		return nil, KeyStatus{}, err
 	}
-	status, err = checkVersions(ctx, tx, snapshot, 0)
+	status, err = checkVersions(ctx, tx, snapshot, nil)
 	return snapshot, status, err
 }
 
@@ -230,12 +243,13 @@ func newVersionCheck() versionCheck {
 	return versionCheck{readable: []uint32{}, retired: []uint32{}}
 }
 
-// add records one row. A retired version that is still in the local file is held, unless it is the version being
-// retired: its tombstone is already committed and the same command prunes the file.
-func (c *versionCheck) add(ring *keySnapshot, version uint32, fingerprint []byte, state string, retiring uint32) {
+// add records one row. A retired version that is still in the local file is held, unless the caller keeps it there on
+// purpose: the version being retired, whose tombstone is committed and whose file edit the same command makes, or the
+// versions reconcile may not delete.
+func (c *versionCheck) add(ring *keySnapshot, version uint32, fingerprint []byte, state string, keep []uint32) {
 	if state == "retired" {
 		c.retired = append(c.retired, version)
-		if _, ok := ring.fingerprints[version]; ok && version != retiring {
+		if _, ok := ring.fingerprints[version]; ok && !slices.Contains(keep, version) {
 			c.held = append(c.held, version)
 		}
 		return
@@ -270,7 +284,7 @@ func (c *versionCheck) status() KeyStatus {
 	return KeyStatus{Active: c.active, Readable: c.readable, Retired: c.retired}
 }
 
-func checkVersions(ctx context.Context, tx pg.Tx, ring *keySnapshot, retiring uint32) (KeyStatus, error) {
+func checkVersions(ctx context.Context, tx pg.Tx, ring *keySnapshot, keep []uint32) (KeyStatus, error) {
 	rows, err := tx.Query(ctx, "SELECT version, fingerprint, state FROM platform.key_versions ORDER BY version")
 	if err != nil {
 		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", err)
@@ -284,7 +298,7 @@ func checkVersions(ctx context.Context, tx pg.Tx, ring *keySnapshot, retiring ui
 		if err := rows.Scan(&version, &fingerprint, &state); err != nil {
 			return KeyStatus{}, fmt.Errorf("keyring: cannot decode versions: %w", err)
 		}
-		found.add(ring, version, fingerprint, state, retiring)
+		found.add(ring, version, fingerprint, state, keep)
 	}
 	if err := rows.Err(); err != nil {
 		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", err)
@@ -350,7 +364,7 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, snapshot, 0)
+		status, err := checkVersions(ctx, tx, snapshot, nil)
 		if err != nil {
 			return err
 		}
@@ -365,7 +379,7 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 		if err := ensureReaders(ctx, tx, version); err != nil {
 			return err
 		}
-		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
+		if _, err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
 		if err := setActive(ctx, tx, version); err != nil {
@@ -382,49 +396,6 @@ func setActive(ctx context.Context, tx pg.Tx, version uint32) error {
 	}
 	if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'active' WHERE version = $1", int64(version)); err != nil {
 		return fmt.Errorf("keyring: cannot activate write version: %w", err)
-	}
-	return nil
-}
-
-// pruneRetired removes tombstoned versions still present in the distribution file. It recovers the state a retirement
-// leaves when the process stops between its commit and its file edit. A version is deleted only after confirming that no
-// envelope references it: the tombstone is written by a retirement that checked the same thing, so a reference here
-// means the metadata and the stored data disagree and the key may still be the only way to read it.
-func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx) error {
-	rows, err := tx.Query(ctx, "SELECT version FROM platform.key_versions WHERE state = 'retired' ORDER BY version")
-	if err != nil {
-		return fmt.Errorf("keyring: cannot read retired versions: %w", err)
-	}
-	defer rows.Close()
-	var retired []uint32
-	for rows.Next() {
-		var version uint32
-		if err := rows.Scan(&version); err != nil {
-			return fmt.Errorf("keyring: cannot decode retired version: %w", err)
-		}
-		retired = append(retired, version)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("keyring: cannot read retired versions: %w", err)
-	}
-	for _, version := range retired {
-		if err := r.unreferenced(ctx, tx, version); err != nil {
-			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
-		}
-		// A retired version always has a marker: the tombstone and the marker commit together, and migration
-		// 00023 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
-		// the key could then race a writer the fence never saw, so leave it in place.
-		var fenced bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_retirements WHERE version = $1)",
-			int64(version)).Scan(&fenced); err != nil {
-			return fmt.Errorf("keyring: cannot read retirement fence: %w", err)
-		}
-		if !fenced {
-			return fmt.Errorf("keyring: refusing to prune version %d: no retirement fence", version)
-		}
-		if err := removeKey(r.Path, version); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -454,7 +425,7 @@ func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error
 	if err != nil {
 		return err
 	}
-	status, err := checkVersions(ctx, tx, snapshot, version)
+	status, err := checkVersions(ctx, tx, snapshot, []uint32{version})
 	if err != nil {
 		return err
 	}

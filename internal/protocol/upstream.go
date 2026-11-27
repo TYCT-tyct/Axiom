@@ -107,7 +107,8 @@ func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[stri
 	if o.Cached {
 		s.rw.cacheCreated = strconv.FormatInt(o.Created, 10)
 	}
-	s.rw.w.Identity = func(string) string { return o.ID }
+	id := o.ID // the closure keeps the ID alone, not a heap copy of the whole options
+	s.rw.w.Identity = func(string) string { return id }
 	s.rw.t.Model = o.modelName()
 	s.rw.usageMembers = usageMembers
 	s.id, s.model = string(appendQuoted(nil, o.ID)), string(appendQuoted(nil, o.modelName()))

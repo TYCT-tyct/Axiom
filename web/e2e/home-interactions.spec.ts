@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
-import { loop, open, running, scrollTo, shown } from "./fx-helpers.ts";
+import { loop, open, running, scrollTo, seaFrame, shown } from "./fx-helpers.ts";
 
 // Home-page interactions matching the final Site / SitePhone boards (#747):
 // 1) desktop inertial wheel scrolling (wide only, releases loop when settled)
@@ -20,7 +20,7 @@ test("desktop wheel scrolls with inertia on wide and settles without keeping a l
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await running(page);
-  await expect.poll(() => page.locator(".tr").getAttribute("data-enter")).toBe("done");
+  await expect.poll(() => seaFrame(page).getAttribute("data-enter")).toBe("done");
 
   const scroller = page.locator(".hs");
   const baselineOwners = (await loop(page)).owners;
@@ -75,7 +75,7 @@ for (const { variant, random } of [
     await running(page);
 
     // Wait for the entrance to finish and verify the chosen variant actually ran.
-    await expect.poll(() => page.locator(".tr").getAttribute("data-enter")).toBe("done");
+    await expect.poll(() => seaFrame(page).getAttribute("data-enter")).toBe("done");
     const states = await page.evaluate(() => (window as unknown as { enterStates: string[] }).enterStates);
     expect(states).toContain(variant);
     expect(states.at(-1)).toBe("done");

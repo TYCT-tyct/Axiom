@@ -57,6 +57,9 @@ func NewTimedConnector(inner driver.Connector, timeout time.Duration) driver.Con
 // ScanDiscarded runs the queue's discard scan now, so a test need not wait for the periodic job.
 func (q *Queue) ScanDiscarded(ctx context.Context) error { return q.scanDiscarded(ctx) }
 
+// ScanDiscardedTx runs the discard scan in tx, so a test can hold it uncommitted while another scan runs.
+func (q *Queue) ScanDiscardedTx(ctx context.Context, tx Tx) error { return q.scanDiscardedTx(ctx, tx) }
+
 // QueueWorkers is how many jobs a node works at once from the named queue, so that a test can fill it.
 func QueueWorkers(name string) int {
 	for _, queue := range queues {

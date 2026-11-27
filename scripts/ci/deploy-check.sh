@@ -196,9 +196,15 @@ done
 
 # A named zone must work in the scratch image, which has no host zoneinfo. Provision an empty account through the
 # production CLI, restart to load its site, then use an authenticated console request through the public listener.
-compose exec -T axiom /axiom site init --name "Statement smoke" --currency USD --console localhost --api api.statement.example
+compose exec -T axiom /axiom site init --name "Statement smoke" --currency USD --console localhost --api api.statement.example \
+  --admin localhost:8082
 statement_password="$(openssl rand -hex 24)"
 printf '%s\n' "$statement_password" | compose exec -T axiom /axiom user create --email statement@example.com
+# The first administrator, made as docs/frontend-api.md「在本机开发」 makes one: a user of the main site given the
+# platform's admin role from the command line, the only way in to an empty deployment.
+admin_password="$(openssl rand -hex 24)"
+printf '%s\n' "$admin_password" | compose exec -T axiom /axiom user create --email admin@example.com
+compose exec -T axiom /axiom user grant-platform --email admin@example.com --role admin
 compose restart axiom
 start # Restarting can change ephemeral host ports; rediscover them before making requests.
 statement_cookie="$(jq -cn --arg password "$statement_password" '{email:"statement@example.com", password:$password}' |
@@ -210,6 +216,36 @@ curl -fsS -H 'Host: localhost' -H "Cookie: $statement_cookie" \
   "http://localhost:$public/api/console/v1/statement/daily?time_zone=Asia%2FShanghai" |
   jq -e '.data == [] and .next_cursor == null' > /dev/null
 unset statement_password statement_cookie
+
+# The first administrator's first sign-in, on the admin listener under the site's admin domain: a password alone opens
+# no platform page; turning on two-step verification, with a code of the secret the setup hands out as an authenticator
+# app would, does. The program's own health check (deploy/Dockerfile) says the node is healthy throughout.
+admin_api="http://127.0.0.1:$admin/api/admin/v1"
+admin_curl() { curl -sS -H 'Host: localhost:8082' -H 'Origin: http://localhost:8082' -H 'Content-Type: application/json' "$@"; }
+totp() {
+  python3 -c 'import base64, hmac, struct, sys, time
+secret = base64.b32decode(sys.argv[1] + "=" * (-len(sys.argv[1]) % 8))
+mac = hmac.new(secret, struct.pack(">Q", int(time.time()) // 30), "sha1").digest()
+at = mac[-1] & 15
+print("%06d" % ((struct.unpack(">I", mac[at:at + 4])[0] & 0x7fffffff) % 1000000))' "$1"
+}
+signed_in="$(jq -cn --arg password "$admin_password" '{email:"admin@example.com", password:$password}' |
+  admin_curl -D - --data-binary @- "$admin_api/auth/sign-in" | tr -d '\r')"
+admin_cookie="$(sed -n -E 's/^[Ss]et-[Cc]ookie: ([^;]*axiom_session=[^;]+);.*/\1/p' <<< "$signed_in")"
+csrf="$(sed -n '/^{/p' <<< "$signed_in" | jq -r .csrf_token)"
+[ -n "$admin_cookie" ] && [ "$csrf" != null ] || { echo "$signed_in"; echo "::error::the first administrator's sign-in set no session"; exit 1; }
+[ "$(admin_curl -o /dev/null -w '%{http_code}' -H "Cookie: $admin_cookie" "$admin_api/users")" = 403 ] \
+  || { echo "::error::a password alone opened the admin's users"; exit 1; }
+secret="$(admin_curl -f -X POST -H "Cookie: $admin_cookie" -H "X-CSRF-Token: $csrf" "$admin_api/auth/totp/setup" | jq -r .secret)"
+enabled="$(jq -cn --arg secret "$secret" --arg password "$admin_password" --arg code "$(totp "$secret")" \
+  '{secret:$secret, password:$password, code:$code}' |
+  admin_curl -f -D - -H "Cookie: $admin_cookie" -H "X-CSRF-Token: $csrf" --data-binary @- "$admin_api/auth/totp/confirm" | tr -d '\r')"
+admin_cookie="$(sed -n -E 's/^[Ss]et-[Cc]ookie: ([^;]*axiom_session=[^;]+);.*/\1/p' <<< "$enabled")"
+admin_curl -f -H "Cookie: $admin_cookie" "$admin_api/users" | jq -e '.data | map(.email) | index("admin@example.com") != null' > /dev/null \
+  || { echo "::error::the verified first administrator cannot read the admin's users"; exit 1; }
+[ "$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps --quiet axiom)")" = healthy ] \
+  || { echo "::error::the node's health check does not say healthy"; exit 1; }
+unset admin_password admin_cookie csrf secret signed_in enabled
 
 # The rolling release's other half: the release this deployment replaces must still start against the schema this tree
 # migrates. The program is the train's base (BASE) or the base a main landing's Train trailer names; the check builds

@@ -7,7 +7,7 @@
 ## 代码结构
 
 ```
-internal/suppliers/  公开接口：Service（调用面）、RecordAttempts 等写入、Admin（管理接口）、BYOK、
+internal/suppliers/  公开接口：Service（调用面）、RecordAttempts 等写入、Admin、BYOK、
   CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
 internal/suppliers/internal/
   adapter/      契约：Adapter、Type、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、KeyFinder、Pool、UsageQueue、Direct、Wire、Cloud、Signer
@@ -67,8 +67,8 @@ func (s *Service) Routable() ([]Routable, error) // 快照里的端点，按 id�
 func (s *Service) EndpointCode(ep EndpointID) string // 端点的公开代号；缺失或过期为空串
 func (s *Service) RefreshBalances(ctx context.Context) error // 后台：合并、限速请求余额同步
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error) // ErrNoEndpoint、ErrSupplierResting、ErrNoSlot
-func (s *Service) AcquireWithin(ep EndpointID, bound platform.Exact) (*Attempt, error) // 跳过付不起 bound÷倍率的钱包 key
-func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // Call{Format, Compact, Body, Header}
+func (s *Service) AcquireWithin(ep EndpointID, bound platform.Exact) (*Attempt, error) // 跳过付不起 bound÷倍率者
+func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // Call{Format, Compact, Count, Body, Header}
 func (a *Attempt) Sanitize(protocol.Rejection) *protocol.Rejection // 流里的拒绝，同一份清洗；nil 为没有可交出的话
 func (a *Attempt) Policy() CallPolicy // 适配器默认，端点实测覆盖 Cancels
 func (a *Attempt) Done() AttemptReceipt // 幂等，释放占位；回执字段不对外
@@ -92,8 +92,8 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 - **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行：`Codename` 是分组的公开代号，`Generation` 是快照的单调版本，`Schedule` 已按分组倍率缩放，`Funds` 是原生余额（钱包 key 取最富的）与自动暂停（路由用 `billing.ReservedCost` 调 `Funds.CanPay`），`Credentials` 是未过期、未冷却的凭证数。规格由 routing 向目录取。
 - **回执**带凭证、端点、成本计划版本、单位价值行 id 和对账键；gateway 用 `AttemptReceipt.WithExchange` 传回冻结的汇率。`Credits` = 原生金额 × 单位价值 × 汇率，精确相乘、转成十亿分之一时向上取整一次；缺汇率或溢出返回未知，原生 `CostFlag` 不变。`attempt_costs` 存换算依据 `Conversion`，只有 converted 和 overflow 写汇率 ID。
 - **写入**：`RecordAttempts` 在 billing 的结算事务里用一条 `unnest` 写全部尝试，`EndRequests` 同样一条语句，重复都保留第一次。平台自己的尝试传零值租户，写成 NULL；失联请求必须有租户。
-- **路径**：`attempt.go` 的 `wire` 表（各格式的 `/v1/…`，只有 Messages 加 Anthropic 版本头）和 `compactPaths`（[路径与格式](../../docs/domains/gateway.md#路径与格式)）；直连经 `adapter.Wire` 换前缀、带凭证的设置和名字。云平台由 `adapter.Signer` 按区域、模型名和设置签出，签不出算凭证的失败，2xx 转成格式的帧。
-- **出口**：凭证的调用、检测、重读都走 `exits.client` 的客户端；代理用不了的凭证跳过、建不出的整家排除，不改直连；经代理的传输失败是 `ScopeEgress`。
+- **路径**：`attempt.go` 的 `wire` 表（各格式的 `/v1/…`，Messages 加版本头）、`compactPaths`（[路径与格式](../../docs/domains/gateway.md#路径与格式)）和 `countPaths`（count_tokens，失败不冷却凭证，云平台不发）；直连经 `adapter.Wire` 换前缀、带凭证的设置和名字。云平台由 `adapter.Signer` 签出，签不出算凭证的失败，2xx 转成格式的帧。
+- **出口**：调用、检测、重读走 `exits.client`；代理不可用的凭证跳过、建不出的整家排除，不回直连；经代理传输失败是 `ScopeEgress`。
 - **`EnabledCurrencies`**：active、low_balance 供应商的结算币种，缺汇率时告警。
 - **`TestRequest.AvoidCredential`** 在有另一把可用 key 时避开它；`TestResult.CredentialID` 只给 ID。
 

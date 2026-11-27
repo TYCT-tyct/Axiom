@@ -285,6 +285,12 @@ func TestPlatformReportPlanReadsTheWindow(t *testing.T) {
 	if blocks > 1500 {
 		t.Errorf("the calls' sums touched %d blocks, want at most 1500:\n%s", blocks, plan)
 	}
+	// Over the whole window the calls are summed by parallel workers, which grouping sets alone cannot use: at a million
+	// calls a day the serial read took about four seconds of the dashboard's ten (#950).
+	_, plan = b.plan(b.platform, nil, platformCallMoney, site, now.Add(-9*time.Hour), now)
+	if !strings.Contains(plan, `"Node Type": "Gather`) {
+		t.Errorf("the calls' sums over the whole window are not read in parallel:\n%s", plan)
+	}
 
 	_, plan = b.plan(b.platform, nil, platformCash, site, since, now)
 	if strings.Contains(plan, "Seq Scan") {

@@ -246,6 +246,37 @@ func TestSign(t *testing.T) {
 	}
 }
 
+// TestSignBetas: of the client's anthropic-beta features Vertex AI gets those it takes, once each; the rest go, and
+// with none left it gets no anthropic-beta header at all.
+func TestSignBetas(t *testing.T) {
+	t.Parallel()
+	svc := newTokenService(t)
+	a := &Adapter{tokens: newTokens(svc.server.URL)}
+	key := readKey(t).Key
+	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{"kept and dropped", []string{"claude-code-20250219,context-1m-2025-08-07", "advisor-tool-2026-03-01, interleaved-thinking-2025-05-14, context-1m-2025-08-07"}, "context-1m-2025-08-07,interleaved-thinking-2025-05-14"},
+		{"computer use on Sonnet 4.6", []string{"computer-use-2025-11-24"}, "computer-use-2025-11-24"},
+		{"none left", []string{"claude-code-20250219, oauth-2025-04-20"}, ""},
+		{"none given", nil, ""},
+	} {
+		h := http.Header{"Anthropic-Beta": tc.values}
+		req, f := a.Calls().(adapter.Signer).Sign(t.Context(), svc.server.Client(), adapter.SignedCall{
+			Format: protocol.Messages, Region: "us-east5", Model: "claude-sonnet-4-5@20250929", Body: []byte(`{"max_tokens":8}`), Header: h, Key: key, At: at,
+		})
+		if f != nil {
+			t.Fatalf("%s: %+v", tc.name, f)
+		}
+		if got := req.Header.Get("Anthropic-Beta"); got != tc.want || len(req.Header.Values("Anthropic-Beta")) > 1 || len(h["Anthropic-Beta"]) != len(tc.values) {
+			t.Errorf("%s: sent %q, the call's own %v", tc.name, req.Header.Values("Anthropic-Beta"), h["Anthropic-Beta"])
+		}
+	}
+}
+
 // TestCheckRegion: the region is read with the token; a region the project cannot use fails as region_unavailable,
 // a key the token service refuses fails as refused, and a 403 says nothing about the credential.
 func TestCheckRegion(t *testing.T) {

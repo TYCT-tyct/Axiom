@@ -164,17 +164,22 @@ func (q *Queries) ListPaidBatches(ctx context.Context, db DBTX, arg ListPaidBatc
 const platformCallMoney = `-- name: PlatformCallMoney :many
 WITH sums AS (
     SELECT grouping(day, account_id)::int AS set, day, account_id,
-        coalesce(sum(charged::numeric), 0) AS revenue,
-        coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0) AS cost,
-        count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
+        coalesce(sum(revenue), 0) AS revenue, coalesce(sum(cost), 0) AS cost,
+        coalesce(sum(unknown_cost_calls), 0)::bigint AS unknown_cost_calls
     FROM (
-        -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects a
-        -- group per row and sorts the window instead of hashing its few days.
-        SELECT charged, profit, account_id, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
-        FROM billing.reservations
-        WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
-            AND state IN ('settled', 'cleanup_settled')
-    ) r
+        SELECT day, account_id, sum(charged::numeric) AS revenue,
+            sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL) AS cost,
+            count(*) FILTER (WHERE profit IS NULL) AS unknown_cost_calls
+        FROM (
+            -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects
+            -- a group per row and sorts the window instead of hashing its few days.
+            SELECT charged, profit, account_id, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
+            FROM billing.reservations
+            WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
+                AND state IN ('settled', 'cleanup_settled')
+        ) r
+        GROUP BY day, account_id
+    ) g
     GROUP BY GROUPING SETS ((day), (), (account_id))
 ), shown AS (
     SELECT set, day, account_id, revenue, cost, unknown_cost_calls FROM sums WHERE set <> 2
@@ -208,7 +213,9 @@ type PlatformCallMoneyRow struct {
 // amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
 // time axis is the call's, the same as the call log's (README.md「运营看板」). The window's total (set = 3), which the
 // empty grouping set gives even when nothing settled, then the ten accounts charged the most (set = 2), then one row
-// per UTC day (set = 1): one read of the window gives every figure, so they agree with each other.
+// per UTC day (set = 1): one read of the window gives every figure, so they agree with each other. The window's calls
+// are summed per day and account by a plain GROUP BY, which PostgreSQL splits across parallel workers, and the grouping
+// sets, which it cannot, only roll up those few groups (docs/domains/observability.md「决策与理由」).
 func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) ([]PlatformCallMoneyRow, error) {
 	rows, err := db.Query(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
 	if err != nil {

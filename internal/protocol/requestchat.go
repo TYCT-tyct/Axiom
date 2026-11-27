@@ -239,24 +239,104 @@ func nativeTool(raw jsontext.Value, f Format) (requestObject, error) {
 		return nil, err
 	}
 	kind := o.take("type")
-	if !isNull(kind) && string(kind) != `"function"` {
-		return nil, &NotSupported{Reason: "only function tools convert to Chat"}
-	}
 	fn := requestObject{}
 	for _, name := range []string{"name", "description", "strict"} {
 		o.move(fn, name, name)
 	}
-	parameters := "parameters"
-	if f == Messages {
-		parameters = "input_schema"
+	switch {
+	case isNull(kind), string(kind) == `"function"`, string(kind) == `"custom"` && f == Messages:
+		parameters := "parameters"
+		if f == Messages {
+			parameters = "input_schema"
+		}
+		o.move(fn, parameters, "parameters")
+	case string(kind) == `"custom"`:
+		if err := customFunction(o.take("format"), fn); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, toolNotConverted(f, kind)
 	}
-	o.move(fn, parameters, "parameters")
 	if f == Responses && isNull(fn["strict"]) {
 		fn["strict"] = jsontext.Value("false") // Chat cannot promise Responses' implicit schema normalization.
 	}
 	tool := requestObject{"type": jsontext.Value(`"function"`), "function": jsonValue(fn)}
 	o.move(tool, "cache_control", "cache_control")
 	return tool, o.remaining()
+}
+
+// customInputSchema is a Responses custom (freeform) tool's input as a function's parameters: one string, which the
+// reply unwraps back into the custom call's input (README.md「跨格式转换」).
+const customInputSchema = `{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`
+
+// customFunction writes a Responses custom tool as a function taking its input as one string. A grammar the function
+// cannot enforce is given to the model in the description, as Codex's apply_patch needs: the model still writes input
+// the grammar accepts, and the client checks it as it would for a native call.
+func customFunction(format jsontext.Value, fn requestObject) error {
+	fn["parameters"], fn["strict"] = jsontext.Value(customInputSchema), jsontext.Value("false")
+	if isNull(format) {
+		return nil
+	}
+	o, err := requestMembers(format)
+	if err != nil {
+		return err
+	}
+	switch kind := string(o.take("type")); kind {
+	case `"text"`:
+		return o.remaining()
+	case `"grammar"`:
+	default:
+		return &NotSupported{Reason: "a custom tool's format " + kind + " has no Chat counterpart"}
+	}
+	syntax, err := requestString(o.take("syntax"))
+	if err != nil {
+		return err
+	}
+	definition, err := requestString(o.take("definition"))
+	if err != nil {
+		return err
+	}
+	description := ""
+	if v := fn["description"]; !isNull(v) {
+		if description, err = requestString(v); err != nil {
+			return err
+		}
+		description += "\n\n"
+	}
+	fn["description"] = jsonValue(description + "The input must follow this " + syntax + " grammar:\n" + definition)
+	return o.remaining()
+}
+
+// CustomTools are the names of a Responses request's custom tools, for RelayOptions.CustomTools: the gateway reads them
+// only when the request goes to an endpoint of another format, so a same-format call never scans for them.
+func CustomTools(body []byte) []string {
+	v, _, _, ok, err := topMember(body, "tools")
+	if !ok || err != nil {
+		return nil
+	}
+	var tools []struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if jsonx.Unmarshal(v, &tools) != nil {
+		return nil
+	}
+	var names []string
+	for _, t := range tools {
+		if t.Type == "custom" {
+			names = append(names, t.Name)
+		}
+	}
+	return names
+}
+
+// toolNotConverted names a tool no Chat function can stand for: Anthropic's server tools run on Anthropic's side, its
+// typed client tools have schemas only its models are trained on, and OpenAI's hosted tools run on OpenAI's.
+func toolNotConverted(f Format, kind jsontext.Value) error {
+	if f == Messages {
+		return &NotSupported{Reason: "Anthropic's " + string(kind) + " tool runs only on Anthropic models; declare it as a custom tool with an input_schema to use it elsewhere"}
+	}
+	return &NotSupported{Reason: "the Responses " + string(kind) + " tool runs only on OpenAI's side and has no counterpart on this model"}
 }
 
 // choiceNames is shared by both request directions. Named choices carry their
@@ -321,7 +401,7 @@ func nativeChoiceOf(o requestObject, f Format, kind string) (jsontext.Value, err
 	if f == Messages && inverseName(choiceNames, kind) != "" {
 		return jsonValue(inverseName(choiceNames, kind)), nil
 	}
-	if f == Messages && kind == "tool" || f == Responses && kind == "function" {
+	if f == Messages && kind == "tool" || f == Responses && (kind == "function" || kind == "custom") {
 		name := o.take("name")
 		if _, err := requestString(name); err != nil {
 			return nil, err

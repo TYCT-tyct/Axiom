@@ -2,15 +2,20 @@ package gateway
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"time"
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
-// The count of POST /messages/count_tokens, which never reaches an upstream (internal/gateway/README.md「辅助接口」).
+// The estimate POST /messages/count_tokens answers when no upstream answers it (internal/gateway/README.md「辅助接口」).
 // The text is the request's bytes less the image and file data, a third of a token each: an empirical ratio that usually
 // overcounts (English runs about four bytes a token) but bounds nothing. An image counts as the most one costs, and a
 // file, whose pages are not known without decoding it, as a flat few pages, so a file of more pages is undercounted.
@@ -18,6 +23,14 @@ const (
 	bytesPerToken  = 3
 	imageTokens    = 1600
 	documentTokens = 3000
+)
+
+// countWait is how long a count waits for its upstream before it estimates instead: a coding tool counts before its
+// turns, which a slow relay should not hold up. maxCountReply is the most of the answer read; {"input_tokens": n} is
+// a few dozen bytes.
+const (
+	countWait     = 3 * time.Second
+	maxCountReply = 4 << 10
 )
 
 // countInput is the estimate of a request's input tokens. It rounds up and errs on the high side for English text and
@@ -32,7 +45,8 @@ func countRateKey(c accounts.Caller) string { return "count:" + keyKey(c) }
 
 // countTokens answers Anthropic's count_tokens: {"input_tokens": n}. It takes what a call takes before admission (the
 // address's limit, the key, the account's slot, the body's memory, the key's rate), then asks the database only whether
-// the key may be used and may use the model. Nothing is reserved, charged or recorded.
+// the key may be used and may use the model, and then an upstream (countUpstream). Nothing is reserved, charged or
+// recorded.
 func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.ipSlot(w, r, protocol.Messages)
 	if !ok {
@@ -48,6 +62,11 @@ func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
+	return h.countAs(w, r, protocol.Messages, nil)
+}
+
+// countAs is count for a request of format, converted from Gemini's when gemini is set.
+func (h *Handler) countAs(w http.ResponseWriter, r *http.Request, format protocol.Format, gemini *geminiInbound) (int64, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return 0, errUpgrade
 	}
@@ -55,7 +74,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	c := &Call{caller: caller, site: site, Format: protocol.Messages}
+	c := &Call{caller: caller, site: site, Format: format, gemini: gemini}
 	defer c.Done()
 	slot, err := h.Limits.InFlight.Acquire(accountKey(caller), 0)
 	if err != nil {
@@ -74,11 +93,17 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err := h.checkRate(c.rate, h.Limits.cfg.CountRate, errCountRate, c.rateReset); err != nil {
 		return 0, err
 	}
+	return h.countFor(r, c, body, req)
+}
+
+// countFor is the count of a request whose body is read and rate counted: refused as its call would be, then asked of
+// the call's route or estimated.
+func (h *Handler) countFor(r *http.Request, c *Call, body []byte, req protocol.Request) (int64, error) {
 	snap, err := h.currentCatalog()
 	if err != nil {
 		return 0, err
 	}
-	_, names, err := readRouting(&req, body) // a count refuses what the call would
+	over, names, err := readRouting(&req, body) // a count refuses what the call would
 	if err != nil {
 		return 0, err
 	}
@@ -89,10 +114,81 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
+	var admission routing.Admission
+	err = h.authorise(r, c.caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
+		admission = routingAdmission(a, c.caller, c.site, snap)
 		return h.countAdmission(a, c, snap, model.Model)
 	})
-	return countInput(req), err
+	if err != nil {
+		return 0, err
+	}
+	if c.Format != protocol.Messages { // only Anthropic's API counts tokens, and the body is not its shape
+		return countInput(req), nil
+	}
+	return h.countOf(r, routing.Input{
+		Admission: admission, Req: &req, Models: []catalog.ModelID{model.Model}, Override: over, NativeOnly: true, NoSegments: true,
+	}, body), nil
+}
+
+// countOf is the upstream's count of the request, or the estimate when none answers.
+func (h *Handler) countOf(r *http.Request, in routing.Input, body []byte) int64 {
+	if n, ok := h.countUpstream(r, in, body); ok {
+		return n
+	}
+	return countInput(*in.Req)
+}
+
+// countUpstream asks the first endpoint of the request's route that speaks Messages itself — the route a call would
+// take, so the body goes nowhere the call could not — once the admission's transaction and pool permit are given back.
+// ok is false when none answered with a count, and the caller estimates. The credential's slot is held only while the
+// count is asked, and a failure of the count rests nothing: a relay without the route answers 404, which says nothing
+// of the credential or the endpoint (suppliers.Call.Count).
+func (h *Handler) countUpstream(r *http.Request, in routing.Input, body []byte) (int64, bool) {
+	plan, _, err := h.Models.plan(h.Router, in)
+	if err != nil {
+		return 0, false
+	}
+	for _, e := range plan.Entries {
+		if h.Router.Blocked(e) {
+			continue
+		}
+		conn, err := h.Upstreams.AcquireWithin(suppliers.EndpointID(e.Endpoint), e.Bound)
+		if err != nil {
+			continue
+		}
+		n, ok := h.askCount(r, conn, e.Target.Model, body)
+		conn.Done()
+		h.Limits.Queue.Wake() // a freed slot is what a queued call waits for (session.done)
+		return n, ok
+	}
+	return 0, false
+}
+
+// askCount sends the count to one credential and reads {"input_tokens": n} of a 2xx answer, strictly.
+func (h *Handler) askCount(r *http.Request, conn Conn, model string, body []byte) (int64, bool) {
+	out, held, err := protocol.CountBody(h.Memory, body, model)
+	if err != nil {
+		return 0, false
+	}
+	defer h.Memory.Refund(held)
+	ctx, cancel := context.WithTimeout(r.Context(), countWait)
+	defer cancel()
+	call := suppliers.Call{Format: protocol.Messages, Count: true, Body: out, Header: protocolHeader(protocol.Messages, r.Header, nil)}
+	resp, f := conn.Send(ctx, call)
+	if f != nil {
+		return 0, false
+	}
+	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxCountReply+1))
+	if closeErr := resp.Body.Close(); err == nil {
+		err = closeErr
+	}
+	var count struct {
+		InputTokens *int64 `json:"input_tokens"`
+	}
+	if err != nil || len(reply) > maxCountReply || jsonx.Unmarshal(reply, &count) != nil || count.InputTokens == nil || *count.InputTokens < 0 {
+		return 0, false
+	}
+	return *count.InputTokens, true
 }
 
 // countable refuses what count_tokens cannot answer: a router that expands to a model, and a request that searches,

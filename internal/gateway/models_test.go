@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -284,4 +285,106 @@ func checkNotFound(t *testing.T, resp reply, body string) {
 func restrict(r *rig, a account, models string) {
 	r.t.Helper()
 	r.sql("UPDATE accounts.api_keys SET models = '" + models + "' WHERE id = '" + uuid.UUID(a.keyID).String() + "'")
+}
+
+// TestModelListWithoutAKey: as OpenRouter's, both lists answer a request with no key at all with the site's public view
+// — every model a platform endpoint serves, at the default tier's price, with OpenRouter's members under /v1 too — and a
+// key with its own view. A key that is wrong is 401, never read as no key. A site that keeps its prices to members
+// shows a visitor none, and refuses the filter that would let one find them out.
+func TestModelListWithoutAKey(t *testing.T) {
+	t.Parallel()
+	r := goldenRig(t)
+	a := r.newAccount(1e9)
+	restrict(r, a, "{acme/alpha}")
+	public := map[string][]string{
+		"/v1/models":     {"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live", "acme/golden"},
+		"/api/v1/models": {"acme/alpha", "acme/beta", "anthropic/claude-live", "acme/golden"},
+	}
+	alpha := map[string][]string{"/v1/models": {"acme/alpha"}, "/api/v1/models": {"acme/alpha"}}
+	for _, tc := range []struct {
+		name, key string
+		hidden    bool // the site keeps its prices to members; the cases that set it come last
+		status    int
+		ids       map[string][]string
+		priced    bool
+	}{
+		{"no key", "", false, http.StatusOK, public, true},
+		{"a key", a.key, false, http.StatusOK, alpha, true},
+		{"a wrong key", "sk-ax-v1-wrong", false, http.StatusUnauthorized, nil, false},
+		{"no key, prices kept to members", "", true, http.StatusOK, public, false},
+		{"a key, prices kept to members", a.key, true, http.StatusOK, alpha, true},
+	} {
+		if tc.hidden {
+			r.keepPricesToMembers()
+		}
+		for _, path := range []string{"/v1/models", "/api/v1/models"} {
+			resp, body := r.do(http.MethodGet, path, tc.key, nil)
+			if resp.StatusCode != tc.status {
+				t.Errorf("%s, %s: %d, want %d: %s", tc.name, path, resp.StatusCode, tc.status, body)
+			} else if tc.status == http.StatusOK {
+				checkPublicList(t, tc.name+", "+path, body, tc.ids[path], tc.priced)
+			}
+		}
+	}
+	checkPricesWithheld(t, r)
+}
+
+// checkPricesWithheld: while the site keeps its prices to members, a visitor cannot filter by price, and one model asked
+// for alone carries no price either.
+func checkPricesWithheld(t *testing.T, r *rig) {
+	t.Helper()
+	resp, body := r.do(http.MethodGet, "/api/v1/models?max_price=1", "", nil)
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+		t.Errorf("a price filter without a key while prices are kept to members: %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/v1/models/acme/golden", "/api/v1/models/acme/golden"} {
+		resp, body := r.do(http.MethodGet, path, "", nil)
+		var one map[string]any
+		if resp.StatusCode != http.StatusOK || jsonx.Unmarshal([]byte(body), &one) != nil || strings.Contains(body, `"pricing"`) ||
+			!strings.Contains(body, `"context_length":200000`) {
+			t.Errorf("%s without a key while prices are kept to members: %d %s", path, resp.StatusCode, body)
+		}
+	}
+}
+
+// checkPublicList: the list holds exactly ids, in order, each with OpenRouter's limits, and with a price when priced and
+// no pricing member at all otherwise.
+func checkPublicList(t *testing.T, name, body string, ids []string, priced bool) {
+	t.Helper()
+	var list struct {
+		Data []struct {
+			ID            string            `json:"id"`
+			ContextLength int64             `json:"context_length"`
+			Pricing       map[string]string `json:"pricing"`
+		} `json:"data"`
+	}
+	if err := jsonx.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("%s: %v: %s", name, err, body)
+	}
+	got := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		got = append(got, m.ID)
+		if m.ContextLength == 0 || (m.Pricing["prompt"] != "") != priced {
+			t.Errorf("%s: %s has context %d, pricing %v; want OpenRouter's members, priced %v", name, m.ID, m.ContextLength, m.Pricing, priced)
+		}
+	}
+	if diff := cmp.Diff(ids, got); diff != "" {
+		t.Errorf("%s (-want +got):\n%s", name, diff)
+	}
+	if !priced && strings.Contains(body, `"pricing"`) {
+		t.Errorf("%s: prices kept to members are in the list: %s", name, body)
+	}
+}
+
+// keepPricesToMembers has the site keep its model prices to members, with every node able to hide them.
+func (r *rig) keepPricesToMembers() {
+	r.t.Helper()
+	r.sql(
+		"INSERT INTO platform.model_prices_public_readiness (id, enabled) VALUES (true, true) ON CONFLICT (id) DO UPDATE SET enabled = true",
+		"INSERT INTO accounts.site_settings (site_id, model_prices_public) VALUES ('"+siteID.String()+"', false) "+
+			"ON CONFLICT (site_id) DO UPDATE SET model_prices_public = false",
+	)
+	if err := r.accounts.Refresh(r.t.Context()); err != nil {
+		r.t.Fatal(err)
+	}
 }

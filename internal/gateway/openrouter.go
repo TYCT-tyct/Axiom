@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"net/http"
 	"slices"
 	"strings"
@@ -17,8 +18,8 @@ import (
 
 // The model list in OpenRouter's shape (docs/openrouter-parity.md §2): the models GET /v1/models lists, with the price
 // the site sells each at and the limits, modalities and parameters its spec declares. It is the same list, so the two
-// prefixes cannot disagree about which models a key may call; only the members differ, and /v1 stays in OpenAI's and
-// Anthropic's shapes for the clients that read those.
+// prefixes cannot disagree about which models a key may call; /v1 carries the same objects beside OpenAI's and
+// Anthropic's members, under each name it lists a model by.
 
 // orListPath is where the list is served and what its links point at.
 const orListPath = "/api/v1/models"
@@ -29,8 +30,9 @@ const orMaxLimit = 1000
 const orDefaultLimit = 500
 
 // listOpenRouterModels answers GET /api/v1/models in OpenRouter's shape: every model this key may call that the routing
-// snapshot serves, with the price the site sells it at, filtered and paged by the query parameters Axiom keeps. The list
-// is the one the last build published with the snapshot, so the request reads no price and no spec of its own.
+// snapshot serves, or every public one for a visitor without a key (publicView), with the price the site sells it at,
+// filtered and paged by the query parameters Axiom keeps. The list is the one the last build published with the
+// snapshot, so the request reads no price and no spec of its own. GET /api/v1/models/user is the key's alone.
 func (h *Handler) listOpenRouterModels(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -38,16 +40,23 @@ func (h *Handler) listOpenRouterModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	see := h.readable
+	if r.URL.Path != orListPath {
+		see = h.visible
+	}
 	var q orQuery
-	v, err := h.visible(r)
+	v, err := see(r)
 	if err == nil {
 		q, err = readORQuery(r)
+	}
+	if err == nil && v.hidePrices && q.byPrice() {
+		err = invalid("This site shows its prices to members only: filtering or sorting by price needs an API key.")
 	}
 	if err != nil {
 		h.fail(w, r, format, err)
 		return
 	}
-	writeBody(w, v.listing.encode(v, q)) // no-store: the list is this key's, and its prices are the site's
+	writeBody(w, v.listing.encode(v, q)) // no-store: a key's list is its own, and its prices are the site's
 }
 
 // retrieveOpenRouterModel answers GET /api/v1/models/{model} in OpenRouter's shape (spec `ModelResponse`): the object the
@@ -63,7 +72,7 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 	}
 	defer release()
 	var entry *orModel
-	v, err := h.visible(r)
+	v, err := h.readable(r)
 	if err == nil {
 		entry, err = v.listing.find(v, r.PathValue("model"))
 	}
@@ -76,7 +85,8 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 		h.fail(w, r, format, err)
 		return
 	}
-	writeJSON(w, orModelResponse{Data: entry.orEntry})
+	// OpenRouter's answer for one model (spec `ModelResponse`): the object under data.
+	writeBody(w, append(appendObject([]byte(`{"data":`), entry.body, entry.pricing, v.hidePrices), '}'))
 }
 
 // find resolves names against the published catalog, so an endpoint and its model detail describe the same build. It
@@ -150,6 +160,7 @@ type openRouterListing struct {
 	served map[catalog.ModelID]struct{} // the models the build gave an endpoint: a call to one has a route to take
 	built  time.Time                    // when the build began; the snapshot of the same build carries it too
 	models []orModel                    // in the snapshot's order
+	index  map[catalog.ModelID]int      // where each model is in models
 }
 
 // shows says whether the model is in this list for this key: the build had a route for it and the key may call it. The
@@ -168,13 +179,14 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 	endpoints []routing.Endpoint,
 ) (*openRouterListing, error) {
 	served, byModel := platformEndpoints(endpoints)
-	l := &openRouterListing{snap: snap, served: served}
+	l := &openRouterListing{snap: snap, served: served, index: make(map[catalog.ModelID]int, len(served))}
 	for m := range snap.Models() {
 		e, ok, err := l.modelOf(m, prices, byModel[m.ID])
 		if err != nil {
 			return nil, err
 		}
 		if ok {
+			l.index[m.ID] = len(l.models)
 			l.models = append(l.models, e)
 		}
 	}
@@ -217,7 +229,7 @@ func (l *openRouterListing) modelOf(m catalog.Model, prices map[catalog.ModelID]
 	if err != nil || !ok {
 		return orModel{}, false, err
 	}
-	if err := e.encodeEndpoints(endpoints); err != nil {
+	if err := e.encodeResponses(l.snap, m, endpoints); err != nil {
 		return orModel{}, false, err
 	}
 	e.sold, e.served, e.serving, e.pageEndpoints = sold, servedIDs, serving, pageEndpoints
@@ -261,8 +273,10 @@ type orModel struct {
 	audiences *billing.AudiencePrices
 	variants  []orModel
 	orEntry
-	endpoints []byte // discovery response, encoded from the same build
+	endpoints []byte       // discovery response, encoded from the same build
+	v1        modelEntries // the object beside OpenAI's and Anthropic's members, under each name /v1 lists it by
 	body      []byte
+	pricing   span // where the pricing member lies in body
 	model     catalog.ModelID
 	author    string
 	search    string // the catalog name folded, for q
@@ -277,11 +291,6 @@ type orModel struct {
 	served        []uuid.UUID
 	serving       catalog.Serving
 	pageEndpoints []publicEndpoint
-}
-
-// orModelResponse is OpenRouter's answer for one model (spec `ModelResponse`).
-type orModelResponse struct {
-	Data orEntry `json:"data"`
 }
 
 // orEntry is one model as OpenRouter's model object has it (spec `Model`): the members the catalog's spec and the price
@@ -370,7 +379,7 @@ func newORModel(id string, m catalog.Model, s catalog.Serving, p catalog.Schedul
 	d := m.Dialect()
 	reasons := reasons(d, s.Abilities)
 	entry := orEntry{
-		ID: id, CanonicalSlug: id, Name: nameOf(id), Created: createdUnix, Pricing: newORPricing(p, s.Abilities),
+		ID: id, CanonicalSlug: id, Name: nameOf(id), Created: createdOf(m.ID), Pricing: newORPricing(p, s.Abilities),
 		ContextLength: s.Context, Architecture: newORArchitecture(s.Abilities),
 		TopProvider:         orTopProvider{ContextLength: s.Context, MaxCompletionTokens: s.MaxOutput},
 		SupportedParameters: orParameters(parameterSupport(s, d)), Links: orLinks{Details: orListPath + "/" + id + "/endpoints"},
@@ -386,9 +395,34 @@ func newORModel(id string, m catalog.Model, s catalog.Serving, p catalog.Schedul
 	// Each is at most a thousand credits, so the sum cannot overflow.
 	average, _ := prompt.Mul(1).Add(out.Mul(1)) //nolint:errcheck // cannot overflow: see above
 	return orModel{
-		orEntry: entry, body: body, model: m.ID, author: m.Author, prompt: prompt, output: out,
+		orEntry: entry, body: body, pricing: pricingIn(body), model: m.ID, author: m.Author, prompt: prompt, output: out,
 		search: strings.ToLower(id), average: average,
 	}, true, nil
+}
+
+// span is a range of an encoded object's bytes; the zero span is none.
+type span struct{ from, to int }
+
+// pricingIn is where the pricing member of a canonically encoded object lies, with the comma before it, so that a
+// visitor of a site that keeps its prices to members is sent the object without it (appendObject) and the build's
+// encoding serves both. Canonical order puts architecture first, so the member always has a comma before it; its values
+// are decimal strings, so the first '}' after it closes it; and a string value cannot hold the unescaped quote the
+// match begins with, so the first match is the member. An object without one gives the zero span.
+func pricingIn(body []byte) span {
+	member := []byte(`,"pricing":{`)
+	from := bytes.Index(body, member)
+	if from < 0 {
+		return span{}
+	}
+	return span{from, from + len(member) + bytes.IndexByte(body[from+len(member):], '}') + 1}
+}
+
+// appendObject appends body, without the bytes cut covers when hide is set.
+func appendObject(buf, body []byte, cut span, hide bool) []byte {
+	if !hide {
+		return append(buf, body...)
+	}
+	return append(append(buf, body[:cut.from]...), body[cut.to:]...)
 }
 
 // reasons says whether the model reasons: the ability is what a request may ask for, and a spec that says the model does
