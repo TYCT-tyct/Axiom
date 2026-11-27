@@ -43,8 +43,6 @@ var (
 	// ErrSupplierUnanswered is a supplier that did not answer, answered in a form the adapter does not know, or whose
 	// limits leave no request now: nothing is changed, and asking again later may work.
 	ErrSupplierUnanswered = errors.New("suppliers: the supplier did not answer in time")
-	// ErrGroupBusy is a group another request is connecting now; asking again once it ends answers what it left.
-	ErrGroupBusy = errors.New("suppliers: another request is connecting the group")
 )
 
 // KeyRefusal is a supplier that would not make a key for a group, with the fixed reason: not_permitted (the login may
@@ -61,24 +59,6 @@ type Reach struct {
 	DB    *pg.DB
 	Scope pg.Scope
 }
-
-// ClaimGroup holds the group for one connection, on every node, from before the supplier is asked until the key is
-// stored or refused: two connections that both passed the checks would otherwise both reach the supplier, and one that
-// made a key there and then lost to the other would leave the key live and stored nowhere (#773). A group another
-// request holds is ErrGroupBusy. The holder releases the claim; a holder that dies frees it with its connection.
-func (*Admin) ClaimGroup(ctx context.Context, r Reach, group uuid.UUID) (*pg.Hold, error) {
-	hold, err := r.DB.Hold(ctx, "axiom.suppliers.connect."+group.String(), claimCheck)
-	switch {
-	case errors.Is(err, pg.ErrHeld):
-		return nil, ErrGroupBusy
-	case err != nil:
-		return nil, fmt.Errorf("claim the group: %w", err)
-	}
-	return hold, nil
-}
-
-// claimCheck is how often a group's claim checks its connection: a claim lasts one supplier request at most.
-const claimCheck = 5 * time.Second
 
 // MadeKey is a key made for a group at the supplier: its ID there, the group's ref, and its text, which is only sealed.
 type MadeKey struct {
