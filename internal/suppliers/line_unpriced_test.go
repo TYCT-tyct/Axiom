@@ -49,30 +49,36 @@ func TestALineIsPricedOnlyFromItsAuthorsOwnPriceList(t *testing.T) {
 	w.listFrom("pebble", stonePrice, catalog.SourceManual)
 	w.provider.set("sk-good-key", providerKey{models: []string{"stone", "pebble"}})
 	line := w.connect("pasted", "", "sk-good-key")
-	want := map[string]string{"stone": "known", "pebble": "unknown"}
-	for _, step := range []string{"connected", "a ratio set", "projected again"} {
-		switch step {
-		case "a ratio set":
-			if err := w.setRatio(line, "0.9"); err != nil {
-				t.Fatal(err)
-			}
-		case "projected again":
-			if err := (&lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}).reproject(t.Context()); err != nil {
-				t.Fatal(err)
-			}
+	for _, step := range []struct {
+		name string
+		do   func() error
+	}{
+		{"connected", func() error { return nil }},
+		{"a ratio set", func() error { return w.setRatio(line, "0.9") }},
+		{"projected again", func() error {
+			return (&lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}).reproject(t.Context())
+		}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
 		}
-		if err := w.svc.Reload(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		for model, state := range want {
-			endpoint := w.endpoint(line, model)
-			if got := w.text("SELECT cost_state FROM suppliers.endpoints WHERE id = $1", endpoint); got != state {
-				t.Errorf("%s: %s's cost is %s, want %s", step, model, got, state)
-			}
-			if _, err := w.svc.Acquire(endpoint); errors.Is(err, ErrNoEndpoint) != (state == "unknown") {
-				t.Errorf("%s: acquiring %s: %v", step, model, err)
-			}
-		}
+		w.expectRouted(step.name, line, "stone", true)
+		w.expectRouted(step.name, line, "pebble", false)
+	}
+}
+
+// expectRouted checks that the line's endpoint of the model has a known cost and is routed, or neither.
+func (w *pastedWorld) expectRouted(what string, line uuid.UUID, model string, routed bool) {
+	w.t.Helper()
+	endpoint := w.endpoint(line, model)
+	if got, want := w.text("SELECT cost_state FROM suppliers.endpoints WHERE id = $1", endpoint), map[bool]string{true: "known", false: "unknown"}[routed]; got != want {
+		w.t.Errorf("%s: %s's cost is %s, want %s", what, model, got, want)
+	}
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := w.svc.Acquire(endpoint); errors.Is(err, ErrNoEndpoint) == routed {
+		w.t.Errorf("%s: acquiring %s: %v", what, model, err)
 	}
 }
 
