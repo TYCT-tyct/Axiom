@@ -10,20 +10,20 @@
 -- +goose StatementBegin
 DO $$
 DECLARE
-    after uuid := '00000000-0000-0000-0000-000000000000';
+    after uuid; -- the last id of the batch before; NULL before the first, which starts at the lowest id
     upto uuid;
 BEGIN
     LOOP
         SELECT id INTO upto FROM (
-            SELECT id FROM suppliers.credentials WHERE id > after ORDER BY id LIMIT 1000
+            SELECT id FROM suppliers.credentials WHERE after IS NULL OR id > after ORDER BY id LIMIT 1000
         ) batch ORDER BY id DESC LIMIT 1;
         EXIT WHEN upto IS NULL;
         UPDATE suppliers.credentials c SET settings = '{"form": "access_key"}'
         FROM suppliers.suppliers s
-        WHERE c.id > after AND c.id <= upto AND s.id = c.supplier_id AND s.kind = 'bedrock' AND c.status <> 'erased'
-            AND c.settings IS NULL;
+        WHERE (after IS NULL OR c.id > after) AND c.id <= upto AND s.id = c.supplier_id AND s.kind = 'bedrock'
+            AND c.status <> 'erased' AND c.settings IS NULL;
         UPDATE suppliers.credentials c SET egress_id = NULL
-        WHERE c.id > after AND c.id <= upto AND c.egress_id IS NOT NULL
+        WHERE (after IS NULL OR c.id > after) AND c.id <= upto AND c.egress_id IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM suppliers.egress_proxies p WHERE p.id = c.egress_id);
         COMMIT;
         after := upto;
