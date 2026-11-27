@@ -37,6 +37,8 @@ var (
 	ErrCloudDeployments = errors.New("suppliers: Azure OpenAI needs its deployments named, and the others take none")
 	// ErrNotCloud is a credential replacement for a supplier that is not a cloud platform's.
 	ErrNotCloud = errors.New("suppliers: the supplier is not a cloud platform")
+	// ErrMixedEgress is a credential replacement for a line whose credentials leave through different exits.
+	ErrMixedEgress = errors.New("suppliers: the line's credentials use different egress proxies")
 )
 
 type (

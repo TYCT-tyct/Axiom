@@ -4876,7 +4876,8 @@ paths:
         a region that failed or was left out is erased. Azure OpenAI's new key serves the deployments named when the
         supplier was connected. Calls in flight end with the credential they hold. When it
         passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409
-        for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit
+        for another supplier. The new credential is checked and stored through the exit the supplier's credentials
+        share; 409 when they use different ones. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit
         entry names the regions, never the credential.
       security:
         - session: []
