@@ -158,6 +158,9 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 		}
 	case errors.Is(err, adapter.ErrAuthRejected):
 		c.State.Status, c.State.Reason = NeedsAttention, "the supplier rejected the account credentials"
+		if denied, ok := errors.AsType[adapter.ScopeDenied](err); ok {
+			c.State.Reason = "the login lacks the permission " + denied.Scope
+		}
 		c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Old: c.State.Tasks[TaskBalance].LastOK.Format(time.RFC3339Nano), Why: c.State.Reason})
 	case errors.Is(err, adapter.ErrBucketsFull):
 		// Not a failure: the supplier's limits are used up for now, and the next round goes on then. A listing keeps

@@ -43,7 +43,7 @@ func decodeScan(raw adapter.ScanState, now time.Time, size int) (scanState, erro
 
 func (s scanState) valid() bool {
 	return s.V == scanVersion && s.Span > 0 && s.Watermark >= 0 && s.LastLate >= 0 &&
-		s.LateEnd >= 0 && s.Connected >= 0 && s.Fast >= 0
+		s.LateEnd >= 0 && s.LateFrom >= 0 && s.Connected >= 0 && s.Fast >= 0
 }
 
 func (s scanState) encode() (adapter.ScanState, error) { return jsonx.MarshalCanonical(s) }

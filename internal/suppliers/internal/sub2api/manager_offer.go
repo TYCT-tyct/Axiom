@@ -19,14 +19,17 @@ type groupDTO struct {
 	Subscription string `json:"subscription_type"`
 	Peak         bool   `json:"peak_rate_enabled"`
 	Multiplier   number `json:"rate_multiplier"`
+	ClaudeCode   bool   `json:"claude_code_only"`
 }
 
-// facts is the part of a group that decides what can be sold from it; Formats reads it back.
+// facts is the part of a group that decides what can be sold from it; Formats reads it back. ClaudeCode is left out
+// when false, so the facts of every other group read as they did before it was kept.
 type facts struct {
 	Platform     string `json:"platform"`
 	Status       string `json:"status"`
 	Subscription string `json:"subscription_type"`
 	Peak         bool   `json:"peak_rate_enabled"`
+	ClaudeCode   bool   `json:"claude_code_only,omitzero"`
 }
 
 // offerProgress is the position in the offer listing: the groups and multipliers read when the pass began, the key page
@@ -283,7 +286,7 @@ func (m *manager) group(ctx context.Context, g groupDTO, overrides map[string]nu
 	if o, ok := overrides[string(g.ID)]; ok {
 		multiplier = o
 	}
-	f, err := jsonx.MarshalCanonical(facts{Platform: g.Platform, Status: g.Status, Subscription: g.Subscription, Peak: g.Peak})
+	f, err := jsonx.MarshalCanonical(facts{Platform: g.Platform, Status: g.Status, Subscription: g.Subscription, Peak: g.Peak, ClaudeCode: g.ClaudeCode})
 	if err != nil {
 		return builtGroup{}, err
 	}

@@ -8023,7 +8023,7 @@ type SupplierGroup struct {
 	// Description The supplier's own description of the group, as its adapter read it (new-api's `desc`).
 	Description *string `json:"description,omitempty"`
 
-	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
+	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
 	Facts *map[string]interface{} `json:"facts,omitempty"`
 
 	// FirstSeenAt When the sync first saw the group.

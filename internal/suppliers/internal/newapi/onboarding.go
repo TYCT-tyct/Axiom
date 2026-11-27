@@ -2,7 +2,6 @@ package newapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -43,7 +42,7 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 	switch {
 	case resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden:
 		refused := authError(env, parsed)
-		if errors.Is(refused, errScopeDenied) {
+		if scopeDenied(refused) {
 			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, refused)
 		}
 		return "", refused
@@ -73,7 +72,7 @@ func (m *manager) keyByName(ctx context.Context, name, group string) (adapter.Ke
 	}
 	query := url.Values{"keyword": {name}, "page_size": {"100"}}
 	if err := m.api.get(ctx, "/api/token/search?"+query.Encode(), global, &found); err != nil {
-		if errors.Is(err, errScopeDenied) {
+		if scopeDenied(err) {
 			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
 		return "", err

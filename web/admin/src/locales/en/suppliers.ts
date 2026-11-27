@@ -63,7 +63,8 @@ export default {
     detect: "Probe",
     detected: "Recognised as {{kind}}",
     auto: "Axiom reads the groups, prices and models, puts the groups it can sell in use, and makes a key for each group it can call. The login must be allowed to create keys and read their text.",
-    scopes: "For new-api, the personal access token needs the api_key:read, api_key:write and api_key:reveal scopes.",
+    scopes:
+      "For new-api, the personal access token needs the profile:read, wallet:read, usage:read, api_key:read, api_key:write and api_key:reveal scopes.",
     name: "Name",
     nameHint: "Filled in from the site's host name; you can change it.",
     account: "Login account",

@@ -1,7 +1,7 @@
-# 83-pat-narrow-missing-scope
+# 83-pat-narrow-missing-scope-rc51
 GET /api/log/self
 > Authorization: Bearer <ALICE_PAT_NARROW>
-< status: 403  (elapsed 0.03s)
+< status: 403  (elapsed 0.01s)
 < Content-Type: application/json; charset=utf-8
 < X-Oneapi-Request-Id: sample-request-id
 < body: {"code":"ACCESS_TOKEN_SCOPE_DENIED","message":"The access token lacks the required permission: usage:read","message_key":"The access token lacks the required permission: {{scope}}","message_params":{"scope":"usage:read"},"success":false}
