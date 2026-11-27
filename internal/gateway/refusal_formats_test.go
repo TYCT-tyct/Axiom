@@ -1,0 +1,130 @@
+package gateway
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/routing"
+)
+
+// TestEveryFormatRefusesInItsOwnShape: each way a call is refused — the key, the balance, the key's limit, the model,
+// the upstream, the rate — answers every inbound format with the right status, in that format's own error shape, with
+// the unified error type and the request ID: the header always, and Anthropic's body member for Messages.
+func TestEveryFormatRefusesInItsOwnShape(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	up := withExecutor(r, &flakyLedger{})
+	for _, e := range up.eps {
+		e.script = []scripted{failure(routing.ScopeEndpoint, false)}
+	}
+	formats := []struct {
+		name string
+		send func(key, model string) (reply, string)
+	}{
+		{"chat", func(key, model string) (reply, string) {
+			return r.do(http.MethodPost, "/v1/chat/completions", key, strings.NewReader(`{"model":"`+model+`","max_tokens":10,"service_tier":"default","messages":[{"role":"user","content":"hi"}]}`))
+		}},
+		{"responses", func(key, model string) (reply, string) {
+			return r.do(http.MethodPost, "/v1/responses", key, strings.NewReader(`{"model":"`+model+`","max_output_tokens":10,"service_tier":"default","input":"hi"}`))
+		}},
+		{"messages", func(key, model string) (reply, string) {
+			return r.do(http.MethodPost, "/v1/messages", key, strings.NewReader(messageBody(model)), "Anthropic-Version", "2023-06-01")
+		}},
+		{"gemini", func(key, model string) (reply, string) {
+			return r.do(http.MethodPost, "/v1beta/models/"+model+":generateContent", key, strings.NewReader(`{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":10}}`))
+		}},
+	}
+	refusals := []struct {
+		name, errorType, google string
+		status                  int
+		send                    func(send func(key, model string) (reply, string)) (reply, string)
+	}{
+		{"auth", "authentication", "UNAUTHENTICATED", 401, func(send func(string, string) (reply, string)) (reply, string) {
+			return send("sk-ax-v1-nope", "acme/beta")
+		}},
+		{"balance", "credits_insufficient", "RESOURCE_EXHAUSTED", 402, func(send func(string, string) (reply, string)) (reply, string) {
+			return send(r.newAccount(0).key, "acme/beta")
+		}},
+		{"key limit", "credits_insufficient", "PERMISSION_DENIED", 403, func(send func(string, string) (reply, string)) (reply, string) {
+			a := r.funded(1e12)
+			r.sql("UPDATE accounts.api_keys SET spend_limit = 0 WHERE account_id = '" + a.id.String() + "'")
+			return send(a.key, "acme/beta")
+		}},
+		{"model not found", "model_not_found", "NOT_FOUND", 404, func(send func(string, string) (reply, string)) (reply, string) {
+			return send(r.funded(1e12).key, "acme/none")
+		}},
+		{"upstream failure", "upstream_error", "UNAVAILABLE", 502, func(send func(string, string) (reply, string)) (reply, string) {
+			return send(r.funded(1e12).key, "acme/beta")
+		}},
+		{"rate limit", "rate_limited", "RESOURCE_EXHAUSTED", 429, func(send func(string, string) (reply, string)) (reply, string) {
+			a := r.funded(1e12)
+			r.sql("UPDATE accounts.accounts SET rate_requests = 1 WHERE id = '" + a.id.String() + "'")
+			send(a.key, "acme/beta") // the one call the window allows
+			return send(a.key, "acme/beta")
+		}},
+	}
+	for _, f := range formats {
+		for _, c := range refusals {
+			t.Run(f.name+"/"+c.name, func(t *testing.T) {
+				resp, body := c.send(f.send)
+				checkRefusalShape(t, f.name, c.errorType, c.google, c.status, resp, body)
+			})
+		}
+	}
+}
+
+// refusalBody is what the three error shapes hold between them.
+type refusalBody struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	Error     struct {
+		Type      string `json:"type"`
+		Message   string `json:"message"`
+		Code      int    `json:"code"`
+		Status    string `json:"status"`
+		ErrorType string `json:"error_type"`
+		Metadata  struct {
+			ErrorType string `json:"error_type"`
+		} `json:"metadata"`
+		Details []struct {
+			Reason string `json:"reason"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+// checkRefusalShape: the refusal has the status, the request ID and the format's own error shape with the error type.
+func checkRefusalShape(t *testing.T, format, errorType, google string, status int, resp reply, body string) {
+	t.Helper()
+	id := resp.Header.Get("X-Request-ID")
+	if resp.StatusCode != status || id == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("%d, request ID %q: %s", resp.StatusCode, id, body)
+	}
+	var got refusalBody
+	if err := jsonx.Unmarshal([]byte(body), &got); err != nil || got.Error.Message == "" {
+		t.Fatalf("not an error object (%v): %s", err, body)
+	}
+	ok := got.openAI(status, errorType)
+	switch format {
+	case "messages":
+		ok = got.anthropic(errorType, id)
+	case "gemini":
+		ok = got.google(status, google, errorType)
+	}
+	if !ok {
+		t.Errorf("not %s's shape for %s (request %s): %s", format, errorType, id, body)
+	}
+}
+
+func (b refusalBody) openAI(status int, errorType string) bool {
+	return b.Error.Code == status && b.Error.Type != "" && b.Error.Metadata.ErrorType == errorType
+}
+
+func (b refusalBody) anthropic(errorType, id string) bool {
+	return b.Type == "error" && b.Error.Type != "" && b.Error.ErrorType == errorType && b.RequestID == id
+}
+
+func (b refusalBody) google(status int, name, errorType string) bool {
+	return b.Error.Code == status && b.Error.Status == name && len(b.Error.Details) == 1 && b.Error.Details[0].Reason == errorType
+}

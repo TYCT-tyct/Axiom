@@ -21,14 +21,14 @@ func TestEveryResponseCarriesTheCallNumber(t *testing.T) {
 		status            int
 		headers           []string
 	}{
-		"a model list":                 {http.MethodGet, "/v1/models", a.key, http.StatusOK, nil},
-		"a model list without a key":   {http.MethodGet, "/v1/models", "", http.StatusUnauthorized, nil},
-		"a call without a key":         {http.MethodPost, "/v1/messages", "", http.StatusUnauthorized, nil},
-		"a call refused":               {http.MethodPost, "/v1/messages", a.key, http.StatusBadRequest, nil},
-		"a handshake":                  {http.MethodGet, "/v1/responses", "", http.StatusBadRequest, []string{"Upgrade", "websocket"}},
-		"a method the path lacks":      {http.MethodGet, "/v1/messages", "", http.StatusMethodNotAllowed, nil},
-		"a path nothing serves":        {http.MethodGet, "/v1/nothing", "", http.StatusNotFound, nil},
-		"a call admitted and answered": {http.MethodPost, "/v1/messages", a.key, http.StatusOK, nil},
+		"a model list":                  {http.MethodGet, "/v1/models", a.key, http.StatusOK, nil},
+		"a model list with a wrong key": {http.MethodGet, "/v1/models", "sk-ax-v1-wrong", http.StatusUnauthorized, nil},
+		"a call without a key":          {http.MethodPost, "/v1/messages", "", http.StatusUnauthorized, nil},
+		"a call refused":                {http.MethodPost, "/v1/messages", a.key, http.StatusBadRequest, nil},
+		"a handshake":                   {http.MethodGet, "/v1/responses", "", http.StatusBadRequest, []string{"Upgrade", "websocket"}},
+		"a method the path lacks":       {http.MethodGet, "/v1/messages", "", http.StatusMethodNotAllowed, nil},
+		"a path nothing serves":         {http.MethodGet, "/v1/nothing", "", http.StatusNotFound, nil},
+		"a call admitted and answered":  {http.MethodPost, "/v1/messages", a.key, http.StatusOK, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var body io.Reader

@@ -341,7 +341,8 @@ func TestModelCallsAreMountedBesideTheConsole(t *testing.T) {
 	console.Handle("/api/", httpserver.Compress(answering("console")))
 	routes := withModelCalls(console, answering("gateway"))
 	for path, want := range map[string]string{
-		"/v1/messages": "gateway", "/api/v1/responses": "gateway", "/api/console/v1/version": "console",
+		"/v1/messages": "gateway", "/api/v1/responses": "gateway", "/v1beta/models/gemini-3-pro:generateContent": "gateway",
+		"/api/console/v1/version": "console",
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 		req.Header.Set("Accept-Encoding", "gzip")

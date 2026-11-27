@@ -38,7 +38,14 @@ vi.mock("@axiom/api", async (importOriginal) => {
   return mockClient(importOriginal, {
     GET: (path: string) =>
       path === "/api/console/v1/provider-keys" ? answer(200, { data: api.keys }) : answer(503, "unavailable"),
-    POST: (_path: string, options?: { params?: { path?: { provider_key_id?: string } } }) => {
+    POST: (path: string, options?: { params?: { path?: { provider_key_id?: string } } }) => {
+      if (path === "/api/console/v1/provider-keys") {
+        const fields = [{ pointer: "/provider", message: "this node cannot call the provider" }];
+        return Promise.resolve({
+          error: { error: { code: "unprocessable", message: "", fields } },
+          response: new Response(null, { status: 422 }),
+        });
+      }
       api.tested.push(options?.params?.path?.provider_key_id ?? "");
       return answer(200, { ok: false, status: "rejected" });
     },
@@ -108,6 +115,18 @@ it("says so when the provider refuses a key", async () => {
   await press(dialog(), "providerKeys.test.action");
   expect(api.tested).toEqual([api.keys[0]?.id]);
   expect(dialog().textContent).toContain("providerKeys.test.refused");
+});
+
+// A key the server refuses keeps the form open, with the server's reason beside the field it names.
+it("shows the reason a new key is refused beside its field", async () => {
+  const { container } = await render(<ProviderKeys />);
+  await press(container, "providerKeys.add");
+  const inputs = [...dialog().querySelectorAll<HTMLInputElement>("input[name=name], input[name=key]")];
+  for (const input of inputs) await fill(input, "value");
+  await act(async () => dialog().querySelector("form")?.requestSubmit());
+  await settle();
+  const provider = dialog().querySelector("select[name=provider]")?.closest("label, div");
+  expect(provider?.textContent).toContain("this node cannot call the provider");
 });
 
 // The dialog shows the key as the list has it now: a switch applied here must be readable and reversible here, not only

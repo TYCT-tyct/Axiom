@@ -52,12 +52,15 @@ func (q *Queries) CutSessions(ctx context.Context, db DBTX, arg CutSessionsParam
 }
 
 const listTiers = `-- name: ListTiers :many
-SELECT id, name FROM accounts.tiers WHERE site_id = $1 ORDER BY name, id
+SELECT t.id, t.name, t.disabled, s.default_tier_id = t.id AS is_default
+FROM accounts.tiers t JOIN accounts.sites s ON s.id = t.site_id WHERE t.site_id = $1 ORDER BY t.name, t.id
 `
 
 type ListTiersRow struct {
-	ID   uuid.UUID
-	Name string
+	ID        uuid.UUID
+	Name      string
+	Disabled  bool
+	IsDefault bool
 }
 
 func (q *Queries) ListTiers(ctx context.Context, db DBTX, siteID uuid.UUID) ([]ListTiersRow, error) {
@@ -69,7 +72,12 @@ func (q *Queries) ListTiers(ctx context.Context, db DBTX, siteID uuid.UUID) ([]L
 	var items []ListTiersRow
 	for rows.Next() {
 		var i ListTiersRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Disabled,
+			&i.IsDefault,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

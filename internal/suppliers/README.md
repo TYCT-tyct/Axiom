@@ -66,7 +66,7 @@ func (s *Service) Routable() ([]Routable, error)               // 快照里的�
 func (s *Service) EndpointCode(ep EndpointID) string           // 端点的公开代号；缺失或过期为空串
 func (s *Service) RefreshBalances(ctx context.Context) error   // 后台：合并、限速请求余额同步
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // ErrNoEndpoint、ErrSupplierResting、ErrNoSlot
-func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // Call{Format, Compact, Body, Header}
+func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // Call{Format, Compact, Count, Body, Header}
 func (a *Attempt) Sanitize(protocol.Rejection) *protocol.Rejection // 流里的拒绝，同一份清洗；nil 为没有可交出的话
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认，端点实测覆盖 Cancels
 func (a *Attempt) Done() AttemptReceipt                        // 幂等，释放占位；回执字段不对外
@@ -90,7 +90,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 - **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行：`Codename` 是分组的公开代号（不暴露名称、地址或内部 ID），`Generation` 是快照的单调版本，`Schedule` 已按分组倍率缩放，`Funds` 是原生余额与自动暂停（路由用 `billing.ReservedCost` 调 `Funds.CanPay`），`Credentials` 是未过期、未冷却的凭证数。模型规格由 routing 向目录取。
 - **回执**带凭证、端点、成本计划版本、单位价值行 id 和对账键；gateway 用 `AttemptReceipt.WithExchange` 传回冻结的汇率。`Credits` = 原生金额 × 单位价值 × 汇率，精确相乘、转成十亿分之一时向上取整一次；缺汇率或溢出返回未知，原生 `CostFlag` 不变。`attempt_costs` 存换算依据 `Conversion`，只有 converted 和 overflow 写汇率 ID。
 - **写入**：`RecordAttempts` 在 billing 的结算事务里用一条 `unnest` 写全部尝试，`EndRequests` 同样一条语句，重复都保留第一次。平台自己的尝试传零值租户，写成 NULL；失联请求必须有租户。
-- **路径**：调用路径只来自 `attempt.go` 的 `wire` 表（`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/completions`、`/v1/embeddings`、`/v1/rerank`，只有 `/v1/messages` 加 Anthropic 版本头）和 `compactPaths`（`Call.Compact` 时 Responses 走 `/v1/responses/compact`，见[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。云平台的请求由适配器按区域和模型名签出（`adapter.Signer`），签不出算凭证的失败，2xx 由它转成格式的帧。
+- **路径**：调用路径只来自 `attempt.go` 的 `wire` 表（六种格式的 `/v1/...`，只有 `/v1/messages` 加 Anthropic 版本头）、`compactPaths`（`Call.Compact`：Responses 的 compact，见[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）和 `countPaths`（`Call.Count`：Messages 的 count_tokens，失败不冷却凭证，云平台不发）。云平台的请求由适配器按区域和模型名签出（`adapter.Signer`），签不出算凭证的失败，2xx 由它转成格式的帧。
 - **`EnabledCurrencies`**：active、low_balance 供应商的结算币种，缺汇率时告警。
 - **`TestRequest.AvoidCredential`** 在有另一把可用 key 时避开它；`TestResult.CredentialID` 只给 ID。
 

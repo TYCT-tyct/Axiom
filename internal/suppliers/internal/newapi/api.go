@@ -56,11 +56,9 @@ var authCodes = map[string]bool{
 	"ACCESS_TOKEN_LEGACY_RETIRED": true, "ACCESS_TOKEN_SCOPE_DENIED": true, "ACCESS_TOKEN_ROUTE_UNDECLARED": true,
 }
 
-var scopeName = regexp.MustCompile(`^[a-z_]+:[a-z_]+$`)
-
-// errScopeDenied marks a 403 whose reason is a personal access token missing a scope: the account is fine, the token
-// is too narrow, and another token fixes it.
-var errScopeDenied = errors.New("the access token lacks a scope")
+// scopeName is the form of new-api's scope names (api_key:read, usage:read, ...); its bounds keep a reason that names
+// one within the 200 characters suppliers.status_reason holds.
+var scopeName = regexp.MustCompile(`^[a-z_]{1,32}:[a-z_]{1,32}$`)
 
 // errServer marks a 5xx: the supplier is temporarily unable to answer, so the task backs off instead of halting.
 var errServer = errors.New("new-api: the server failed")
@@ -81,6 +79,11 @@ func (a *api) do(ctx context.Context, method, path string, buckets []string, out
 	if err != nil {
 		return err
 	}
+	return read(resp, out)
+}
+
+// read classifies an answer and reads its data into out (or, when out is nil, only checks it).
+func read(resp adapter.Response, out any) error {
 	var env envelope
 	parsed := jsonx.Unmarshal(resp.Body, &env) == nil
 	switch {
@@ -112,14 +115,22 @@ func (a *api) send(ctx context.Context, method, path string, buckets []string, b
 	return a.c.Do(ctx, adapter.Request{Method: method, Path: path, Buckets: buckets, Header: header, Body: body})
 }
 
-// authError names a refused credential by a code from the fixed list, and for a missing permission which one.
+// authError names a refused credential by a code from the fixed list. A token missing a scope is a ScopeDenied that
+// names the scope, so the person replacing the token knows which one to grant.
 func authError(env envelope, parsed bool) error {
 	code := "unknown"
 	if parsed && authCodes[env.Code] {
 		code = env.Code
 	}
 	if code == "ACCESS_TOKEN_SCOPE_DENIED" && scopeName.MatchString(env.Params.Scope) {
-		return fmt.Errorf("%w: %w: %s %s", adapter.ErrAuthRejected, errScopeDenied, code, env.Params.Scope)
+		return adapter.ScopeDenied{Scope: env.Params.Scope}
 	}
 	return fmt.Errorf("%w: %s", adapter.ErrAuthRejected, code)
+}
+
+// scopeDenied reports whether err is a token missing a scope, which for a key operation means the login may not
+// manage keys.
+func scopeDenied(err error) bool {
+	var denied adapter.ScopeDenied
+	return errors.As(err, &denied)
 }

@@ -56,7 +56,7 @@
 - 免单只看收费那次尝试（`waivable`、`zeroOutput`），它的 `Finish` 为 `FinishCancelled` 才算取消；没有上限、不数次数。
 - 暂估（`Final.Estimated`）：收费项里有上游没报告的、缺价的（`addMissing`）或映射不了的用量（`addFallbacks`）。
 - 迟到的 `Settle`：版本号 −1，先冲正再记这一笔，补扣到底线为止，`ResolveLostRequest`。找不到预留行时返回错误。
-- 账本：每笔交易的分录在每个币种里合计为 0（`post` 断言）；`balances.balance` = −Σ user_balance 分录，同一条语句更新；分录带产生它的租户，平台收入在平台范围按 `book` 汇总。`PostLedger` 先锁余额行再插入交易、分配序号，所以同一账户的每笔交易都在锁内编号。
+- 账本：每笔交易的分录在每个币种里合计为 0（`post` 断言）；`balances.balance` = −Σ user_balance 分录，同一条语句更新；分录带产生它的租户，平台收入在平台范围按 `book` 汇总，`ReadPlatformReport` 先按日和账户并行求和再合成。`PostLedger` 先锁余额行再插入交易、分配序号，所以同一账户的每笔交易都在锁内编号。
 - `CreditPaid` 检查渠道恰好一个、`RateID` 是付款币种与记账货币这一对（同币种为零）、入账额度在 1 到 `CreditsFor` 之间；同 ID 不一致返回 `ErrCreditConflict`（不比较过期时间）。
 
 ### 暂估校正
@@ -74,7 +74,7 @@
 ## 订阅套餐
 
 - `reservations.funding`、`subscription_id`、`window_seq` 记住来源；结算、释放、清理、校正都按它们回到原窗口。`Admitted.Preference` 是账户生效的计费偏好。
-- 不变量（另见[领域文档](../../docs/domains/billing.md#订阅套餐)）：⑥退款的 `refunded_value` 不超过付费额度、`refunded_windows` 不超过窗口数，收回窗口 `voided_at` 非空且不参与准入；⑦同一退款 ID 重放返回同一行、不再记账；余额行的 `reserved` 只含钱包来源，每个窗口的 `reserved` 是对应套餐预留之和。
+- 不变量（①–⑤ 见领域文档）：⑥退款的 `refunded_value` 不超过付费额度、`refunded_windows` 不超过窗口数，收回窗口 `voided_at` 非空且不参与准入；⑦同一退款 ID 重放返回同一行、不再记账；余额行的 `reserved` 只含钱包来源，每个窗口的 `reserved` 是对应套餐预留之和。
 - 管理读：两种排序各有索引（`00050`）；汇总收入的口径见[运营的决策表](../../docs/domains/operations.md#决策与理由)，占比按最大余数取整、合计恰为 10000。
 
 ## 兜底价

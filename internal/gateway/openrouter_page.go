@@ -36,7 +36,7 @@ func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size in
 			buf = append(buf, ',')
 		}
 		written++
-		buf = append(buf, e.body...)
+		buf = appendObject(buf, e.body, e.pricing, v.hidePrices)
 	}
 	return orFooter(buf, next, matched)
 }
@@ -63,7 +63,7 @@ func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 		if i > 0 {
 			buf = append(buf, ',')
 		}
-		buf = append(buf, e.body...)
+		buf = appendObject(buf, e.body, e.pricing, v.hidePrices)
 	}
 	return orFooter(buf, next, len(matches))
 }

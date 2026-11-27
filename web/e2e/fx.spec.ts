@@ -15,6 +15,7 @@ import {
   running,
   screenChunk,
   scrollTo,
+  seaFrame,
   sections,
   setHidden,
   shown,
@@ -41,7 +42,7 @@ async function watchPolicy(page: Page) {
   return () => page.evaluate(() => (window as unknown as { policy: string[] }).policy);
 }
 
-const entrance = (page: Page) => page.locator(".tr").getAttribute("data-enter");
+const entrance = (page: Page) => seaFrame(page).getAttribute("data-enter");
 
 test("the effects' code is not asked for before the first screen is drawn, and the entrance runs on the loop", async ({
   page,
@@ -126,7 +127,7 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
 
   await page.getByRole("button", { name: "Switch to dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator(".tr")).toHaveClass(/\bdark\b/);
+  await expect(seaFrame(page)).toHaveClass(/\bdark\b/);
   await expect(page.locator("[data-t]")).toHaveCount(0);
 
   await page.reload();

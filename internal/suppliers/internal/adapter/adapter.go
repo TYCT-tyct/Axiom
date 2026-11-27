@@ -74,6 +74,17 @@ var (
 	ErrNoKeyMaker = errors.New("adapter: the supplier's adapter cannot make keys")
 )
 
+// ScopeDenied is an ErrAuthRejected whose cause is a login that is valid but lacks a permission a read needs (a
+// personal access token made without one of its scopes). Polling stops all the same, since only a new login with the
+// scope fixes it, but the reason names the scope instead of reporting the login refused. Scope is the supplier's name
+// for the permission, from a fixed pattern of lower-case words, never free text.
+type ScopeDenied struct{ Scope string }
+
+func (e ScopeDenied) Error() string { return "adapter: the login lacks the permission " + e.Scope }
+
+// Unwrap makes a ScopeDenied an ErrAuthRejected.
+func (ScopeDenied) Unwrap() error { return ErrAuthRejected }
+
 // Pool is the optional half of a management side whose supplier is a pool of upstream accounts: a self-hosted system
 // (sub2api, CPA, ...) whose administrator interface lists the accounts and how much of their quota windows is left. A
 // relay does not implement it; a pool whose login is not an administrator answers ErrNotPool.

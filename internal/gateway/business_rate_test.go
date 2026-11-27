@@ -90,16 +90,20 @@ func TestNodeRateRejectsPreserveAccountPool(t *testing.T) {
 
 func testNodeRateAccountIsolation(t *testing.T, mode, dimension string) {
 	t.Helper()
-	var server *kvtest.Server
 	var cache *kv.Client
+	clock := newFrozenClock()
 	if mode != "local" {
-		server = kvtest.New(t)
-		cache = server.OpenIn(t, kvtest.Namespace(), kv.Deps{})
+		cache = kvtest.New(t).OpenIn(t, kvtest.Namespace(), kv.Deps{Now: clock.Now})
 	}
 	r := newRig(t, func(o *rigOptions) {
 		o.cache = cache
 		o.config = func(c *Config) { c.KeyRate, c.CountRate = 2, 2 }
 	})
+	if cache != nil {
+		// The shared windows are the epoch's: a run that crossed a boundary would carry the earlier calls at a weight
+		// below one, and three calls would estimate two, under the limit.
+		clock.midWindow(cache, r.cfg.RateWindow)
+	}
 	a := r.newAccount(10e9)
 	second, _ := r.newKey(a)
 	r.sql("UPDATE accounts.accounts SET rate_requests = 3", "UPDATE accounts.api_keys SET rate_requests = 0")

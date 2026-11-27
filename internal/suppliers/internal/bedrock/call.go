@@ -3,6 +3,7 @@ package bedrock
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 
 	"axiom/internal/platform/jsonx"
@@ -31,8 +32,8 @@ func invokeURL(region, model string, stream bool) string {
 }
 
 // Sign implements adapter.Signer: the Messages body without its model and stream, which the path says, with Bedrock's
-// version, and the beta features the client asked for in anthropic-beta as the body's anthropic_beta, where Bedrock
-// reads them; signed with the region's key.
+// version, and the beta features the client asked for in anthropic-beta that Bedrock takes as the body's anthropic_beta, where
+// Bedrock reads them; signed with the region's key.
 func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*http.Request, *adapter.Failure) {
 	k, ok := keysOf(c.Key)
 	if c.Format != protocol.Messages || !ok {
@@ -58,15 +59,34 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 	return req, nil
 }
 
-// betas is the anthropic-beta header's features as a JSON array; nil for none.
+// accepted is the beta features Bedrock's InvokeModel takes (the client's name for a feature, Bedrock's name for it):
+// the rest, Claude Code's own among them, fail the call. The list is AWS's「Anthropic Claude Messages API: request and
+// response」(its anthropic_beta table) and「Anthropic Claude tool use」(the computer-use pairings and the legacy
+// fine-grained streaming header), read 2026-11-26; compaction's header is the one Bedrock passes through for the
+// compaction it serves. Tool search is GA there, so the earlier name still works and Anthropic's newer one maps to it.
+var accepted = map[string]string{
+	"computer-use-2025-01-24":                "computer-use-2025-01-24",
+	"computer-use-2025-11-24":                "computer-use-2025-11-24",
+	"token-efficient-tools-2025-02-19":       "token-efficient-tools-2025-02-19",
+	"interleaved-thinking-2025-05-14":        "interleaved-thinking-2025-05-14",
+	"output-128k-2025-02-19":                 "output-128k-2025-02-19",
+	"dev-full-thinking-2025-05-14":           "dev-full-thinking-2025-05-14",
+	"context-1m-2025-08-07":                  "context-1m-2025-08-07",
+	"context-management-2025-06-27":          "context-management-2025-06-27",
+	"effort-2025-11-24":                      "effort-2025-11-24",
+	"compact-2026-01-12":                     "compact-2026-01-12",
+	"fine-grained-tool-streaming-2025-05-14": "fine-grained-tool-streaming-2025-05-14",
+	"tool-search-tool-2025-10-19":            "tool-search-tool-2025-10-19",
+	"tool-examples-2025-10-29":               "tool-examples-2025-10-29",
+	"advanced-tool-use-2025-11-20":           "tool-search-tool-2025-10-19", // Anthropic's tool search is Bedrock's
+}
+
+// betas is the anthropic-beta header's features that Bedrock takes, as a JSON array; nil for none. Tool search comes
+// with its examples, which Bedrock wants beside it.
 func betas(values []string) []byte {
-	var features []string
-	for _, v := range values {
-		for f := range strings.SplitSeq(v, ",") {
-			if f = strings.TrimSpace(f); f != "" {
-				features = append(features, f)
-			}
-		}
+	features := cloud.Betas(values, accepted)
+	if slices.Contains(features, "tool-search-tool-2025-10-19") && !slices.Contains(features, "tool-examples-2025-10-29") {
+		features = append(features, "tool-examples-2025-10-29")
 	}
 	if len(features) == 0 {
 		return nil

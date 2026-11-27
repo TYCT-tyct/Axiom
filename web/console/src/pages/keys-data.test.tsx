@@ -139,4 +139,18 @@ describe("the board's row", () => {
     expect(expired.textContent).toContain("keys.expired");
     expect(expired.textContent).not.toContain("keys.board.disabled");
   });
+
+  it("marks a management key and reads its limit as what it lets each issued key spend, not as its own spending", async () => {
+    const table = await row(
+      aKey({
+        kind: "management",
+        spend_limit: { amount: "20000000000", currency: "USD" },
+        limit_remaining: { amount: "15000000000", currency: "USD" },
+        limit_reset: "monthly",
+      }),
+    );
+    expect(table.querySelector(".qkn span")?.textContent).toBe("sk-ax-v1-\u20261234 \u00b7 keys.board.managementKey");
+    expect(table.querySelector("td:nth-child(2) .qpace i")?.getAttribute("style")).toBe("width: 0%;");
+    expect(table.querySelector("td:nth-child(2) .qkm")?.textContent).toBe("keys.board.issueCeiling");
+  });
 });

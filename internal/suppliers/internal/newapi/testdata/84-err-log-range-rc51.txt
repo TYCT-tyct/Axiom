@@ -1,0 +1,7 @@
+# 84-err-log-range-rc51
+GET /api/log/self?type=2&page_size=100&p=1&start_timestamp=1795462908&end_timestamp=1795722108
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"message":"The time range cannot exceed 1 days","message_key":"The time range cannot exceed {{days}} days","message_params":{"days":1},"success":false}

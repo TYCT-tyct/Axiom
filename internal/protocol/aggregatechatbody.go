@@ -37,7 +37,7 @@ func (c *chatChoice) size() int {
 		n += len(s)
 	}
 	for _, t := range c.tools {
-		n += 128 + len(t.id) + len(t.name) + len(t.arguments)
+		n += 160 + len(t.id) + len(t.name) + len(t.arguments) + len(t.extra)
 	}
 	return n
 }
@@ -116,7 +116,11 @@ func appendTools(out []byte, tools []chatTool) []byte {
 		out = append(append(out, `,"type":`...), orElse(t.kind, `"function"`)...)
 		out = appendContents(append(out, `,"function":{"name":`...), t.name, true)
 		out = appendContents(append(out, `,"arguments":`...), t.arguments, true)
-		out = append(out, "}}"...)
+		out = append(out, '}')
+		if len(t.extra) > 0 {
+			out = append(append(out, `,"extra_content":`...), t.extra...)
+		}
+		out = append(out, '}')
 	}
 	return append(out, ']')
 }

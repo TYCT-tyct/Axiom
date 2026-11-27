@@ -117,9 +117,15 @@ func (s *Service) recoveryReady() error {
 		return fmt.Errorf("%w: password recovery", ErrBusy)
 	}
 	if !s.recovery.mailer.Configured() {
-		return fmt.Errorf("%w: email disabled", ErrBusy)
+		return ErrMailDisabled
 	}
 	return nil
+}
+
+// MailEnabled reports whether this node sends the mail a password reset, a password change and an email change need,
+// so a page offers them only where they can work.
+func (s *Service) MailEnabled() bool {
+	return s.recovery != nil && s.recovery.mailer.Configured()
 }
 
 func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwordResetArgs, request LockPasswordResetRequestRow) error {

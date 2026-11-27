@@ -43,10 +43,13 @@ type CallPolicy = adapter.CallPolicy
 // Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint, and the
 // request headers that go with it (gateway's whitelist: anthropic-beta and anthropic-version). Header never replaces
 // the credential or the content type, and gives the version the client chose over the default. Compact sends the call to
-// the format's compaction endpoint instead of its own path, the one call that is not a generation.
+// the format's compaction endpoint instead of its own path, the one call that is not a generation. Count sends it to the
+// format's token-count endpoint, which a relay may not have: its failure rests nothing, and a cloud platform's endpoint
+// refuses it unsent.
 type Call struct {
 	Format  protocol.Format
 	Compact bool
+	Count   bool
 	Body    []byte
 	Header  http.Header
 }
@@ -101,6 +104,9 @@ func (relayWire) Authorize(h http.Header, _ protocol.Format, key string) {
 // compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
 // format's own (docs/domains/gateway.md「转发规则」). Only Responses compacts one.
 var compactPaths = map[protocol.Format]string{protocol.Responses: "/v1/responses/compact"}
+
+// countPaths are the formats' token-count endpoints. Only Messages has one (Anthropic's count_tokens).
+var countPaths = map[protocol.Format]string{protocol.Messages: "/v1/messages/count_tokens"}
 
 // maxErrorBody is how much of a failed response is read for the adapter to classify.
 const maxErrorBody = 64 << 10
@@ -294,7 +300,7 @@ func (a *Attempt) Done() AttemptReceipt {
 // Neither suppliers nor egress retries a POST.
 func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure) {
 	resp, f := a.send(ctx, call)
-	if f != nil {
+	if f != nil && !call.Count { // a relay without the count route answers 404, which says nothing of the credential
 		a.rest(*f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
 	}
 	return resp, f
@@ -307,12 +313,15 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 		req *http.Request
 		f   *Failure
 	)
-	if cloud {
+	switch {
+	case cloud && call.Count:
+		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
+	case cloud:
 		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
 			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
 			Header: call.Header, Key: a.cred.key, At: a.s.now(),
 		})
-	} else {
+	default:
 		req, f = a.request(ctx, call)
 	}
 	if f != nil {
@@ -348,10 +357,14 @@ func (a *Attempt) request(ctx context.Context, call Call) (*http.Request, *Failu
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	path := w.path
-	if call.Compact {
-		if path, ok = compactPaths[call.Format]; !ok {
-			return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
-		}
+	switch {
+	case call.Compact:
+		path, ok = compactPaths[call.Format]
+	case call.Count:
+		path, ok = countPaths[call.Format]
+	}
+	if !ok {
+		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	wire, own := a.ep.quirks.(adapter.Wire)
 	if !own {

@@ -23,6 +23,9 @@ func (in RuleInput) Check(currency platform.Currency) error {
 	if err := in.Method.check(currency); err != nil {
 		return err
 	}
+	if in.Method.Kind == "default_multiplier" && in.Audience.Kind == "all" {
+		return &RuleError{"audience/kind", "is an account or a tier for a default multiplier, which scales the price for all"}
+	}
 	return in.Constraints.check()
 }
 
@@ -137,6 +140,14 @@ func (m Method) check(currency platform.Currency) error {
 		return nil
 	case "fixed":
 		return m.checkFixed(currency)
+	case "default_multiplier":
+		if err := m.checkMultiplier(); err != nil {
+			return err
+		}
+		if m.CurrencyConversion != "" {
+			return &RuleError{"method", "has members of another kind"}
+		}
+		return nil
 	}
 	return &RuleError{"method/kind", "is not a way to set a price"}
 }

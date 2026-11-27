@@ -59,7 +59,7 @@ func (s *session) replayCached(ctx context.Context, account uuid.UUID, entry *ca
 	relay := protocol.NewRelay(s.c.Format, entry.format, bytes.NewReader(entry.body), u, protocol.RelayOptions{
 		ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: entry.model, Created: s.start.Unix(),
 		Memory: s.x.Memory, Aggregate: s.aggregate, Echo: s.echo, ZeroOutput: s.c.Request.ZeroOutput(),
-		Cached: true,
+		Cached: true, CustomTools: s.customTools(entry.format),
 	})
 	s.live = relay
 	s.state = entry.state

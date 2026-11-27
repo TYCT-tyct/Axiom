@@ -36,19 +36,29 @@ func registerSalePrices(db *pg.DB, queue *pg.Queue) error {
 
 // refreshSalePrices locks before reading database-owned inputs so an older node cannot replace newer evidence.
 func refreshSalePrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency) error {
-	if _, err := billing.LockPricePolicy(ctx, tx, site); err != nil {
+	in, err := salePriceInputs(ctx, tx, site, currency)
+	if err != nil {
 		return err
+	}
+	_, err = billing.RefreshPrices(ctx, tx, site, currency, in.Snapshot, in.Costs, in.Rates...)
+	return err
+}
+
+// salePriceInputs locks the site's price policy and reads what a refresh prices from: the catalog, the endpoints'
+// costs and the exchange rates.
+func salePriceInputs(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency) (billing.PriceInputs, error) {
+	if _, err := billing.LockPricePolicy(ctx, tx, site); err != nil {
+		return billing.PriceInputs{}, err
 	}
 	snap, err := catalog.ReadSnapshot(ctx, tx)
 	if err != nil {
-		return err
+		return billing.PriceInputs{}, err
 	}
 	costs, rates, err := publicationCosts(ctx, tx, currency)
 	if err != nil {
-		return err
+		return billing.PriceInputs{}, err
 	}
-	_, err = billing.RefreshPrices(ctx, tx, site, currency, snap, costs, rates...)
-	return err
+	return billing.PriceInputs{Currency: currency, Snapshot: snap, Costs: costs, Rates: rates}, nil
 }
 
 func publicationCosts(ctx context.Context, tx pg.Tx, currency platform.Currency) ([]billing.PriceCost, []platform.ExchangeRate, error) {

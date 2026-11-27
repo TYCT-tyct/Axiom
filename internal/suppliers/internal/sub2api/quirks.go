@@ -17,10 +17,13 @@ type quirks struct{}
 
 // Formats lists what a group serves. M1 sells only standard groups without peak pricing on a platform it speaks:
 // subscription groups draw on windows, not the wallet, and a peak multiplier changes the price by the hour, neither of
-// which a cost plan can express yet. Facts that cannot be read serve nothing.
+// which a cost plan can express yet. A group open only to Claude Code (claude_code_only) admits a request only from a
+// claude-cli/x.y.z User-Agent (sub2api service/claude_code_validator.go) and sends any other to its fallback group at
+// that group's price, or refuses it; Axiom does not pass on a client's identity (docs/domains/gateway.md「转发规则」)
+// and does not make one up, so the group is not sold. Facts that cannot be read serve nothing.
 func (quirks) Formats(g adapter.GroupFacts) []protocol.Format {
 	var f facts
-	if err := jsonx.Unmarshal(g, &f); err != nil || f.Status != "active" || f.Subscription != "standard" || f.Peak {
+	if err := jsonx.Unmarshal(g, &f); err != nil || f.Status != "active" || f.Subscription != "standard" || f.Peak || f.ClaudeCode {
 		return nil
 	}
 	switch f.Platform {

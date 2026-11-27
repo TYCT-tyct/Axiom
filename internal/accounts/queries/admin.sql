@@ -56,7 +56,8 @@ WHERE site_id = @site_id AND surface = @surface AND revoked_at IS NULL AND expir
         OR make_interval(secs => @idle_seconds::bigint) < idle_timeout);
 
 -- name: ListTiers :many
-SELECT id, name FROM accounts.tiers WHERE site_id = @site_id ORDER BY name, id;
+SELECT t.id, t.name, t.disabled, s.default_tier_id = t.id AS is_default
+FROM accounts.tiers t JOIN accounts.sites s ON s.id = t.site_id WHERE t.site_id = @site_id ORDER BY t.name, t.id;
 
 -- name: ListUsers :many
 -- Newest first: an ID is a UUIDv7, so its order is the order of making, and a page starts after the last ID of the one

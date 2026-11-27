@@ -1028,10 +1028,12 @@ func (e EndpointTestProblemScope) Valid() bool {
 const (
 	ErrorCodeAccountNotLinked      ErrorCode = "account_not_linked"
 	ErrorCodeCapExceeded           ErrorCode = "cap_exceeded"
+	ErrorCodeCodeReused            ErrorCode = "code_reused"
 	ErrorCodeConflict              ErrorCode = "conflict"
 	ErrorCodeConsentRequired       ErrorCode = "consent_required"
 	ErrorCodeEmailDomainNotAllowed ErrorCode = "email_domain_not_allowed"
 	ErrorCodeEmailTaken            ErrorCode = "email_taken"
+	ErrorCodeEmailUnavailable      ErrorCode = "email_unavailable"
 	ErrorCodeForbidden             ErrorCode = "forbidden"
 	ErrorCodeHumanCheckFailed      ErrorCode = "human_check_failed"
 	ErrorCodeIdempotencyKeyReused  ErrorCode = "idempotency_key_reused"
@@ -1077,6 +1079,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case ErrorCodeCapExceeded:
 		return true
+	case ErrorCodeCodeReused:
+		return true
 	case ErrorCodeConflict:
 		return true
 	case ErrorCodeConsentRequired:
@@ -1084,6 +1088,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeEmailDomainNotAllowed:
 		return true
 	case ErrorCodeEmailTaken:
+		return true
+	case ErrorCodeEmailUnavailable:
 		return true
 	case ErrorCodeForbidden:
 		return true
@@ -2101,6 +2107,7 @@ func (e PricingMethodCurrencyConversion) Valid() bool {
 // Defines values for PricingMethodKind.
 const (
 	CostPlus            PricingMethodKind = "cost_plus"
+	DefaultMultiplier   PricingMethodKind = "default_multiplier"
 	Fixed               PricingMethodKind = "fixed"
 	ReferenceMultiplier PricingMethodKind = "reference_multiplier"
 )
@@ -2109,6 +2116,8 @@ const (
 func (e PricingMethodKind) Valid() bool {
 	switch e {
 	case CostPlus:
+		return true
+	case DefaultMultiplier:
 		return true
 	case Fixed:
 		return true
@@ -6516,7 +6525,7 @@ type PricingConstraints struct {
 	ReferenceMinRatio *Decimal `json:"reference_min_ratio,omitempty"`
 }
 
-// PricingMethod How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+// PricingMethod How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. `default_multiplier`, for a tier or an account only: the price for all accounts × `multiplier`, also where a more specific rule sets that price, which is how a tier pays a share more or less (docs/domains/billing.md「定价」). The members of the other kinds must be absent.
 type PricingMethod struct {
 	CurrencyConversion *PricingMethodCurrencyConversion `json:"currency_conversion,omitempty"`
 
@@ -6609,7 +6618,7 @@ type PricingRule struct {
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id Uuid `json:"id"`
 
-	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. `default_multiplier`, for a tier or an account only: the price for all accounts × `multiplier`, also where a more specific rule sets that price, which is how a tier pays a share more or less (docs/domains/billing.md「定价」). The members of the other kinds must be absent.
 	Method PricingMethod `json:"method"`
 	Rev    int64         `json:"rev"`
 
@@ -6634,7 +6643,7 @@ type PricingRuleInput struct {
 	Constraints PricingConstraints `json:"constraints"`
 	Enabled     bool               `json:"enabled"`
 
-	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. `default_multiplier`, for a tier or an account only: the price for all accounts × `multiplier`, also where a more specific rule sets that price, which is how a tier pays a share more or less (docs/domains/billing.md「定价」). The members of the other kinds must be absent.
 	Method PricingMethod `json:"method"`
 
 	// Target What a rule prices, from the most specific to the widest: an endpoint, a supplier group, a supplier, a model, a model author, a source type, or everything. `id` is that thing's ID (a model author's slug), and absent for `all`.
@@ -7256,12 +7265,18 @@ type Session struct {
 	// Account An account's ID (TypeID).
 	Account AccountId `json:"account"`
 
+	// CallsPaused Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console once every factor passed; absent on a `pending_mfa` session, on the admin and on an older node.
+	CallsPaused *bool `json:"calls_paused,omitempty"`
+
 	// Consent What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it.
 	Consent   *SessionConsent `json:"consent,omitempty"`
 	CsrfToken string          `json:"csrf_token"`
 
 	// ExpiresAt When the session ends if it is not used again; the idle timeout moves it.
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// LatestAnnouncementAt When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on a `pending_mfa` session, on the admin and on an older node.
+	LatestAnnouncementAt *time.Time `json:"latest_announcement_at,omitempty"`
 
 	// Level What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
 	Level SessionLevel `json:"level"`
@@ -8008,7 +8023,7 @@ type SupplierGroup struct {
 	// Description The supplier's own description of the group, as its adapter read it (new-api's `desc`).
 	Description *string `json:"description,omitempty"`
 
-	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
+	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
 	Facts *map[string]interface{} `json:"facts,omitempty"`
 
 	// FirstSeenAt When the sync first saw the group.
@@ -8451,6 +8466,24 @@ type SystemSettingsUpdateSettingsRegistration string
 // TestFormat The generation formats an endpoint test can exercise. Direct formats and legacy completions are listed on the endpoint but are not tested here yet.
 type TestFormat string
 
+// TierCreate defines model for TierCreate.
+type TierCreate struct {
+	// Name Trimmed; 1 to 100 characters.
+	Name string `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// SiteId The tier's site. Absent: the main site.
+	SiteId *SiteId `json:"site_id,omitempty"`
+}
+
+// TierDefault defines model for TierDefault.
+type TierDefault struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // TierId A tier's ID (TypeID).
 type TierId = string
 
@@ -8461,9 +8494,27 @@ type TierList struct {
 
 // TierRef defines model for TierRef.
 type TierRef struct {
+	// Default The tier new accounts join. Absent on an older node.
+	Default *bool `json:"default,omitempty"`
+
+	// Disabled No account, sign-up or default moves onto it. Absent on an older node.
+	Disabled *bool `json:"disabled,omitempty"`
+
 	// Id A tier's ID (TypeID).
 	Id   TierId `json:"id"`
 	Name string `json:"name"`
+}
+
+// TierUpdate defines model for TierUpdate.
+type TierUpdate struct {
+	// Disabled Absent keeps it.
+	Disabled *bool `json:"disabled,omitempty"`
+
+	// Name Trimmed; 1 to 100 characters. Absent keeps it.
+	Name *string `json:"name,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
 }
 
 // TotpConfirmRequest defines model for TotpConfirmRequest.
@@ -9664,6 +9715,24 @@ type ListTiersParams struct {
 	SiteId *SiteId `form:"site_id,omitempty" json:"site_id,omitempty"`
 }
 
+// CreateTierParams defines parameters for CreateTier.
+type CreateTierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateTierParams defines parameters for UpdateTier.
+type UpdateTierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetDefaultTierParams defines parameters for SetDefaultTier.
+type SetDefaultTierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListUsersParams defines parameters for ListUsers.
 type ListUsersParams struct {
 	SiteId      *SiteId `form:"site_id,omitempty" json:"site_id,omitempty"`
@@ -10044,6 +10113,15 @@ type RequestSupplierSyncJSONRequestBody = ReasonRequest
 
 // ConfirmSupplierUnitValueJSONRequestBody defines body for ConfirmSupplierUnitValue for application/json ContentType.
 type ConfirmSupplierUnitValueJSONRequestBody = UnitValueUpdate
+
+// CreateTierJSONRequestBody defines body for CreateTier for application/json ContentType.
+type CreateTierJSONRequestBody = TierCreate
+
+// UpdateTierJSONRequestBody defines body for UpdateTier for application/json ContentType.
+type UpdateTierJSONRequestBody = TierUpdate
+
+// SetDefaultTierJSONRequestBody defines body for SetDefaultTier for application/json ContentType.
+type SetDefaultTierJSONRequestBody = TierDefault
 
 // SetPlatformGrantJSONRequestBody defines body for SetPlatformGrant for application/json ContentType.
 type SetPlatformGrantJSONRequestBody = PlatformGrantChange

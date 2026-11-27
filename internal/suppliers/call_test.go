@@ -247,6 +247,44 @@ func TestACompactingCallGoesToItsOwnPath(t *testing.T) {
 	}
 }
 
+// TestACountGoesToItsOwnPathAndRestsNothing: a count is posted to Anthropic's count_tokens, and a 429 to it, which rests
+// a call's credential (TestACredentialRestsWhenTheSupplierRefusesIt), leaves the credential to be picked at once.
+func TestACountGoesToItsOwnPathAndRestsNothing(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	paths := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		rw.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	w.pointAt(server.URL)
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	resp, f := a.Send(ctx, Call{Format: protocol.Messages, Count: true, Body: []byte(`{}`)})
+	if resp != nil {
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}
+	if f == nil || f.Scope != adapter.ScopeCredential {
+		t.Fatalf("a 429: %+v", f)
+	}
+	a.Done()
+	if path := <-paths; path != "/v1/messages/count_tokens" {
+		t.Errorf("the path is %q", path)
+	}
+	if b, err := w.svc.Acquire(w.endpoint); err != nil {
+		t.Fatalf("a refused count rested the credential: %v", err)
+	} else {
+		b.Done()
+	}
+}
+
 // TestTheClientsProtocolHeadersGoUpstream: anthropic-beta reaches the supplier, the client's anthropic-version beats
 // the default, and a header cannot replace the credential or the content type.
 func TestTheClientsProtocolHeadersGoUpstream(t *testing.T) {

@@ -246,7 +246,11 @@ func sameVersion(a, b *uuid.UUID) bool {
 
 // publish publishes pub as the agent of op, never below the floor, and answers the version with r's move and margin.
 func publish(ctx context.Context, tx pg.Tx, site accounts.Site, pub publication, op operations.Operation, r operations.Repricing) (map[string]any, error) {
-	version, err := billing.PublishPrice(ctx, tx, audit.OperationsAgent(op.Credential), uuid.UUID(site.ID), pub.model, pub.candidate, pub.current, true, false, op.Reason)
+	in, err := salePriceInputs(ctx, tx, uuid.UUID(site.ID), site.Currency)
+	if err != nil {
+		return nil, err
+	}
+	version, err := billing.PublishPrice(ctx, tx, audit.OperationsAgent(op.Credential), uuid.UUID(site.ID), pub.model, pub.candidate, pub.current, true, false, op.Reason, in)
 	if err != nil {
 		return nil, pricingProblem(err, "/")
 	}

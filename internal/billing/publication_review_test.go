@@ -124,7 +124,7 @@ func TestCostPlusIgnoresReferenceRevision(t *testing.T) {
 	model, _ := f.catalog.snapshot().Model(f.model)
 	rules := []Rule{f.rule}
 	rules[0].Method = plus("0.25")
-	before, err := proposePrice(defaultPricePolicy(), rules, model, f.catalog.snapshot(), usd, f.costs, fallbacks{})
+	before, err := proposePrice(defaultPricePolicy(), rules, nil, model, f.catalog.snapshot(), usd, f.costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestCostPlusIgnoresReferenceRevision(t *testing.T) {
 	if err := f.catalog.cat.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	after, err := proposePrice(defaultPricePolicy(), rules, model, f.catalog.snapshot(), usd, f.costs, fallbacks{})
+	after, err := proposePrice(defaultPricePolicy(), rules, nil, model, f.catalog.snapshot(), usd, f.costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}

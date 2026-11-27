@@ -513,8 +513,8 @@ func TestModelList(t *testing.T) {
 	if got := r.orIDs(a); len(got) != 4 {
 		t.Errorf("after a model was listed and given an endpoint: %v", got)
 	}
-	resp, body := r.do(http.MethodGet, "/v1/models", "", nil, "Anthropic-Version", "2023-06-01")
+	resp, body := r.do(http.MethodGet, "/v1/models", "sk-ax-v1-wrong", nil, "Anthropic-Version", "2023-06-01")
 	if code, typ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" || typ != "authentication_error" {
-		t.Errorf("without a key: %d %s", resp.StatusCode, body)
+		t.Errorf("with a wrong key: %d %s", resp.StatusCode, body)
 	}
 }

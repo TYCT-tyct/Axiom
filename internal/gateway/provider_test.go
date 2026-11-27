@@ -72,6 +72,7 @@ func TestOverride(t *testing.T) {
 		"a long fraction of zeros": {`{"max_price":{"prompt":1.500000000e0}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.0000015")}},
 		"zero with an exponent":    {`{"max_price":{"prompt":0e999}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0")}},
 		"a request price":          {`{"max_price":{"request":1.5}}`, routing.Override{MaxPrice: limit(catalog.ItemRequest, "1.5")}},
+		"members it does not read": {`{"enforce_distillable_text":true,"options":{"anthropic":{"x":1}},"colour":"red"}`, routing.Override{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -96,7 +97,6 @@ func TestOverrideRefuses(t *testing.T) {
 	for name, tc := range map[string]struct{ provider, named string }{
 		"a quantization level nobody knows":             {`{"quantizations":["fp8","int3"]}`, "provider.quantizations"},
 		"a quantization that is not a name":             {`{"quantizations":[8]}`, "provider.quantizations"},
-		"a member nobody knows":                         {`{"colour":"red"}`, "provider.colour"},
 		"a price of an image":                           {`{"max_price":{"image":1}}`, "provider.max_price.image"},
 		"a negative request price":                      {`{"max_price":{"request":-1}}`, "provider.max_price.request"},
 		"a request price finer than the unit":           {`{"max_price":{"request":0.0000000000000001}}`, "provider.max_price.request"},

@@ -106,7 +106,11 @@ type RelayOptions struct {
 	Cached bool
 	// ServerTool makes the relay record the calls of the gateway's web search function. A gateway call that runs no
 	// loop leaves it false, so it allocates nothing for this.
-	ServerTool      bool
+	ServerTool bool
+	// CustomTools are the names of the Responses client's custom (freeform) tools, which an upstream of another format
+	// was sent as functions taking one input string (CustomTools reads them): a call of one goes back as a custom tool
+	// call. Only a Responses client relayed from another format needs them.
+	CustomTools     []string
 	legacyFunctions bool
 }
 

@@ -23,6 +23,9 @@ import (
 var (
 	// ErrBadCode is a TOTP or recovery code refused.
 	ErrBadCode = errors.New("accounts: wrong code")
+	// ErrCodeReused is a TOTP code of a step already spent, or older than one: right, but a code counts once, so the
+	// person waits for the authenticator's next one. It is an ErrBadCode, so it spends an attempt as a wrong code does.
+	ErrCodeReused = fmt.Errorf("%w: the code was already used; wait for the next one", ErrBadCode)
 	// ErrMFAExhausted is a pending sign-in that has spent the attempts its session allows, by codes or passkeys. Waiting
 	// does not restore them, and no code is checked any more: the person must sign in again.
 	ErrMFAExhausted = errors.New("accounts: the pending sign-in's attempts are used up, sign in again")
@@ -68,7 +71,7 @@ func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, i
 
 func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, found SessionTenantRow, tokenHash []byte, d domain, attempts int, ip netip.Addr, userAgent string) (Issued, error) {
 	var issued Issued
-	wrong := false
+	var refused error
 	err := s.db.Tx(ctx, pg.AccountScope(found.AccountID), func(tx pg.Tx) error {
 		pending, locked, err := s.lockPendingAttempt(ctx, tx, found.UserID, tokenHash, attempts)
 		if err != nil {
@@ -77,8 +80,7 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 		if err := checkCSRF(r, d, pending.CsrfToken); err != nil {
 			return err
 		}
-		if spent, err := s.spendCode(ctx, tx, found.UserID, locked, code); err != nil || !spent {
-			wrong = err == nil
+		if refused, err = s.spendCode(ctx, tx, found.UserID, locked, code); err != nil || refused != nil {
 			return errors.Join(err, s.queries.CountMFAAttempt(ctx, tx, pending.ID))
 		}
 		if revoked, err := s.queries.RevokeSession(ctx, tx, pending.ID); err != nil || revoked != 1 {
@@ -93,8 +95,8 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 		}
 		return (securityAttempt{site: d.site, user: found.UserID, account: found.AccountID, session: issued.session, surface: d.surface}).record(ctx, tx, "security.mfa")
 	})
-	if err == nil && wrong {
-		return Issued{}, ErrBadCode
+	if err == nil && refused != nil {
+		return Issued{}, refused
 	}
 	return issued, err
 }
@@ -155,21 +157,33 @@ func lockedPending(users []LockUserRow, pending []PendingSessionRow) (PendingSes
 }
 
 // spendCode spends code as the user's TOTP code of a step not used yet, or as an unused recovery code of the current
-// factor version; each update must change exactly one row.
-func (s *Service) spendCode(ctx context.Context, tx pg.Tx, user uuid.UUID, locked LockUserRow, code string) (bool, error) {
+// factor version; each update must change exactly one row. refused is nil when the code was spent, ErrCodeReused for
+// the code of a step already spent, and ErrBadCode for any other code; err is a failure of the database.
+func (s *Service) spendCode(ctx context.Context, tx pg.Tx, user uuid.UUID, locked LockUserRow, code string) (refused, err error) {
 	if totp, err := s.openTOTP(user, locked); err == nil {
 		if step, ok := totpStep(totp, code, s.now()); ok {
-			changed, err := s.queries.AdvanceTOTP(ctx, tx, AdvanceTOTPParams{Step: step, ID: user})
-			return changed == 1, err
+			return s.advanceTOTP(ctx, tx, user, step)
 		}
 	} else if !errors.Is(err, errNoTOTP) {
-		return false, err
+		return nil, err
 	}
 	hash := recoveryHash(code)
 	changed, err := s.queries.UseRecoveryCode(ctx, tx, UseRecoveryCodeParams{
 		UserID: user, CodeHash: hash[:], FactorVersion: locked.FactorVersion,
 	})
-	return changed == 1, err
+	if err != nil || changed == 1 {
+		return nil, err
+	}
+	return ErrBadCode, nil
+}
+
+// advanceTOTP spends a matching code's step: one at or before the last step spent is a code already used.
+func (s *Service) advanceTOTP(ctx context.Context, tx pg.Tx, user uuid.UUID, step int64) (refused, err error) {
+	changed, err := s.queries.AdvanceTOTP(ctx, tx, AdvanceTOTPParams{Step: step, ID: user})
+	if err != nil || changed == 1 {
+		return nil, err
+	}
+	return ErrCodeReused, nil
 }
 
 var errNoTOTP = errors.New("accounts: no TOTP secret")
@@ -316,12 +330,12 @@ func (s *Service) replaceTOTP(ctx context.Context, p Principal, c FactorChange) 
 		if !locked.Mfa {
 			return ErrTOTPOff
 		}
-		spent, err := s.spendCode(ctx, tx, user, locked, c.CurrentCode)
+		refused, err := s.spendCode(ctx, tx, user, locked, c.CurrentCode)
 		if err != nil {
 			return err
 		}
-		if !spent {
-			return ErrBadCode
+		if refused != nil {
+			return refused
 		}
 		return s.queries.ReplaceTOTP(ctx, tx, ReplaceTOTPParams{
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
@@ -353,10 +367,8 @@ func (s *Service) regenerateRecoveryCodes(ctx context.Context, p Principal, c Fa
 		if !ok {
 			return ErrBadCode
 		}
-		if changed, err := s.queries.AdvanceTOTP(ctx, tx, AdvanceTOTPParams{Step: step, ID: user}); err != nil || changed != 1 {
-			return errors.Join(err, ErrBadCode)
-		}
-		return nil
+		refused, err := s.advanceTOTP(ctx, tx, user, step)
+		return errors.Join(err, refused)
 	})
 }
 

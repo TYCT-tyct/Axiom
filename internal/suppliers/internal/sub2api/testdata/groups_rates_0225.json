@@ -1,0 +1,11 @@
+{
+ "method": "GET",
+ "path": "/api/v1/groups/rates",
+ "status": 200,
+ "header": {},
+ "body": {
+  "code": 0,
+  "message": "success",
+  "data": {}
+ }
+}

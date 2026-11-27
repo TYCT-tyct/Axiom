@@ -1747,6 +1747,54 @@ export interface paths {
          */
         get: operations["listTiers"];
         put?: never;
+        /**
+         * Add a tier
+         * @description Adds an enabled tier to the site, the main site unless `site_id` names another. No account joins it until it is moved there or the tier becomes the default. What it pays is a pricing rule for the tier (docs/domains/accounts.md「等级」). A name another tier of the site has, ignoring case, is a 409 `name_taken`.
+         */
+        post: operations["createTier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tiers/{tier_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tier_id: components["schemas"]["TierId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename, disable or enable a tier
+         * @description Changes the members given. A disabled tier keeps its accounts and its pricing rules, but no account, sign-up or default moves onto it. The site's default tier cannot be disabled (409 `conflict`): make another the default first. A name another tier has is a 409 `name_taken`; a change to what the tier already is writes no audit entry.
+         */
+        patch: operations["updateTier"];
+        trace?: never;
+    };
+    "/api/admin/v1/tiers/{tier_id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tier_id: components["schemas"]["TierId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Make a tier the one new accounts join
+         * @description New accounts of the tier's site join it, read from the database at sign-up, and visitors see its prices; accounts already on another tier stay there. A disabled tier is a 422 pointing at `tier_id`; the current default changes nothing and writes no audit entry.
+         */
+        put: operations["setDefaultTier"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4266,7 +4314,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota" | "presets_suspended";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota" | "presets_suspended" | "code_reused" | "email_unavailable";
         OperationsOverview: {
             site_id?: components["schemas"]["SiteId"];
             /** Format: date-time */
@@ -4510,6 +4558,13 @@ export interface components {
             permissions: string[];
             /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
             consent?: components["schemas"]["SessionConsent"];
+            /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console once every factor passed; absent on a `pending_mfa` session, on the admin and on an older node. */
+            calls_paused?: boolean;
+            /**
+             * Format: date-time
+             * @description When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on a `pending_mfa` session, on the admin and on an older node.
+             */
+            latest_announcement_at?: string;
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
         SessionConsent: {
@@ -5050,6 +5105,27 @@ export interface components {
         TierRef: {
             id: components["schemas"]["TierId"];
             name: string;
+            /** @description No account, sign-up or default moves onto it. Absent on an older node. */
+            disabled?: boolean;
+            /** @description The tier new accounts join. Absent on an older node. */
+            default?: boolean;
+        };
+        TierCreate: {
+            /** @description The tier's site. Absent: the main site. */
+            site_id?: components["schemas"]["SiteId"];
+            /** @description Trimmed; 1 to 100 characters. */
+            name: string;
+            reason: components["schemas"]["Reason"];
+        };
+        TierUpdate: {
+            /** @description Trimmed; 1 to 100 characters. Absent keeps it. */
+            name?: string;
+            /** @description Absent keeps it. */
+            disabled?: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        TierDefault: {
+            reason: components["schemas"]["Reason"];
         };
         TierList: {
             data: components["schemas"]["TierRef"][];
@@ -5946,7 +6022,7 @@ export interface components {
              * @enum {string}
              */
             key_reason?: "not_permitted" | "group_unavailable" | "refused";
-            /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
+            /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
             facts?: {
                 [key: string]: unknown;
             };
@@ -6410,10 +6486,10 @@ export interface components {
             kind: "account" | "tier" | "all";
             id?: string;
         };
-        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
+        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. `default_multiplier`, for a tier or an account only: the price for all accounts × `multiplier`, also where a more specific rule sets that price, which is how a tier pays a share more or less (docs/domains/billing.md「定价」). The members of the other kinds must be absent. */
         PricingMethod: {
             /** @enum {string} */
-            kind: "cost_plus" | "reference_multiplier" | "fixed";
+            kind: "cost_plus" | "reference_multiplier" | "fixed" | "default_multiplier";
             markup_ratio?: components["schemas"]["Decimal"];
             margin_ratio?: components["schemas"]["Decimal"];
             fixed_markup?: components["schemas"]["Rates"];
@@ -11017,6 +11093,110 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TierCreate"];
+            };
+        };
+        responses: {
+            /** @description Added. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TierRef"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                tier_id: components["schemas"]["TierId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TierUpdate"];
+            };
+        };
+        responses: {
+            /** @description The tier as changed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TierRef"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setDefaultTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                tier_id: components["schemas"]["TierId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TierDefault"];
+            };
+        };
+        responses: {
+            /** @description The default stored; the current one changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };

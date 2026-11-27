@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math/big"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -135,16 +136,38 @@ func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) 
 			return offerProgress{}, err
 		}
 	}
+	prices, err := m.prices(ctx)
+	if err != nil {
+		return offerProgress{}, err
+	}
+	return offerProgress{V: 1, Groups: groups, Names: slices.Sorted(maps.Keys(groups)), Prices: prices}, nil
+}
+
+// prices reads the price list; none when the site hides it. A site whose pricing module is off answers a request that
+// carries a login with 403 from a check that only its root passes (new-api middleware/header_nav.go:107-111), or, in
+// releases before that check, with a 403 without a code. Either says the prices are not shown, not that the login is
+// refused: the groups were just read with the same token, and the price list needs no scope. The models then have no
+// cost, which keeps them out of routing until a person confirms a base price, as for sub2api. A 403 with one of the
+// codes of a refused login is still that.
+func (m *manager) prices(ctx context.Context) ([]priceEntry, error) {
+	resp, err := m.api.send(ctx, http.MethodGet, "/api/pricing", global, nil)
+	if err != nil {
+		return nil, err
+	}
+	var env envelope
+	if resp.Status == http.StatusForbidden && jsonx.Unmarshal(resp.Body, &env) == nil && !env.Success && !authCodes[env.Code] {
+		return nil, nil
+	}
 	var pricing struct {
 		Data []priceEntry `json:"data"`
 	}
-	if err := m.api.get(ctx, "/api/pricing", global, &pricing); err != nil {
-		return offerProgress{}, err
+	if err := read(resp, &pricing); err != nil {
+		return nil, err
 	}
 	if pricing.Data == nil {
-		return offerProgress{}, errMissing("list of prices")
+		return nil, errMissing("list of prices")
 	}
-	return offerProgress{V: 1, Groups: groups, Names: slices.Sorted(maps.Keys(groups)), Prices: pricing.Data}, nil
+	return pricing.Data, nil
 }
 
 func (p offerProgress) offer() ([]adapter.Group, error) {

@@ -2,8 +2,8 @@ package pg_test
 
 import (
 	"context"
-	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -173,7 +173,11 @@ func TestConnectionFailuresAreRedacted(t *testing.T) {
 	refused.User, refused.Path = url.UserPassword("planted-user", "planted-password"), "/planted-db"
 	unresolved, unreachable := *refused, *refused
 	unresolved.Host = "planted-host..invalid" // the empty label fails before any query: some resolvers answer every name
-	unreachable.Host = freeAddr(t)
+	// A Unix socket in a directory of the test's own, which nothing listens on: a TCP port found free a moment earlier
+	// may be taken by another process by the time the connection is made (#790). The query's host replaces the URL's.
+	socket := unreachable.Query()
+	socket.Set("host", filepath.Join(t.TempDir(), "planted-socket"))
+	unreachable.RawQuery = socket.Encode()
 	failures := []struct {
 		name string
 		url  *url.URL
@@ -196,20 +200,6 @@ func TestConnectionFailuresAreRedacted(t *testing.T) {
 			}
 		}
 	}
-}
-
-// freeAddr returns an address nothing listens on right now.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
 }
 
 // TestMigrateWaitsSecondsForLocks: a run held up by another run's lock gives up within seconds instead of queueing
@@ -323,6 +313,50 @@ func TestMigrateResumesAfterAFailedRun(t *testing.T) {
 	}
 	if err := open(t, fresh.App).Check(ctx); err != nil {
 		t.Errorf("after the second run: %v", err)
+	}
+}
+
+// TestMigrateRefusesAnIndexAnInterruptedBuildLeft: a CREATE INDEX CONCURRENTLY that fails leaves an invalid index, which
+// the rerun's IF NOT EXISTS would skip; the rerun fails naming it until it is dropped, and then builds it. Not
+// parallel, for the reason TestMigrateRunsTakeTurns gives.
+func TestMigrateRefusesAnIndexAnInterruptedBuildLeft(t *testing.T) {
+	database := pgtest.New(t)
+	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_items.sql": {Data: []byte(`-- +goose Up
+CREATE TABLE quality.items (id int, k int);
+INSERT INTO quality.items VALUES (1, 1), (2, 1);
+`)},
+		"00002_items_k.sql": {Data: []byte(`-- +goose NO TRANSACTION
+-- +goose Up
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS items_k ON quality.items (k);
+`)},
+	}}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err == nil || !strings.Contains(err.Error(), "SQLSTATE 23505") {
+		t.Fatalf("the build over a duplicate: %v, want a unique violation", err)
+	}
+	const drop = "DROP INDEX CONCURRENTLY quality.items_k;"
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err == nil || !strings.Contains(err.Error(), drop) {
+		t.Fatalf("the rerun over the invalid index: %v, want it to say %s", err, drop)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, "DELETE FROM quality.items WHERE id = 2", drop); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err != nil {
+		t.Fatalf("the rerun after the drop: %v", err)
+	}
+	conn, err := pgx.Connect(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(context.WithoutCancel(t.Context())); err != nil {
+			t.Error(err)
+		}
+	})
+	var valid bool
+	err = conn.QueryRow(t.Context(), "SELECT indisvalid FROM pg_index WHERE indexrelid = 'quality.items_k'::regclass").Scan(&valid)
+	if err != nil || !valid {
+		t.Errorf("the rebuilt index is valid = %t (%v), want true", valid, err)
 	}
 }
 
