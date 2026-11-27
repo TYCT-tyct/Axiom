@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"axiom/internal/platform/jsonx"
@@ -216,11 +217,11 @@ func geminiUserParts(parts []canonPart) ([]geminiPart, error) {
 			}
 			out = append(out, texts...)
 		case p.Type == "image_url" && p.ImageURL != nil:
-			media, data, ok := dataURL(p.ImageURL.URL)
-			if !ok {
-				return nil, &NotSupported{Reason: "Gemini takes images inline, not by URL"}
+			part, err := geminiImage(p.ImageURL)
+			if err != nil {
+				return nil, err
 			}
-			out = append(out, geminiPart{InlineData: &geminiBlob{MimeType: media, Data: data}})
+			out = append(out, part)
 		case p.Type == "file" && p.File != nil && p.File.FileData != nil:
 			media, data, ok := dataURL(*p.File.FileData)
 			if !ok {
@@ -234,38 +235,70 @@ func geminiUserParts(parts []canonPart) ([]geminiPart, error) {
 	return out, nil
 }
 
+// geminiImage is an image given inline, at the detail Gemini chooses: one by address, or at a detail the client chose,
+// has no exact Gemini counterpart here.
+func geminiImage(img *canonImage) (geminiPart, error) {
+	media, data, ok := dataURL(img.URL)
+	switch {
+	case !ok:
+		return geminiPart{}, &NotSupported{Reason: "Gemini takes images inline here, not by URL"}
+	case img.Detail != "" && img.Detail != "auto":
+		return geminiPart{}, &NotSupported{Reason: "an image's detail has no exact Gemini counterpart"}
+	}
+	return geminiPart{InlineData: &geminiBlob{MimeType: media, Data: data}}, nil
+}
+
 // geminiTools writes the functions and the choice among them. Gemini has no switch for parallel calls and may make
 // several in a turn, so parallel_tool_calls true asks for what Gemini does, and false with tools to call, which a legacy
-// functions request always is, cannot be said.
+// functions request always is, cannot be said unless no call may be made.
 func (c *canon) geminiTools(g *geminiRequest) error {
-	if c.ParallelToolCalls != nil && !*c.ParallelToolCalls && len(c.Tools) > 0 {
+	if c.ParallelToolCalls != nil && !*c.ParallelToolCalls && len(c.Tools) > 0 && !controlIs(c.ToolChoice, "none") {
 		return &NotSupported{Reason: "Gemini cannot be held to one tool call at a time"}
 	}
 	var fns []geminiFunction
+	strict := 0
 	for _, t := range c.Tools {
-		if t.Type != "function" {
-			return &NotSupported{Reason: "a " + t.Type + " tool has no Gemini counterpart"}
+		fn, err := geminiFunctionOf(t)
+		if err != nil {
+			return err
 		}
-		var fn geminiFunction
-		if err := jsonx.Unmarshal(t.Function.Name, &fn.Name); err != nil {
-			return shapeError("a tool's name is not a string")
+		if t.Function.Strict != nil && *t.Function.Strict {
+			strict++
 		}
-		if !isNull(t.Function.Description) {
-			if err := jsonx.Unmarshal(t.Function.Description, &fn.Description); err != nil {
-				return shapeError("a tool's description is not a string")
-			}
-		}
-		fn.ParametersJSONSchema = t.Function.Parameters
 		fns = append(fns, fn)
 	}
 	if len(fns) > 0 {
 		g.Tools = []geminiTool{{FunctionDeclarations: fns}}
 	}
-	return c.geminiChoice(g)
+	if strict > 0 && strict < len(fns) {
+		return &NotSupported{Reason: "Gemini holds either all functions to their schemas or none"}
+	}
+	return c.geminiChoice(g, strict > 0)
 }
 
-func (c *canon) geminiChoice(g *geminiRequest) error {
-	if isNull(c.ToolChoice) {
+// geminiFunctionOf is a function tool as Gemini's declaration.
+func geminiFunctionOf(t canonTool) (geminiFunction, error) {
+	var fn geminiFunction
+	if t.Type != "function" {
+		return fn, &NotSupported{Reason: "a " + t.Type + " tool has no Gemini counterpart"}
+	}
+	if err := jsonx.Unmarshal(t.Function.Name, &fn.Name); err != nil {
+		return fn, shapeError("a tool's name is not a string")
+	}
+	if !isNull(t.Function.Description) {
+		if err := jsonx.Unmarshal(t.Function.Description, &fn.Description); err != nil {
+			return fn, shapeError("a tool's description is not a string")
+		}
+	}
+	fn.ParametersJSONSchema = t.Function.Parameters
+	return fn, nil
+}
+
+// geminiChoice writes the choice among the functions. Strict functions the model may call or not are VALIDATED, the
+// mode in which Gemini holds a call to its schema (Google《Function calling》modes, read 2026-11-27); ANY, for a call
+// the model must make, holds it so already.
+func (c *canon) geminiChoice(g *geminiRequest, strict bool) error {
+	if isNull(c.ToolChoice) && !strict {
 		return nil
 	}
 	cfg := &geminiToolConfig{}
@@ -273,11 +306,14 @@ func (c *canon) geminiChoice(g *geminiRequest) error {
 		Mode                 string   `json:"mode,omitempty"`
 		AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 	}{}
-	var scalar string
-	if jsonx.Unmarshal(c.ToolChoice, &scalar) == nil {
+	scalar := "auto"
+	if isNull(c.ToolChoice) || jsonx.Unmarshal(c.ToolChoice, &scalar) == nil {
 		mode := inverseName(geminiChoices, scalar)
 		if scalar == "auto" {
 			mode = "AUTO"
+			if strict {
+				mode = "VALIDATED"
+			}
 		}
 		if mode == "" {
 			return &NotSupported{Reason: "tool_choice " + scalar + " has no Gemini counterpart"}
@@ -304,7 +340,11 @@ func (c *canon) geminiChoice(g *geminiRequest) error {
 func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) error {
 	chat := map[string]jsonx.Raw{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
 	maps.Copy(chat, c.Unknown)
-	if n := c.maxOutput(); n > 0 {
+	n := c.maxOutput()
+	if n > geminiOutputCap(model, c.Stream != nil && *c.Stream) {
+		return &NotSupported{Reason: "an output past one request's cap needs Gemini's long decode, which is not run here"}
+	}
+	if n > 0 {
 		chat["max_tokens"] = jsonValue(n)
 	}
 	moveSettings(chat, config)
@@ -319,7 +359,18 @@ func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) erro
 	if err := c.geminiFormat(config); err != nil {
 		return err
 	}
-	return c.geminiThinking(config, thinkerOf(model))
+	return c.geminiThinking(config, model)
+}
+
+// geminiOutputCap is the most output one generateContent request gives (Google《Long decode》, read 2026-11-27): 64K,
+// and 32K for Gemini 4 Carbon and Argon answering whole. Past it Gemini continues by a token the client sends back
+// (CONTINUATION), or refuses the request, so a larger cap goes to Google's OpenAI-compatible layer, which stops at it.
+func geminiOutputCap(model string, stream bool) int64 {
+	model = strings.TrimPrefix(model, "models/")
+	if !stream && (strings.HasPrefix(model, "gemini-4-carbon") || strings.HasPrefix(model, "gemini-4-argon")) {
+		return 32768
+	}
+	return 65536
 }
 
 // moveSettings moves the settings both sides share from chat into Gemini's config; a lone stop is Gemini's list of one.
@@ -351,59 +402,70 @@ func (c *canon) geminiFormat(config map[string]jsonx.Raw) error {
 	return nil
 }
 
-// geminiThinker is how a model takes thinking: by a budget of tokens for an effort, or by a level; whether it takes a
-// budget at all, and whether its thinking can be turned off, which is a budget of 0.
+// geminiThinker is how a model takes thinking: by the levels it lists, or, without levels, by a budget within its range;
+// whether a budget of 0 turns its thinking off, and whether it thinks when not asked to.
 type geminiThinker struct {
-	budgets     map[string]int64
-	levels      map[string]string
-	budget, off bool
+	levels               []string
+	minBudget, maxBudget int64
+	off, thinksByDefault bool
 }
 
-// The ways Gemini's models think, by Google's《Gemini thinking》and《OpenAI compatibility》(its reasoning_effort table),
-// read 2026-11-27: 2.5 by budget, 3 by level, 4 by level without minimal or a budget, Neon and Hydrogen with xhigh. A
-// model of another name is taken as 3 is, but that it may turn its thinking off, as the conversion did before levels.
-var (
-	geminiBudgets = map[string]int64{"minimal": 1024, "low": 1024, "medium": 8192, "high": 24576}
-	geminiLevels  = map[string]string{"minimal": "minimal", "low": "low", "medium": "medium", "high": "high"}
-	gemini4Levels = map[string]string{"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
-	gemini4XHigh  = map[string]string{"minimal": "low", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"}
-)
-
-func thinkerOf(model string) geminiThinker {
-	model = strings.TrimPrefix(model, "models/")
-	switch {
-	case strings.HasPrefix(model, "gemini-2.5-"):
-		return geminiThinker{budgets: geminiBudgets, budget: true, off: !strings.HasPrefix(model, "gemini-2.5-pro")}
-	case strings.HasPrefix(model, "gemini-4-neon"), strings.HasPrefix(model, "gemini-4-hydrogen"):
-		return geminiThinker{levels: gemini4XHigh}
-	case strings.HasPrefix(model, "gemini-4"):
-		return geminiThinker{levels: gemini4Levels}
-	case strings.HasPrefix(model, "gemini-3"):
-		return geminiThinker{levels: geminiLevels, budget: true}
-	}
-	return geminiThinker{levels: geminiLevels, budget: true, off: true}
+// geminiThinkers are the models whose thinking the conversion writes, as Google's《Gemini thinking》lists them (read
+// 2026-11-27): the levels each takes, and the 2.5 models' budget ranges and defaults. A model not listed, or a setting
+// its row cannot say, is sent through Google's OpenAI-compatible layer, which maps it itself.
+var geminiThinkers = map[string]geminiThinker{
+	"gemini-2.5-pro":               {minBudget: 128, maxBudget: 32768, thinksByDefault: true},
+	"gemini-2.5-flash":             {minBudget: 1, maxBudget: 24576, off: true, thinksByDefault: true},
+	"gemini-2.5-flash-lite":        {minBudget: 512, maxBudget: 24576, off: true},
+	"gemini-4-carbon":              {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-4-argon":               {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-4-neon":                {levels: []string{"low", "medium", "high", "xhigh"}, thinksByDefault: true},
+	"gemini-4-hydrogen":            {levels: []string{"low", "medium", "high", "xhigh"}, thinksByDefault: true},
+	"gemini-3.8-flash":             {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.6-flash":             {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.5-flash-lite":        {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-pro-preview":       {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-flash-lite":        {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-flash-lite-image":  {levels: []string{"minimal", "high"}, thinksByDefault: true},
+	"gemini-3-flash-preview":       {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3-pro-preview":         {levels: []string{"low", "high"}, thinksByDefault: true},
+	"gemini-robotics-er-2-preview": {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
 }
 
-// geminiThinking is geminiThinking of gemini.go the other way, in the terms the model takes: effort none or reasoning
-// disabled is a budget of 0, a reasoning budget is the thinking budget, any other effort the model's budget or level
-// for it; thoughts come back unless the client hid them. What the model cannot take is not supported.
-func (c *canon) geminiThinking(config map[string]jsonx.Raw, m geminiThinker) error {
-	t, effort := c.thinkingAsked()
-	if _, ok := t["thinkingBudget"]; ok && !m.budget {
-		return &NotSupported{Reason: "the model takes no thinking budget"}
+// geminiEffortBudgets are the 2.5 models' budgets for a reasoning effort, Google's OpenAI-compatible layer's own
+// (《OpenAI compatibility》Thinking, read 2026-11-27), so a request thinks as much whichever way it is sent.
+var geminiEffortBudgets = map[string]int64{"minimal": 1024, "low": 1024, "medium": 8192, "high": 24576}
+
+// geminiThinking writes the thinking the request asks for in the terms its model takes (geminiThinkers): effort none
+// or reasoning disabled is a budget of 0, a reasoning budget the thinking budget, any other effort the model's level
+// or budget for it; thoughts come back unless the client hid them. What the model's row cannot say exactly is not
+// supported.
+func (c *canon) geminiThinking(config map[string]jsonx.Raw, model string) error {
+	a := c.thinkingAsked()
+	if !a.asked {
+		return nil
 	}
-	budget, byBudget := m.budgets[effort]
-	level, byLevel := m.levels[effort]
-	switch {
-	case effort == "":
-	case effort == "none" && m.off:
-		t = requestObject{"thinkingBudget": jsonx.Raw("0")}
-	case byBudget:
-		t["thinkingBudget"] = jsonValue(budget)
-	case byLevel:
-		t["thinkingLevel"] = jsonValue(level)
-	default:
-		return &NotSupported{Reason: "reasoning effort " + effort + " has no counterpart on the model"}
+	m, ok := geminiThinkers[strings.TrimPrefix(model, "models/")]
+	if !ok {
+		return &NotSupported{Reason: "the model's thinking settings are not known here"}
+	}
+	if a.effort == "none" {
+		if !m.off {
+			return &NotSupported{Reason: "the model's thinking cannot be turned off"}
+		}
+		config["thinkingConfig"] = jsonValue(requestObject{"thinkingBudget": jsonx.Raw("0")})
+		return nil
+	}
+	t := requestObject{}
+	name, amount, err := m.amount(a)
+	if err != nil {
+		return err
+	}
+	if name != "" {
+		t[name] = amount
+	}
+	if a.thoughts {
+		t["includeThoughts"] = jsonx.Raw("true")
 	}
 	if len(t) > 0 {
 		config["thinkingConfig"] = jsonValue(t)
@@ -411,33 +473,58 @@ func (c *canon) geminiThinking(config map[string]jsonx.Raw, m geminiThinker) err
 	return nil
 }
 
-// thinkingAsked is what the request's reasoning settings ask of Gemini's thinking before the effort is written: the
-// budget and whether thoughts come back, and the effort.
-func (c *canon) thinkingAsked() (requestObject, string) {
-	t := requestObject{}
-	effort := ""
-	if c.ReasoningEffort != nil {
-		effort = *c.ReasoningEffort
+// amount is how much the model is asked to think, as the thinkingConfig member that says it, none for its default.
+func (m geminiThinker) amount(a thinkingAsk) (string, jsonx.Raw, error) {
+	switch {
+	case a.budget != nil:
+		if m.levels != nil || *a.budget < m.minBudget || *a.budget > m.maxBudget {
+			return "", nil, &NotSupported{Reason: "the model takes no such thinking budget"}
+		}
+		return "thinkingBudget", jsonValue(*a.budget), nil
+	case a.effort != "" && m.levels != nil:
+		if !slices.Contains(m.levels, a.effort) {
+			return "", nil, &NotSupported{Reason: "reasoning effort " + a.effort + " is not one of the model's levels"}
+		}
+		return "thinkingLevel", jsonValue(a.effort), nil
+	case a.effort != "":
+		budget, ok := geminiEffortBudgets[a.effort]
+		if !ok {
+			return "", nil, &NotSupported{Reason: "reasoning effort " + a.effort + " has no budget on the model"}
+		}
+		return "thinkingBudget", jsonValue(budget), nil
+	case !m.thinksByDefault: // reasoning on, at the model's default, which is off
+		return "", nil, &NotSupported{Reason: "the model does not think unless given a budget"}
+	}
+	return "", nil, nil
+}
+
+// thinkingAsk is what the request's reasoning settings ask of Gemini's thinking.
+type thinkingAsk struct {
+	asked    bool   // any reasoning setting is present
+	effort   string // the effort, none for reasoning disabled
+	budget   *int64 // the reasoning budget
+	thoughts bool   // the thoughts come back
+}
+
+func (c *canon) thinkingAsked() thinkingAsk {
+	var a thinkingAsk
+	if c.ReasoningEffort != nil && *c.ReasoningEffort != "" { // an empty effort is none set, as elsewhere
+		a.asked, a.effort, a.thoughts = true, *c.ReasoningEffort, true
 	}
 	r := c.Reasoning
 	if r == nil {
-		if effort != "" && effort != "none" {
-			t["includeThoughts"] = jsonx.Raw("true")
-		}
-		return t, effort
+		return a
 	}
+	a.asked, a.thoughts = true, r.Exclude == nil || !*r.Exclude
 	switch {
 	case r.Enabled != nil && !*r.Enabled:
-		effort = "none"
+		a.effort = "none"
 	case r.MaxTokens != nil:
-		t["thinkingBudget"] = jsonValue(*r.MaxTokens)
+		a.budget = r.MaxTokens
 	case r.Effort != nil:
-		effort = *r.Effort
+		a.effort = *r.Effort
 	}
-	if r.Exclude == nil || !*r.Exclude {
-		t["includeThoughts"] = jsonx.Raw("true")
-	}
-	return t, effort
+	return a
 }
 
 // errGeminiStream is a Gemini stream that broke the shape a generateContent stream has.

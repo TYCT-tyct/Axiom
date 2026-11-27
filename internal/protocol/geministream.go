@@ -38,11 +38,14 @@ type geminiStreamResponse struct {
 // for ends it as an error chunk, and a prompt Gemini blocked as a refusal by content policy. A stream that stops before
 // Gemini finished ends without the marker, which the relay reads as cut off.
 //
-// Usage Gemini reports before the end goes on the next delta, so the relay holds it should the gateway stop reading
-// there: the input side is final once reported, and the output side is reported only once Gemini counted some
-// (geminiUsage.reported). Every chunk with usage names the tier Google served it at.
-func ChatFromGemini(body io.ReadCloser) io.ReadCloser {
-	return &chatFromGemini{src: body, events: sse.NewReader(body, 32<<20)}
+// Usage is final only in the event that finished the reply. What Gemini reports before it goes on the next delta as
+// the input side alone, which the relay holds should the gateway stop reading there, and which the stream's later
+// counts cannot change; the output counted so far is no final count, so a stream that ends early has its output
+// estimated from what it delivered. Every chunk with usage names the tier Google served the reply at: the reply's
+// own, or tier, the one Google's x-gemini-service-tier response header named, which the first delta carries even
+// before any count, so a request Google served below the tier it asked for is billed at the tier it got.
+func ChatFromGemini(body io.ReadCloser, tier string) io.ReadCloser {
+	return &chatFromGemini{src: body, events: sse.NewReader(body, 32<<20), tier: tier, report: tier != ""}
 }
 
 type chatFromGemini struct {
@@ -52,10 +55,11 @@ type chatFromGemini struct {
 	err      error
 	id       string
 	model    string
+	tier     string // the tier Google's response header named
 	calls    int
 	finish   string
 	usage    *geminiUsage
-	report   bool // usage has a snapshot the relay was not given yet
+	report   bool // usage has a snapshot the relay was not given yet, or tier has not been given
 	role     bool // a delta named the role
 	finished bool
 }
@@ -89,7 +93,7 @@ func (s *chatFromGemini) Close() error { return s.src.Close() }
 // sent on the error chunk, which the relay bills, and the failure follows.
 func (s *chatFromGemini) broke(err error) {
 	if !s.finished && s.usage != nil {
-		s.fail(jsonValue(502), "upstream_error", "The Gemini stream broke off before the reply finished.")
+		s.fail(jsonValue(502), "upstream_error", "The Gemini stream broke off before the reply finished.", false)
 	}
 	s.err = err
 }
@@ -103,7 +107,7 @@ func (s *chatFromGemini) event(data []byte) error {
 		return fmt.Errorf("%w: %s", errGeminiStream, bodyFault(err))
 	}
 	if r.Error != nil {
-		s.fail(jsonValue(cmp.Or(r.Error.Code, 502)), "upstream_error", r.Error.Message)
+		s.fail(jsonValue(cmp.Or(r.Error.Code, 502)), "upstream_error", r.Error.Message, false)
 		return nil
 	}
 	s.id, s.model = cmp.Or(s.id, r.ResponseID), cmp.Or(s.model, r.ModelVersion)
@@ -117,7 +121,7 @@ func (s *chatFromGemini) event(data []byte) error {
 		// A prompt Gemini blocked has no candidate (Google《Generating content》PromptFeedback): the content policy
 		// refused the request, which Chat says as an error of that class, not as an empty answer to retry elsewhere.
 		if r.PromptFeedback != nil && r.PromptFeedback.BlockReason != "" {
-			s.fail(jsonValue("content_policy_violation"), "content_policy_violation", "Gemini blocked the prompt: "+r.PromptFeedback.BlockReason)
+			s.fail(jsonValue("content_policy_violation"), "content_policy_violation", "Gemini blocked the prompt: "+r.PromptFeedback.BlockReason, true)
 		}
 		return nil
 	}
@@ -131,15 +135,19 @@ func (s *chatFromGemini) event(data []byte) error {
 	return nil
 }
 
-// finishWith records Gemini's finish reason as Chat's, or ends the stream for one Chat has no word for.
+// finishWith records Gemini's finish reason as Chat's, or ends the stream for one Chat has no word for. CONTINUATION is a
+// reply that reached one request's output cap with more to say (Google《Long decode》): it ends at the cap, as length
+// does, since the conversion does not continue it (geminiOutputCap sends the requests that could elsewhere).
 func (s *chatFromGemini) finishWith(gemini string) {
 	if gemini == "" {
 		return
 	}
 	reason, ok := geminiFinish[gemini]
 	switch {
+	case gemini == "CONTINUATION":
+		s.finish = "length"
 	case !ok:
-		s.fail(jsonValue(502), "upstream_error", "Gemini stopped the reply: "+gemini)
+		s.fail(jsonValue(502), "upstream_error", "Gemini stopped the reply: "+gemini, true)
 	case reason == "stop" && s.calls > 0:
 		s.finish = "tool_calls"
 	default:
@@ -168,16 +176,24 @@ func (s *chatFromGemini) parts(parts []geminiPart) error {
 }
 
 // choice appends the chunk of the one choice with delta and finish, the first naming the assistant's role, which the
-// OpenAI SDKs require of every choice; usage Gemini reported since the last chunk goes with it.
+// OpenAI SDKs require of every choice; the input Gemini reported since the last chunk, or the tier alone, goes with it.
 func (s *chatFromGemini) choice(delta requestObject, finish jsonx.Raw) {
 	if !s.role {
 		delta["role"], s.role = jsonValue("assistant"), true
 	}
 	var usage jsonx.Raw
 	if s.report {
-		usage = s.usage.reported()
+		usage = s.input()
 	}
 	s.chunk(requestObject{"index": jsonx.Raw("0"), "delta": jsonValue(delta), "finish_reason": finish}, usage)
+}
+
+// input is the input side of the usage Gemini reported so far, or an empty usage to carry the tier before any count.
+func (s *chatFromGemini) input() jsonx.Raw {
+	if s.usage == nil {
+		return jsonx.Raw("{}")
+	}
+	return jsonValue(s.usage.chat().chatInputCounts)
 }
 
 // call is a function call part as the Chat tool call that starts and finishes in one delta.
@@ -225,25 +241,19 @@ func (s *chatFromGemini) chunk(choice requestObject, usage jsonx.Raw) {
 // reports as unknown.
 var chatTiers = map[string]string{"unspecified": "default", "standard": "default"}
 
-// withUsage puts usage in chunk c, with the tier Gemini served the reply at.
+// withUsage puts usage in chunk c, with the tier Gemini served the reply at: the reply's own, else the header's.
 func (s *chatFromGemini) withUsage(c requestObject, usage jsonx.Raw) {
 	if usage == nil {
 		return
 	}
 	c["usage"], s.report = usage, false
-	if t := strings.ToLower(s.usage.ServiceTier); t != "" {
+	t := s.tier
+	if s.usage != nil && s.usage.ServiceTier != "" {
+		t = s.usage.ServiceTier
+	}
+	if t = strings.ToLower(t); t != "" {
 		c["service_tier"] = jsonValue(cmp.Or(chatTiers[t], t))
 	}
-}
-
-// reported is the usage as Chat's, its output side only once Gemini counted some output: a stream's first events count
-// the prompt alone, and a report of no output would bill what was delivered after them as none.
-func (u geminiUsage) reported() jsonx.Raw {
-	c := u.chat()
-	if u.CandidatesTokenCount == 0 && u.ThoughtsTokenCount == 0 {
-		return jsonValue(c.chatInputCounts)
-	}
-	return jsonValue(c)
 }
 
 // end closes a stream Gemini finished: the finish reason, the usage and the end marker.
@@ -252,7 +262,7 @@ func (s *chatFromGemini) end() {
 	case s.finished:
 		return
 	case s.finish == "" && s.usage != nil: // cut off, but what it reported was used and is billed
-		s.fail(jsonValue(502), "upstream_error", "The Gemini stream ended before the reply finished.")
+		s.fail(jsonValue(502), "upstream_error", "The Gemini stream ended before the reply finished.", false)
 		return
 	case s.finish == "":
 		return
@@ -265,13 +275,17 @@ func (s *chatFromGemini) end() {
 	s.out = append(s.out, "data: [DONE]\n\n"...)
 }
 
-// fail ends the stream with Chat's error chunk of code and type, carrying the usage Gemini reported so far, which the
-// relay bills from an error chunk as from a usage one.
-func (s *chatFromGemini) fail(code jsonx.Raw, typ, message string) {
+// fail ends the stream with Chat's error chunk of code and type, carrying the usage Gemini reported, which the relay
+// bills from an error chunk as final: all of it when Gemini ended the reply in the event that failed it, else only
+// the input side, as the output counted so far is not the output delivered.
+func (s *chatFromGemini) fail(code jsonx.Raw, typ, message string, ended bool) {
 	s.finished = true
 	chunk := requestObject{"error": jsonValue(requestObject{"message": jsonValue(message), "type": jsonValue(typ), "code": code})}
-	if s.usage != nil {
-		s.withUsage(chunk, s.usage.reported())
+	switch {
+	case s.usage != nil && ended:
+		s.withUsage(chunk, jsonValue(s.usage.chat()))
+	case s.usage != nil || s.report:
+		s.withUsage(chunk, s.input())
 	}
 	s.out = slices.Concat(s.out, []byte("data: "), jsonValue(chunk), []byte("\n\n"))
 }

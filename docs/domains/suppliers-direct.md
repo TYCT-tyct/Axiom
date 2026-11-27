@@ -72,7 +72,7 @@
 ### 调用
 
 - **路径和鉴权**：按格式走类型的路径前缀和鉴权头（`adapter.Wire`）：OpenAI 族用 Bearer，Messages 用 `x-api-key` 和 `anthropic-version`。
-- **Google**：`google` 包，地址 `generativelanguage.googleapis.com`（USD）。key 的检测、模型清单和嵌入走 OpenAI 兼容层（`/v1beta/openai`，Bearer）；Chat 由 `Signer` 转成 Gemini 原生的 `generateContent` 请求体（`protocol.ChatToGemini`，按调用用的模型名写思考），流式发 `/v1beta/models/<模型>:streamGenerateContent?alt=sse`，否则 `:generateContent`，key 在 `x-goog-api-key`；回答经 `protocol.ChatFromGemini` 读成 Chat 流，整份回答当作只有一个事件的流读。用量（缓存、思考、按模态的 token，含工具提示的）和实际服务档位与 Gemini 入站同一张表；Gemini 中途报的用量随下一段内容交给中继，网关截流也按它结算。Gemini 说不了又会改变回答的 Chat 请求（音频输入、`extra_body` 的 `cached_content`、带工具的 `parallel_tool_calls:false`、模型不收的思考设置等）在发出前判为端点的失败、不执行，换下一个端点；被拦的提示词是内容策略拒绝，回 403。
+- **Google**：`google` 包，地址 `generativelanguage.googleapis.com`（USD）。key 的检测、模型清单和嵌入走 OpenAI 兼容层（`/v1beta/openai`，Bearer）。Chat 请求的每个成员都能被原生格式确切说出时，由 `Signer` 转成 Gemini 的 `generateContent` 请求体（`protocol.ChatToGemini`，按调用用的模型名写思考），流式发 `/v1beta/models/<模型>:streamGenerateContent?alt=sse`，否则 `:generateContent`，key 在 `x-goog-api-key`；说不确切的（按地址或指定精度的图片、音频输入、`extra_body`、部分严格的工具、可调工具时的 `parallel_tool_calls:false`、思考表里没有的模型或设置、超过单次输出上限的 `max_tokens`）在同一次尝试里改发兼容层的 `/chat/completions`，同一把 key、同一个端点，原生路径不比兼容层少服务任何请求。原生回答经 `protocol.ChatFromGemini` 读成 Chat 流，整份回答当作只有一个事件的流、由中继读时才读正文。用量（缓存、思考、按模态的 token，含工具提示的）与 Gemini 入站同一张表；结束回答的那一帧的用量才是终值，中途的只把输入侧随下一段内容交给中继，截流或断流按已交付的估输出；档位取回答里的，没有时取响应头 `x-gemini-service-tier`，降档按实际档计费。被拦的提示词是内容策略拒绝，回 403；`CONTINUATION` 当作到了上限（`length`）。
 - **模型名**：请求体的 `model` 是端点的上游名；所选凭证的 `call_names` 给这个端点另起了名字时，发它自己的名字（云平台由 `Signer` 按 `SignedCall.Model` 签出，直连由调用面替换请求体顶层的 `model`，只在名字不同时做）。
 - **失败**：401 和 Google 的无效 key 是凭证被拒，OpenAI 的 `insufficient_quota` 和 402（DeepSeek 的余额不足）是这把 key 额度用尽，只歇这把；403 不标 key。调用面不取请求号（`ChargeRef` 为空）。
 
@@ -137,8 +137,8 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 | 直连接口建好即 `active` | key 已逐把检测、模型已读出，没有同步会把它从 `connecting` 移走 |
 | 直连 key 各算各的每分钟窗口；`upstream_key_ref` 是 key 的 SHA-256 前 128 位 | 贴多把 key 就是为了多份额度；摘要能找出重复而不保存原文 |
 | 直连接口不取请求号，成本按官方价估算、不对账 | 厂商的扣费读不到，取了请求号的尝试每条都会被报「等不到扣费」 |
-| Google 的 Chat 走 Gemini 原生的 `generateContent`，检测、模型清单和嵌入仍走 OpenAI 兼容层 | 原生接口带回完整的思考签名、按模态的用量和实际服务档位，同一份回答走两条路径计费逐项相同（`TestChatGoesNative`）；兼容层的模型清单能用同一把 key 免费检测 |
-| Chat 转 Gemini 与转 Converse 同一条规则：改变不了回答的丢掉，能同样说出的照说（`service_tier` 的 flex、priority 写 `serviceTier`，default、auto 不写；`reasoning_effort` 照 Google 兼容层的表：2.5 写预算，3 起写档位，4 的 minimal 写 low，xhigh 只给 Neon、Hydrogen），会改变回答又说不了的不执行、换下一个条目 | 回 400 会让有备选的请求也失败，悄悄丢掉会让回答不是客户端要的；照兼容层的映射，两条路径对同一请求得到同样的思考量 |
+| Google 的 Chat 能确切说出时走 Gemini 原生的 `generateContent`，否则在同一次尝试里走 OpenAI 兼容层；检测、模型清单和嵌入走兼容层 | 原生接口带回完整的思考签名、按模态的用量和实际服务档位；兼容层是 Google 自己的映射，原生说不确切的请求交给它，不因换了路径少服务或换端点。两条路径计费逐项相同（`TestChatGoesNative`、`TestChatFallsBackToTheCompatibleLayer`）；兼容层的模型清单能用同一把 key 免费检测 |
+| Chat 转 Gemini：改变不了回答的丢掉，能确切说出的照说（`service_tier` 的 flex、priority 写 `serviceTier`，default、auto 不写；`tool_choice:"none"` 时不看 `parallel_tool_calls`；全部严格的工具在可选调用时写 `VALIDATED`；思考按 Google《Gemini thinking》逐模型的表：2.5 按兼容层的预算表和各自的预算范围，Flash、Flash-Lite 的 none 是 0，其余按模型列出的档位），其余改走兼容层 | 自己猜的映射（如把 minimal 写成 low、给默认不思考的模型补预算）会让同一请求在两条路径上思考量不同；表外的交给 Google 自己映射。比 Converse 多一条退路，所以说不了的不必换端点 |
 | 只有声明了 Responses 的行（OpenAI、xAI）的端点声明 Responses，其余 OpenAI 族只声明 Chat | 兼容接口多数没有 Responses；网关会把 Responses 请求转成 Chat |
 | 贴进来的 key 和云凭证只写不读，接口只回末四位和不是秘密的部分；幂等指纹不含原文 | 与 BYOK、商户密钥同一规则：明文只在 `credentials` 的密文里 |
 | 云平台一个区域一条凭证，并发和每分钟上限按区域设；换凭证时所有区域一起换 | 复用挑凭证：一个区域满了自然换到下一个 |

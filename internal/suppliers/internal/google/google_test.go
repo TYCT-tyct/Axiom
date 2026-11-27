@@ -71,21 +71,25 @@ data: [DONE]
 // key in x-goog-api-key, as Google's documented request (testdata/request.json); the answer, streamed or whole
 // (testdata/stream.sse, in the shape of Google's documented GenerateContentResponse, not recorded against a live key),
 // is billed exactly as the same reply was through the OpenAI-compatible layer, the cached and thinking tokens and the
-// tier Google served it at included.
+// tier Google served it at included: the reply's own, or the x-gemini-service-tier header's for a priority request
+// Google served at the standard tier. A whole answer is read by the relay, not while Answer runs.
 func TestChatGoesNative(t *testing.T) {
 	t.Parallel()
 	native := string(read(t, "stream.sse"))
 	for _, tier := range []struct {
-		name, compat, native string
+		name, compat, native, header string
+		asked                        catalog.ServiceTier
 	}{
-		{"standard", compatStream, native},
+		{"standard", compatStream, native, "", catalog.ServiceTierStandard},
 		{
 			"priority",
 			strings.Replace(compatStream, `"usage":`, `"service_tier":"priority","usage":`, 1),
 			strings.Replace(native, `"thoughtsTokenCount": 27`, `"thoughtsTokenCount": 27,"serviceTier": "priority"`, 1),
+			"", catalog.ServiceTierStandard,
 		},
+		{"downgraded", strings.Replace(compatStream, `"usage":`, `"service_tier":"default","usage":`, 1), native, "standard", catalog.ServiceTierPriority},
 	} {
-		want, wantTier := billed(t, io.NopCloser(strings.NewReader(tier.compat)))
+		want, wantTier := billed(t, io.NopCloser(strings.NewReader(tier.compat)), tier.asked)
 		events := strings.Split(strings.TrimSpace(tier.native), "\n\n")
 		whole := "{\n  " + strings.TrimPrefix(events[len(events)-1], "data: {") + "\n" // indented, as Google writes it
 		for name, tc := range map[string]struct {
@@ -98,21 +102,69 @@ func TestChatGoesNative(t *testing.T) {
 		} {
 			t.Run(tier.name+" "+name, func(t *testing.T) {
 				t.Parallel()
-				if got, gotTier := callNative(t, tc.stream, tc.path, tc.answer); !cmp.Equal(got, want) || gotTier != wantTier {
+				got, gotTier := callNative(t, tc.stream, tc.path, tc.answer, tier.header, tier.asked)
+				if !cmp.Equal(got, want) || gotTier != wantTier {
 					t.Errorf("billed %v at %d, through the compatible layer %v at %d", got, gotTier, want, wantTier)
 				}
 			})
 		}
 	}
-	if want, _ := billed(t, io.NopCloser(strings.NewReader(compatStream))); want[catalog.ItemCacheRead] != 4 ||
+	if want, _ := billed(t, io.NopCloser(strings.NewReader(compatStream)), catalog.ServiceTierStandard); want[catalog.ItemCacheRead] != 4 ||
 		want[catalog.ItemReasoning] != 27 || want[catalog.ItemInput] != 6 || want[catalog.ItemOutput] != 9 {
 		t.Errorf("the compatible layer's reply billed %v", want)
 	}
 }
 
+// A Chat request the native conversion cannot say exactly goes, in the same attempt, to Google's OpenAI-compatible
+// layer, as every Chat request did before calls went native: with the model the key names and the key as a bearer
+// token. Its answer is the compatible layer's, unchanged, so it is billed as it was.
+func TestChatFallsBackToTheCompatibleLayer(t *testing.T) {
+	t.Parallel()
+	hi := `"messages":[{"role":"user","content":"Hi"}]`
+	tool := `"tools":[{"type":"function","function":{"name":"f","strict":true}},{"type":"function","function":{"name":"g"}}]`
+	want, _ := billed(t, io.NopCloser(strings.NewReader(compatStream)), catalog.ServiceTierStandard)
+	for name, c := range map[string]struct{ model, members string }{
+		"an image by address": {"gemini-2.5-flash", `"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i.png"}}]}]`},
+		"an image's detail": {
+			"gemini-2.5-flash",
+			`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","detail":"high"}}]}]`,
+		},
+		"audio":                            {"gemini-2.5-flash", `"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]`},
+		"a cached content":                 {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"cached_content":"cachedContents/0000aaaa1111bbbb2222cccc3333dddd4444eeee"}}`},
+		"a thinking config":                {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"thinking_config":{"thinking_budget":2048,"include_thoughts":true}}}`},
+		"mixed strictness":                 {"gemini-2.5-flash", hi + "," + tool},
+		"one call at a time":               {"gemini-2.5-flash", hi + `,"tools":[{"type":"function","function":{"name":"f"}}],"parallel_tool_calls":false`},
+		"a level the model lacks":          {"gemini-3.1-pro-preview", hi + `,"reasoning_effort":"minimal"`},
+		"thinking on at a default of off":  {"gemini-2.5-flash-lite", hi + `,"reasoning":{"enabled":true,"exclude":true}`},
+		"a model not in the table":         {"gemini-2.5-flash-preview-09-2025", hi + `,"reasoning_effort":"low"`},
+		"an output past one request's cap": {"gemini-4-neon", hi + `,"max_tokens":70000,"stream":true`},
+	} {
+		signer := google.New().Calls().(adapter.Signer)
+		req, f := signer.Sign(t.Context(), nil, adapter.SignedCall{
+			Format: protocol.Chat, Origin: origin, Model: c.model, Body: []byte(`{"model":"endpoint-name",` + c.members + `}`), Key: secret.New("sk-test-key"),
+		})
+		if f != nil {
+			t.Fatalf("%s: sign: %+v", name, f)
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || req.URL.RequestURI() != "/v1beta/openai/chat/completions" || req.Header.Get("Authorization") != "Bearer sk-test-key" ||
+			!bytes.Contains(body, []byte(`"model":"`+c.model+`"`)) {
+			t.Errorf("%s: sent to %s with %q: %s", name, req.URL.RequestURI(), req.Header.Get("Authorization"), body)
+		}
+		resp := signer.Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(compatStream))})
+		if got, _ := billed(t, resp.Body, catalog.ServiceTierStandard); !cmp.Equal(got, want) {
+			t.Errorf("%s: billed %v, want %v", name, got, want)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 // callNative signs the documented Chat request, streamed or not, checks it was made natively at path, and gives what
-// the answer is billed: the items and the tier.
-func callNative(t *testing.T, stream bool, path, answer string) (map[catalog.Item]int64, catalog.ServiceTier) {
+// the answer, with the x-gemini-service-tier header given, is billed for a request of the tier asked: the items and the
+// tier. Nothing of the answer is read before the relay reads it.
+func callNative(t *testing.T, stream bool, path, answer, header string, asked catalog.ServiceTier) (map[catalog.Item]int64, catalog.ServiceTier) {
 	t.Helper()
 	signer := google.New().Calls().(adapter.Signer)
 	req, f := signer.Sign(t.Context(), nil, adapter.SignedCall{
@@ -122,13 +174,31 @@ func callNative(t *testing.T, stream bool, path, answer string) (map[catalog.Ite
 		t.Fatalf("sign: %+v", f)
 	}
 	checkNative(t, req, path)
-	resp := signer.Answer(&http.Response{
-		StatusCode: http.StatusOK, Request: req, Header: http.Header{"Content-Type": {"application/json"}},
-		Body: io.NopCloser(strings.NewReader(answer)),
-	})
+	h := http.Header{"Content-Type": {"application/json"}}
+	if header != "" {
+		h.Set("X-Gemini-Service-Tier", header)
+	}
+	src := &unread{r: strings.NewReader(answer)}
+	resp := signer.Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: h, Body: src})
+	if src.read {
+		t.Error("the answer was read before the relay read it")
+	}
 	defer resp.Body.Close() //nolint:errcheck // a test body over a string
-	return billed(t, resp.Body)
+	return billed(t, resp.Body, asked)
 }
+
+// unread is a body that tells whether it was read.
+type unread struct {
+	r    io.Reader
+	read bool
+}
+
+func (u *unread) Read(p []byte) (int, error) {
+	u.read = true
+	return u.r.Read(p)
+}
+
+func (*unread) Close() error { return nil }
 
 // checkNative checks a native request: Google's host and the path, the key in x-goog-api-key alone, the documented body.
 func checkNative(t *testing.T, req *http.Request, path string) {
@@ -142,24 +212,6 @@ func checkNative(t *testing.T, req *http.Request, path string) {
 	body, err := io.ReadAll(req.Body)
 	if want := bytes.TrimSpace(read(t, "request.json")); err != nil || !bytes.Equal(body, want) {
 		t.Errorf("body\n%s (%v)\nwant\n%s", body, err, want)
-	}
-}
-
-// A Chat request Gemini cannot say is the endpoint's failure: nothing is sent and the call goes to another endpoint,
-// as for audio input, a cached content named for Google's compatible layer, or one tool call at a time.
-func TestUnsayableChatTriesAnotherEndpoint(t *testing.T) {
-	t.Parallel()
-	signer := google.New().Calls().(adapter.Signer)
-	for name, body := range map[string]string{
-		"audio": `{"model":"m","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`,
-		"a cached content": `{"model":"m","messages":[{"role":"user","content":"Hi"}],` +
-			`"extra_body":{"google":{"cached_content":"cachedContents/0000aaaa1111bbbb2222cccc3333dddd4444eeee"}}}`,
-		"one call at a time": `{"model":"m","messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"parallel_tool_calls":false}`,
-	} {
-		req, f := signer.Sign(t.Context(), nil, adapter.SignedCall{Format: protocol.Chat, Origin: origin, Model: "gemini-2.5-flash", Body: []byte(body)})
-		if req != nil || f == nil || f.Scope != adapter.ScopeEndpoint || f.Executed != adapter.NotExecuted {
-			t.Errorf("%s: %v, %+v", name, req, f)
-		}
 	}
 }
 
@@ -190,10 +242,10 @@ func TestOtherFormats(t *testing.T) {
 	}
 }
 
-// billed is what the relay bills for a Chat stream, item by item, and the tier.
-func billed(t *testing.T, body io.ReadCloser) (map[catalog.Item]int64, catalog.ServiceTier) {
+// billed is what the relay bills for a Chat stream answering a request of the tier asked, item by item, and the tier.
+func billed(t *testing.T, body io.ReadCloser, asked catalog.ServiceTier) (map[catalog.Item]int64, catalog.ServiceTier) {
 	t.Helper()
-	r := protocol.NewRelay(protocol.Chat, protocol.Chat, body, protocol.UsageContext{}, protocol.RelayOptions{Memory: protocol.NewMemory(64 << 20)})
+	r := protocol.NewRelay(protocol.Chat, protocol.Chat, body, protocol.UsageContext{Tier: asked}, protocol.RelayOptions{Memory: protocol.NewMemory(64 << 20)})
 	for {
 		step, err := r.Next()
 		if err != nil {
