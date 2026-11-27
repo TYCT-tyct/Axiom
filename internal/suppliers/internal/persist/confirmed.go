@@ -43,7 +43,7 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set []syncer.Conf
 		return nil, fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)
 	}
 	if err := q.RequestBalanceSync(ctx, tx, store.RequestBalanceSyncParams{
-		SupplierID: id, Version: st.Version, State: raw, NextDue: nextDue(st),
+		SupplierID: id, Version: st.Version, Format: format, State: raw, NextDue: nextDue(st),
 	}); err != nil {
 		return nil, fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
 	}

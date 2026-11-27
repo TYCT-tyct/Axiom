@@ -9,11 +9,14 @@ package syncer
 
 import (
 	"cmp"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -61,6 +64,10 @@ type ModelSnap struct {
 	Formats []int
 	Without protocol.Capabilities
 	Plan    string
+	// Published is whether the supplier stated a price for the model when it was last read, whether or not a schedule
+	// could express it: a model whose models are not read this time keeps that, so a confirmed base does not take the
+	// place of a published price.
+	Published bool `json:",omitzero"`
 	// Confirmed is whether Plan was made of a person's base (State.Confirmed), which a kept model gives up once the
 	// base is cleared and the projection puts in force only for the model the base was confirmed for.
 	Confirmed bool `json:",omitzero"`
@@ -91,11 +98,52 @@ type GroupSnap struct {
 	KeyEligible bool `json:"-"`
 }
 
-// PlanKey names an endpoint the way the engine keeps it in its state and the way its cost plans are stored
-// (suppliers.sync_plans.endpoint): the group's ref and the model's upstream name. Every writer and reader of a plan goes
-// through it, because a key built in two places that disagree loses the plan without an error: every endpoint of that
-// name would be left with its cost unknown and no reason in any log.
+// PlanKey names an endpoint the way its cost plans are stored (suppliers.sync_plans.endpoint) and its events name it:
+// the group's ref and the model's upstream name, joined. Two pairs can join alike (a/b with c, a with b/c), so the state
+// keeps plans by BaseKey, and a stored plan is found by this name and its fingerprint together. Every writer and reader
+// of a stored plan goes through it, because a name built in two places that disagree loses the plan without an error.
 func PlanKey(ref, model string) string { return ref + "/" + model }
+
+// Plans is the fingerprint of each endpoint's cost plan in force, by group and model. It is stored as an array of
+// {GroupRef, Model, Plan} sorted by key, since a JSON object is keyed by one string.
+type Plans map[BaseKey]string
+
+// planEntry is one member of the stored form of Plans.
+type planEntry struct {
+	GroupRef, Model, Plan string
+}
+
+// MarshalJSON stores the plans sorted by key, so the same plans store as the same bytes.
+func (p Plans) MarshalJSON() ([]byte, error) {
+	entries := make([]planEntry, 0, len(p))
+	for _, k := range slices.SortedFunc(maps.Keys(p), compareKeys) {
+		entries = append(entries, planEntry{GroupRef: k.GroupRef, Model: k.Model, Plan: p[k]})
+	}
+	return jsonx.MarshalCanonical(entries)
+}
+
+// UnmarshalJSON reads what MarshalJSON stored; a key stored twice is not a form it writes.
+func (p *Plans) UnmarshalJSON(b []byte) error {
+	var entries []planEntry
+	if err := jsonx.UnmarshalKnown(b, &entries); err != nil {
+		return err
+	}
+	out := make(Plans, len(entries))
+	for _, e := range entries {
+		k := BaseKey{GroupRef: e.GroupRef, Model: e.Model}
+		if _, twice := out[k]; twice {
+			return fmt.Errorf("syncer: the plan of %s in %s is stored twice", e.Model, e.GroupRef)
+		}
+		out[k] = e.Plan
+	}
+	*p = out
+	return nil
+}
+
+// compareKeys orders keys by group, then model.
+func compareKeys(a, b BaseKey) int {
+	return cmp.Or(strings.Compare(a.GroupRef, b.GroupRef), strings.Compare(a.Model, b.Model))
+}
 
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
 // 「持久化」).
@@ -113,7 +161,7 @@ type State struct {
 
 	Groups []GroupSnap // sorted by Ref
 	Keys   []adapter.KeyState
-	Plans  map[string]string // "group/model" -> fingerprint of the current cost plan
+	Plans  Plans
 	// Confirmed are the bases a person confirmed, sorted by key and one per key. Only the admin writes them
 	// (persist.ConfirmBases); the engine and the projection read them.
 	Confirmed []ConfirmedBase
@@ -247,6 +295,4 @@ func (s State) Base(k BaseKey) (ConfirmedBase, bool) {
 }
 
 // compareBase orders confirmed bases by their key.
-func compareBase(b ConfirmedBase, k BaseKey) int {
-	return cmp.Or(strings.Compare(b.GroupRef, k.GroupRef), strings.Compare(b.Model, k.Model))
-}
+func compareBase(b ConfirmedBase, k BaseKey) int { return compareKeys(b.BaseKey, k) }

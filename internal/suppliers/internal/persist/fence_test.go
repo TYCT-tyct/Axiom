@@ -179,7 +179,7 @@ func TestAStateSurvivesBeingStored(t *testing.T) {
 			{Name: "m", Formats: []int{0, 2}, Without: protocol.Images | protocol.Tools, Plan: "ab12"},
 		}}},
 		Keys:      []adapter.KeyState{{Ref: "7", GroupRef: "1", Status: adapter.KeyQuotaExhausted, ResetAt: at}},
-		Plans:     map[string]string{"1/m": "ab12"},
+		Plans:     syncer.Plans{{GroupRef: "1", Model: "m"}: "ab12"},
 		Confirmed: []syncer.ConfirmedBase{{GroupRef: "g", Model: "m", Base: `{"v":1}`}},
 		Scan:      adapter.ScanState([]byte{0, 255, 'x'}), ScanOpen: true,
 		Through: at,
@@ -197,7 +197,7 @@ func TestAStateSurvivesBeingStored(t *testing.T) {
 
 	for name, update := range map[string]string{
 		"a member this program does not know": `UPDATE suppliers.sync_states SET state = state || '{"Unknown": true}'`,
-		"a format this program does not read": `UPDATE suppliers.sync_states SET format = 2`,
+		"a format this program does not read": `UPDATE suppliers.sync_states SET format = 3`,
 	} {
 		err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
 			_, err := tx.Exec(t.Context(), update)

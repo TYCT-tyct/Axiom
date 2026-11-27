@@ -182,8 +182,8 @@ func (p *projector) planOf(ref string, m syncer.ModelSnap, model catalog.ModelID
 	if m.Plan == "" {
 		return store.PlanVersion{}, false
 	}
-	v, ok := p.plans[syncer.PlanKey(ref, m.Name)]
-	if !ok || v.Fingerprint != m.Plan {
+	v, ok := p.plans[planRef{endpoint: syncer.PlanKey(ref, m.Name), fingerprint: m.Plan}]
+	if !ok {
 		return store.PlanVersion{}, false
 	}
 	if m.Confirmed {

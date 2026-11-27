@@ -18,8 +18,9 @@ import (
 	"axiom/internal/suppliers/internal/syncer"
 )
 
-// format identifies the stored state shape.
-const format = 1
+// format identifies the stored state shape. Format 2 keeps the plans by group and model (syncer.Plans), the confirmed
+// bases and whether a model's price was published; format 1 is read too (decodeFormat1).
+const format = 2
 
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -86,14 +87,50 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 // decode reads a stored state as this program keeps it. Its version is the row's, which the state's own member is not
 // read for: the row is what a Commit names.
 func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error) {
-	if storedFormat != format {
+	var out syncer.State
+	var err error
+	switch storedFormat {
+	case format:
+		err = jsonx.UnmarshalKnown(raw, &out)
+	case 1:
+		out, err = decodeFormat1(raw)
+	default:
 		return syncer.State{}, fmt.Errorf("the state is stored in format %d, which this program does not read", storedFormat)
 	}
-	var out syncer.State
-	if err := jsonx.UnmarshalKnown(raw, &out); err != nil {
+	if err != nil {
 		return syncer.State{}, fmt.Errorf("decode the state: %w", err)
 	}
 	out.Version = version
+	return out, nil
+}
+
+// decodeFormat1 reads a state of format 1. It kept the plans as an object keyed by the joined group and model, which
+// the groups' own models repeat, so they are read from those instead; it had no confirmed bases (nothing wrote them),
+// so every plan in it was the supplier's published price.
+func decodeFormat1(raw []byte) (syncer.State, error) {
+	var members map[string]jsonx.Raw
+	if err := jsonx.UnmarshalKnown(raw, &members); err != nil {
+		return syncer.State{}, err
+	}
+	delete(members, "Plans")
+	delete(members, "Confirmed")
+	rest, err := jsonx.MarshalCanonical(members)
+	if err != nil {
+		return syncer.State{}, err
+	}
+	var out syncer.State
+	if err := jsonx.UnmarshalKnown(rest, &out); err != nil {
+		return syncer.State{}, err
+	}
+	out.Plans = syncer.Plans{}
+	for gi, g := range out.Groups {
+		for mi, m := range g.Models {
+			if m.Plan != "" {
+				out.Plans[syncer.BaseKey{GroupRef: g.Ref, Model: m.Name}] = m.Plan
+				out.Groups[gi].Models[mi].Published = true
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -150,7 +187,7 @@ func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
 		return fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)
 	}
 	err = q.ResetSyncState(ctx, tx, store.ResetSyncStateParams{
-		SupplierID: id, Version: woken.Version, State: encoded, NextDue: now,
+		SupplierID: id, Version: woken.Version, Format: format, State: encoded, NextDue: now,
 	})
 	if err != nil {
 		return fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
@@ -188,7 +225,7 @@ func RequestBalance(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) 
 		due = task.BackoffUntil
 	}
 	return q.RequestBalanceSync(ctx, tx, store.RequestBalanceSyncParams{
-		SupplierID: id, Version: st.Version, State: raw, NextDue: due,
+		SupplierID: id, Version: st.Version, Format: format, State: raw, NextDue: due,
 	})
 }
 

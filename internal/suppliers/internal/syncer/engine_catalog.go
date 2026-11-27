@@ -27,7 +27,7 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	for _, g := range c.State.Groups {
 		prev[g.Ref] = g
 	}
-	plans := map[string]string{}
+	plans := Plans{}
 	var groups []GroupSnap
 	for _, g := range page.Items {
 		snap, err := group(c, g, prev[g.Ref], plans)
@@ -48,7 +48,7 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 }
 
 // group is the snapshot of one group the listing read.
-func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string) (GroupSnap, error) {
+func group(c *Commit, g adapter.Group, before GroupSnap, plans Plans) (GroupSnap, error) {
 	snap := GroupSnap{Ref: g.Ref, Name: g.Name, Ratio: string(g.Ratio), Facts: string(g.Facts)}
 	if g.ModelsUnread {
 		return keptGroup(c, g, snap, before, plans)
@@ -62,7 +62,10 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 		if err != nil {
 			return snap, err
 		}
-		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: plan, Confirmed: confirmed})
+		snap.Models = append(snap.Models, ModelSnap{
+			Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: plan,
+			Published: m.Published || m.Cost != nil, Confirmed: confirmed,
+		})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
 	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
@@ -82,13 +85,15 @@ func hasPlan(models []ModelSnap) bool {
 
 // keptGroup is the snapshot of a group whose models were not read: they stay as they were, a confirmed base follows a
 // changed ratio, and a plan made of a base that has been cleared since is gone.
-func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[string]string) (GroupSnap, error) {
+func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans Plans) (GroupSnap, error) {
 	for _, m := range before.Models {
 		plan, confirmed, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m, plans)
 		if err != nil {
 			return snap, err
 		}
-		snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan, Confirmed: confirmed})
+		snap.Models = append(snap.Models, ModelSnap{
+			Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan, Published: m.Published, Confirmed: confirmed,
+		})
 	}
 	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
 	return snap, nil
@@ -98,20 +103,26 @@ func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[str
 // plan is made of a confirmed base. A schedule the supplier published comes first. A model the supplier prices in a way
 // no schedule expresses (per call, say) has no plan: a confirmed base never stands in for a price the supplier states.
 // Only while it states none does a person's confirmed base, scaled by the group's ratio, price it; a base the ratio
-// takes past a unit price leaves this one endpoint unknown. Otherwise the model keeps the plan it had (kept: one not
-// read this time), unless that plan was made of a base that has been cleared.
-func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans map[string]string) (string, bool, error) {
-	key := PlanKey(g.Ref, m.UpstreamName)
-	switch base, confirmed := c.State.Base(BaseKey{GroupRef: g.Ref, Model: m.UpstreamName}); {
+// takes past a unit price leaves this one endpoint unknown. A model not read this time (kept) goes by what its last
+// read said: a price the supplier stated keeps its plan, or its unknown cost, ahead of any base; otherwise the base, if
+// one is confirmed now, and no plan if not, so a plan made of a base that has been cleared is gone.
+func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans Plans) (string, bool, error) {
+	key := BaseKey{GroupRef: g.Ref, Model: m.UpstreamName}
+	switch base, confirmed := c.State.Base(key); {
 	case m.Cost != nil:
 		fp, err := put(c, key, *m.Cost, m.Derivation, "published", plans)
 		return fp, false, err
 	case m.Published:
 		return "", false, nil
+	case kept.Published:
+		if kept.Plan != "" {
+			plans[key] = kept.Plan
+		}
+		return kept.Plan, false, nil
 	case confirmed:
 		parsed, err := catalog.ParseSchedule([]byte(base.Base))
 		if err != nil {
-			return "", false, fmt.Errorf("syncer: the confirmed base of %s: %w", key, err)
+			return "", false, fmt.Errorf("syncer: the confirmed base of %s in %s: %w", key.Model, key.GroupRef, err)
 		}
 		schedule, ok := scaled(parsed, g.Ratio)
 		if !ok {
@@ -119,9 +130,6 @@ func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans map
 		}
 		fp, err := put(c, key, schedule, adapter.ScaledDerivation(parsed, g.Ratio), "confirmed", plans)
 		return fp, true, err
-	case kept.Plan != "" && !kept.Confirmed:
-		plans[key] = kept.Plan
-		return kept.Plan, false, nil
 	default:
 		return "", false, nil
 	}
@@ -136,7 +144,7 @@ func scaled(base catalog.Schedule, ratio adapter.Amount) (catalog.Schedule, bool
 
 // put makes a plan of the schedule the endpoint's, a new version when it is not the one in force, and returns its
 // fingerprint.
-func put(c *Commit, key string, schedule catalog.Schedule, derivation adapter.Derivation, basis string, plans map[string]string) (string, error) {
+func put(c *Commit, key BaseKey, schedule catalog.Schedule, derivation adapter.Derivation, basis string, plans Plans) (string, error) {
 	b, err := schedule.MarshalJSON()
 	if err != nil {
 		return "", err
@@ -151,7 +159,7 @@ func put(c *Commit, key string, schedule catalog.Schedule, derivation adapter.De
 	fp := fingerprint(b, d)
 	plans[key] = fp
 	if c.State.Plans[key] != fp {
-		c.Plans = append(c.Plans, Plan{Endpoint: key, Fingerprint: fp, Schedule: string(b), Basis: basis, Derivation: d})
+		c.Plans = append(c.Plans, Plan{Endpoint: PlanKey(key.GroupRef, key.Model), Fingerprint: fp, Schedule: string(b), Basis: basis, Derivation: d})
 	}
 	return fp, nil
 }
@@ -217,15 +225,15 @@ func diffModels(c *Commit, g, before GroupSnap) {
 
 // diffPlans sends PlanChanged for each endpoint whose plan differs from the one before, including one that has lost
 // its plan and so its place in routing.
-func diffPlans(c *Commit, now map[string]string) {
-	for _, key := range slices.Sorted(maps.Keys(now)) {
+func diffPlans(c *Commit, now Plans) {
+	for _, key := range slices.SortedFunc(maps.Keys(now), compareKeys) {
 		if old := c.State.Plans[key]; old != now[key] {
-			c.Events = append(c.Events, Event{Kind: PlanChanged, Subject: key, Old: old, New: now[key]})
+			c.Events = append(c.Events, Event{Kind: PlanChanged, Subject: PlanKey(key.GroupRef, key.Model), Old: old, New: now[key]})
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(c.State.Plans)) {
+	for _, key := range slices.SortedFunc(maps.Keys(c.State.Plans), compareKeys) {
 		if _, ok := now[key]; !ok {
-			c.Events = append(c.Events, Event{Kind: PlanChanged, Subject: key, Old: c.State.Plans[key]})
+			c.Events = append(c.Events, Event{Kind: PlanChanged, Subject: PlanKey(key.GroupRef, key.Model), Old: c.State.Plans[key]})
 		}
 	}
 }

@@ -49,7 +49,7 @@ SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = @su
 -- raised, so that a node that held the lease writes neither a step nor a refreshed login. version is given for the same
 -- reason: what a step began with is now behind the state. next_due is the caller's time — the supplier is due at once.
 UPDATE suppliers.sync_states
-SET version = @version, state = @state, next_due = @next_due, lease_holder = NULL, lease_until = NULL,
+SET version = @version, format = @format, state = @state, next_due = @next_due, lease_holder = NULL, lease_until = NULL,
     lease_fence = lease_fence + 1
 WHERE supplier_id = @supplier_id;
 
@@ -99,5 +99,5 @@ UPDATE suppliers.rate_buckets SET window_start = @window_start, used = @used WHE
 -- name: RequestBalanceSync :exec
 -- Preserve the lease and fence; the raised state version makes any step already in flight retry from this state.
 UPDATE suppliers.sync_states
-SET version = @version, state = @state, next_due = LEAST(next_due, @next_due)
+SET version = @version, format = @format, state = @state, next_due = LEAST(next_due, @next_due)
 WHERE supplier_id = @supplier_id;

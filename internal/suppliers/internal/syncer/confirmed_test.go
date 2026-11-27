@@ -43,27 +43,61 @@ func TestAConfirmedBaseStandsInOnlyForNoPrice(t *testing.T) {
 		}
 	}
 
+	// A round that reads no models keeps what the last read said: a published plan stays the plan, a base confirmed
+	// since does not take its place, and a plan made of a base that has been cleared is gone.
 	for _, c := range []struct {
-		name  string
-		model adapter.Model
-		kept  bool // the plan survives a round that reads no models after the base is cleared
+		name          string
+		model         adapter.Model
+		before, after []ConfirmedBase // the bases of the round that reads the models, and of the one that does not
+		basis         string          // the plan's after the second round; "" for none
 	}{
-		{"a published plan is kept", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, true},
-		{"a plan made of a cleared base is not", adapter.Model{UpstreamName: "m1"}, false},
+		{"a published plan is kept", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, base, nil, "published"},
+		{"a published plan is kept over a base confirmed later", adapter.Model{UpstreamName: "m1", Cost: &published, Published: true}, nil, base, "published"},
+		{"a published price no schedule expresses stays unknown", adapter.Model{UpstreamName: "m1", Published: true}, nil, base, ""},
+		{"a plan made of a cleared base is not kept", adapter.Model{UpstreamName: "m1"}, base, nil, ""},
 	} {
 		m := healthy()
 		m.offer = offerOf(c.model, "1.5")
 		e, st, clk := engine(m)
-		st.state.Confirmed = base
+		st.state.Confirmed = c.before
 		round(t, e)
-		st.state.Confirmed = nil
+		st.state.Confirmed = c.after
 		m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
 			return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{Ref: "1", Name: "g", Ratio: "1.5", Facts: adapter.GroupFacts(`{}`), ModelsUnread: true}}}, nil
 		}
 		clk.advance(10 * time.Minute)
 		round(t, e)
-		if kept := st.state.Plans["1/m1"] != ""; kept != c.kept {
-			t.Errorf("%s: plan %q after the base was cleared, want kept %t", c.name, st.state.Plans["1/m1"], c.kept)
+		basis := ""
+		for _, p := range st.plans {
+			if fp := st.state.Groups[0].Models[0].Plan; fp != "" && p.Fingerprint == fp {
+				basis = p.Basis
+			}
 		}
+		if basis != c.basis {
+			t.Errorf("%s: the plan after a round that read no models is %q, want %q", c.name, basis, c.basis)
+		}
+	}
+}
+
+// TestEndpointsWhoseJoinedNamesMeetKeepTheirOwnPlans: a plan is kept by its group and model, not by the two joined, so
+// the model b/c of group a and the model c of group a/b each keep their own plan and their own confirmed base.
+func TestEndpointsWhoseJoinedNamesMeetKeepTheirOwnPlans(t *testing.T) {
+	t.Parallel()
+	m := healthy()
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{
+			{Ref: "a", Name: "a", Ratio: "1", Facts: adapter.GroupFacts(`{}`), Models: []adapter.Model{{UpstreamName: "b/c"}}},
+			{Ref: "a/b", Name: "a/b", Ratio: "2", Facts: adapter.GroupFacts(`{}`), Models: []adapter.Model{{UpstreamName: "c"}}},
+		}}, nil
+	}
+	e, st, _ := engine(m)
+	st.state.Confirmed = []ConfirmedBase{
+		{GroupRef: "a", Model: "b/c", Base: confirmedBase},
+		{GroupRef: "a/b", Model: "c", Base: confirmedBase},
+	}
+	round(t, e)
+	one, two := st.state.Groups[0].Models[0].Plan, st.state.Groups[1].Models[0].Plan
+	if len(st.state.Plans) != 2 || one == "" || two == "" || one == two {
+		t.Errorf("plans %v, fingerprints %q and %q; want two plans of their own, the second at twice the ratio", st.state.Plans, one, two)
 	}
 }
