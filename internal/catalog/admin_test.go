@@ -296,10 +296,23 @@ func TestNamesAreUnique(t *testing.T) {
 		_, err := s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: other, Name: name, Visibility: catalog.VisibilityInternal})
 		wantErr(t, err, "already taken")
 	}
-	// The database refuses a public name that cannot be called, whatever the program computed.
-	for _, name := range []string{"acme/model-latest", "acme/model@1"} {
-		_, err := s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: id, Name: name, Visibility: catalog.VisibilityPublic})
-		wantErr(t, err, "public_name")
+	// A name the database would refuse is refused as a broken catalog rule that says which, not left to the database's
+	// check, which the admin API answers with a 500 (#951): a public name cannot look like an alias or a pinned version,
+	// and no name holds an alias's ~.
+	for _, c := range []struct {
+		name       string
+		visibility catalog.Visibility
+		want       string
+	}{
+		{"acme/model-latest", catalog.VisibilityPublic, "-latest"},
+		{"acme/model@1", catalog.VisibilityPublic, "@"},
+		{"~acme/model-latest", catalog.VisibilityInternal, "~"},
+	} {
+		_, err := s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: id, Name: c.name, Visibility: c.visibility})
+		if !errors.Is(err, catalog.ErrInvalid) {
+			t.Errorf("adding %s name %q: %v, want %v", c.visibility, c.name, err, catalog.ErrInvalid)
+		}
+		wantErr(t, err, c.want)
 	}
 	s.must(s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: id, Name: "acme/model-latest", Visibility: catalog.VisibilityInternal}))
 }
