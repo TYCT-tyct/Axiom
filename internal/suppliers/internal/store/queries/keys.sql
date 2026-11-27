@@ -80,6 +80,12 @@ VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @
 -- Whether the group has a credential that holds a key or waits for one.
 SELECT EXISTS (SELECT FROM suppliers.credentials WHERE supplier_group_id = @group_id AND status <> 'erased')::boolean;
 
+-- name: GroupCredentialID :many
+-- The first credential of a group that holds a key or waits for one: what a person's make waits for the sync to store.
+SELECT id FROM suppliers.credentials
+WHERE supplier_id = @supplier_id AND supplier_group_id = @group_id AND status <> 'erased'
+ORDER BY id LIMIT 1;
+
 -- name: SetCredentialRejected :exec
 -- The call path learned the supplier refused this key (401). Addressed by credential: the caller holds an id from the
 -- snapshot. Only an active key: a person's switch and an erasure stand.

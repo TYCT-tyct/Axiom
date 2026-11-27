@@ -38,6 +38,9 @@ func NewWithClock(now func() time.Time) *Adapter { return &Adapter{now: now} }
 // Kind is the value of suppliers.kind.
 func (*Adapter) Kind() adapter.Kind { return "sub2api" }
 
+// MakesKeys implements adapter.KeyMakerSource: every sub2api manager makes keys.
+func (*Adapter) MakesKeys() bool { return true }
+
 // Buckets declares the limits that this adapter's requests count against.
 func (*Adapter) Buckets() []adapter.BucketSpec {
 	return []adapter.BucketSpec{

@@ -115,6 +115,7 @@ type Keys struct {
 	List         KeyList    `json:"list"`
 	Secret       KeySecret  `json:"secret"`
 	Create       *KeyCreate `json:"create,omitempty"`
+	Delete       *KeyDelete `json:"delete,omitempty"`
 	Unrestricted bool       `json:"unrestricted,omitempty"`
 	Policy       *KeyPolicy `json:"policy,omitempty"`
 }
@@ -156,6 +157,13 @@ type KeyCreate struct {
 	Body   map[string]string `json:"body,omitempty"`
 	Ref    string            `json:"ref"`
 	Bucket string            `json:"bucket,omitempty"`
+}
+
+// KeyDelete revokes one key by its id, {ref} in the path; any 2xx is done. A declaration that makes keys declares it, so a
+// second key the sync finds for a group is revoked.
+type KeyDelete struct {
+	Path   string `json:"path"`
+	Bucket string `json:"bucket,omitempty"`
 }
 
 // Charges reads the per-request charge records. A declarative adapter requires it: without the records the cost of a

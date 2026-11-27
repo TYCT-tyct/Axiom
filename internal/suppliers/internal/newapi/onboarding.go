@@ -31,31 +31,49 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	if err != nil {
 		return "", err
 	}
-	return m.keyCreated(ctx, name, groupRef, resp)
+	// Its successful answer has no id, so a made key is found by the name the sync gave it; a lost answer is adopted by
+	// that name on the next complete listing.
+	if err := keyWritten(resp, "make the key"); err != nil {
+		return "", err
+	}
+	return m.keyByName(ctx, name, groupRef)
 }
 
-// keyCreated reads what new-api said to an add. Its successful answer has no id, so a made key is found by the name the
-// sync gave it; a lost answer is adopted by that name on the next complete listing.
-func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp adapter.Response) (adapter.KeyRef, error) {
+// DeleteKey implements adapter.KeyMaker with new-api's delete of one of the account's tokens. A token new-api does not
+// have is answered like any refusal, so a key already gone is refused, and the next listing no longer has it.
+func (m *manager) DeleteKey(ctx context.Context, ref adapter.KeyRef) error {
+	id, err := strconv.ParseInt(string(ref), 10, 64)
+	if err != nil || id <= 0 {
+		return fmt.Errorf("%w: a token id %q", adapter.ErrUnrecognised, ref)
+	}
+	resp, err := m.api.send(ctx, http.MethodDelete, "/api/token/"+strconv.FormatInt(id, 10), global, nil)
+	if err != nil {
+		return err
+	}
+	return keyWritten(resp, "delete the key")
+}
+
+// keyWritten reads what new-api said to a change of a token: nil when it was made.
+func keyWritten(resp adapter.Response, what string) error {
 	var env envelope
 	parsed := jsonx.Unmarshal(resp.Body, &env) == nil
 	switch {
 	case resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden:
 		refused := authError(env, parsed)
 		if scopeDenied(refused) {
-			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, refused)
+			return fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, refused)
 		}
-		return "", refused
+		return refused
 	case resp.Status == http.StatusOK && parsed && env.Success:
-		return m.keyByName(ctx, name, groupRef)
+		return nil
 	case resp.Status == http.StatusOK && parsed:
-		// A token limit, a group the account cannot use, or another refusal the supplier states in its words. The
-		// words are not kept: they may echo the request, and the class is all the page needs.
-		return "", adapter.ErrKeyRefused
+		// A token limit, a group the account cannot use, a token it does not have, or another refusal the supplier
+		// states in its words. The words are not kept: they may echo the request, and the class is all the page needs.
+		return adapter.ErrKeyRefused
 	case resp.Status >= http.StatusInternalServerError:
-		return "", fmt.Errorf("%w: make the key: status %d", errServer, resp.Status)
+		return fmt.Errorf("%w: %s: status %d", errServer, what, resp.Status)
 	default:
-		return "", fmt.Errorf("%w: make the key: status %d", adapter.ErrUnrecognised, resp.Status)
+		return fmt.Errorf("%w: %s: status %d", adapter.ErrUnrecognised, what, resp.Status)
 	}
 }
 

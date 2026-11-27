@@ -2304,7 +2304,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a relay's group with a key made for it or pasted
-         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409, before any key is made: it is paused and resumed with `selectSupplierGroup`, keeping its key.
+         * @description Selects a group that has no credential yet and gives it one. `make`: selects the group and asks the sync for its key, which only the sync makes at a supplier: its next round adopts the key Axiom made for the group earlier if the supplier lists one, or makes one, and seals its text. The request waits up to 20 seconds for that round: 201 when the key is stored by then, otherwise 202 with the group, whose `key_state` (`getSupplier`) turns `ready` once it is stored, or `failed` with the reason. An adapter that cannot make keys is 422, and so is a group none of whose models Axiom can sell; a supplier the sync does not run now (paused, needing a person) is 409. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409, before anything is asked of the supplier: it is paused and resumed with `selectSupplierGroup`, keeping its key.
          */
         post: operations["connectSupplierGroup"];
         delete?: never;
@@ -6953,7 +6953,7 @@ export interface components {
         CredentialStatus: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled" | "rejected" | "erased";
         GroupConnection: {
             /**
-             * @description `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+             * @description `make`: the sync makes a key for the group at the supplier; `paste`: `key` is one the person made there.
              * @enum {string}
              */
             key_source: "make" | "paste";
@@ -12369,6 +12369,16 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GroupConnected"];
+                };
+            };
+            /** @description `make` only: the group is selected and the sync has not stored its key yet. */
+            202: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierGroup"];
                 };
             };
             400: components["responses"]["BadRequest"];

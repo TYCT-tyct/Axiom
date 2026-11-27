@@ -202,14 +202,24 @@ type UsageQueueManager interface {
 }
 
 // KeyMaker is the optional half of a management side that can make a key of its own. An adapter that can serve a group
-// only through such a key implements it. The sync calls CreateKey only for a group with no stored key; a key whose
-// response was lost is adopted by its name on the next complete listing, and made again only if that listing does not
-// show it.
+// only through such a key implements it. Only the sync calls it, under the supplier's lease, and only for a group whose
+// complete listing has no key of ours to adopt (docs/domains/suppliers.md「接入流程」): a key whose response was lost
+// is adopted by its name on the next complete listing, and any second one is revoked there.
 type KeyMaker interface {
 	// CreateKey makes a dedicated key for the group, named name, with no quota, expiry or model limit, and returns its
 	// id at the supplier. The text is read through KeySecret. Errors that say the group cannot have a key are
 	// ErrKeyNotPermitted, ErrKeyGroupUnavailable and ErrKeyRefused; anything else is a failure of the task.
 	CreateKey(ctx context.Context, groupRef, name string) (KeyRef, error)
+	// DeleteKey revokes a key Axiom made and does not store, by its id at the supplier. ErrKeyNotPermitted,
+	// ErrKeyGroupUnavailable and ErrKeyRefused are the supplier's refusal of this one key; anything else is a failure of
+	// the task.
+	DeleteKey(ctx context.Context, ref KeyRef) error
+}
+
+// KeyMakerSource marks an adapter whose managers make keys (KeyMaker). The admin asks it before it asks the sync for a
+// key, without opening a login, so a supplier that cannot have one is refused instead of left waiting.
+type KeyMakerSource interface {
+	MakesKeys() bool
 }
 
 // KeyFinder is the optional half of a management side that can say which of the supplier's keys a text is: a key a

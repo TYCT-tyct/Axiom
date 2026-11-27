@@ -14,6 +14,14 @@ WHERE g.supplier_id = @supplier_id
   )
 ORDER BY g.upstream_ref;
 
+-- name: SupplierKeyRefs :many
+-- The supplier's keys its credentials hold or wait for, with their group: the keys the sync never revokes.
+SELECT g.upstream_ref AS group_ref, c.upstream_key_ref
+FROM suppliers.credentials c
+JOIN suppliers.supplier_groups g ON g.id = c.supplier_group_id
+WHERE c.supplier_id = @supplier_id AND c.status <> 'erased'
+ORDER BY g.upstream_ref, c.upstream_key_ref;
+
 -- name: GroupIDsOf :many
 SELECT id, upstream_ref FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id;
 

@@ -56,6 +56,18 @@ func taskViews(st syncer.State, now time.Time) []TaskView {
 // version fences out a round already in flight, which then starts again from this state. It answers the tasks as they
 // now stand.
 func RequestSync(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) ([]TaskView, error) {
+	return requestTasks(ctx, tx, id, now, func(syncer.Task) bool { return true })
+}
+
+// RequestKeys is RequestSync of the keys task alone: the round it brings forward is the one that makes or adopts the key
+// a person asked for.
+func RequestKeys(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
+	_, err := requestTasks(ctx, tx, id, now, func(t syncer.Task) bool { return t == syncer.TaskKeys })
+	return err
+}
+
+// requestTasks brings the tasks of a supplier that ask says forward to now, as RequestSync describes.
+func requestTasks(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time, ask func(syncer.Task) bool) ([]TaskView, error) {
 	q := store.New()
 	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
 		return nil, err
@@ -70,7 +82,7 @@ func RequestSync(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) ([]
 	}
 	changed := false
 	for i := range st.Tasks {
-		if t := &st.Tasks[i]; st.Status == syncer.Normal && !t.Halted && t.Due.After(now) {
+		if t := &st.Tasks[i]; ask(syncer.Task(i)) && st.Status == syncer.Normal && !t.Halted && t.Due.After(now) {
 			t.Due, changed = now, true
 		}
 	}
@@ -90,6 +102,6 @@ func RequestSync(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) ([]
 	return taskViews(st, now), nil
 }
 
-// KeyName is the name the sync gives a key it makes for a group, which a key made at a person's asking takes too: a
-// key whose answer was lost is then adopted by the next listing instead of made twice.
+// KeyName is the name the sync gives a key it makes for a group: a key whose answer was lost is then adopted by the next
+// listing instead of made twice.
 func KeyName(supplier uuid.UUID, groupRef string) string { return keyName(supplier, groupRef) }

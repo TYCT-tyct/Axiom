@@ -724,7 +724,7 @@ func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppli
 }
 
 const lockGroup = `-- name: LockGroup :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible
 FROM suppliers.supplier_groups WHERE id = $1 AND supplier_id = $2 FOR UPDATE
 `
 
@@ -742,6 +742,7 @@ type LockGroupRow struct {
 	Selected    bool
 	Codename    *string
 	Present     bool
+	KeyEligible bool
 }
 
 func (q *Queries) LockGroup(ctx context.Context, db DBTX, arg LockGroupParams) ([]LockGroupRow, error) {
@@ -762,6 +763,7 @@ func (q *Queries) LockGroup(ctx context.Context, db DBTX, arg LockGroupParams) (
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.KeyEligible,
 		); err != nil {
 			return nil, err
 		}

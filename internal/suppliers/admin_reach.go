@@ -19,8 +19,9 @@ import (
 	"axiom/internal/suppliers/internal/store"
 )
 
-// The admin's own requests to a supplier (README.md「管理接口」): making a key for a group, finding which of its keys a
-// pasted text is, and checking a key with one request the supplier does not charge for. Each runs before the change it
+// The admin's own requests to a supplier (README.md「管理接口」): finding which of its keys a pasted text is, and
+// checking a key with one request the supplier does not charge for. A key Axiom makes is the sync's to make
+// (RequestKey), never the admin's. Each runs before the change it
 // leads to is written, in no transaction of the caller's, so no connection is held while a third party answers; the
 // management requests count in the supplier's shared rate buckets, as the sync's do.
 
@@ -58,40 +59,6 @@ func (e *KeyRefusal) Error() string {
 type Reach struct {
 	DB    *pg.DB
 	Scope pg.Scope
-}
-
-// MadeKey is a key made for a group at the supplier: its ID there, the group's ref, and its text, which is only sealed.
-type MadeKey struct {
-	Ref, GroupRef string
-	Text          secret.Secret
-}
-
-// MakeKey makes a dedicated key for one of a relay's groups, named as the sync names the keys it makes, and reads its
-// text. A key whose answer was lost is adopted by that name by the sync's next listing, not made twice. A group the
-// supplier no longer lists (ErrGroupGone) or one that has a credential already (ErrGroupHasKey) is refused before the
-// supplier is asked: the key would be live there and stored nowhere. ConnectGroup checks both again under the lock.
-func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (MadeKey, error) {
-	sup, ref, err := a.groupToReach(ctx, r, supplier, group)
-	if err != nil {
-		return MadeKey{}, err
-	}
-	m, err := a.manager(ctx, r, sup)
-	if err != nil {
-		return MadeKey{}, err
-	}
-	maker, ok := m.(adapter.KeyMaker)
-	if !ok {
-		return MadeKey{}, ErrCannotMakeKey
-	}
-	made, err := maker.CreateKey(ctx, ref, persist.KeyName(supplier, ref))
-	if err != nil {
-		return MadeKey{}, keyError(err)
-	}
-	text, err := m.KeySecret(ctx, made)
-	if err != nil {
-		return MadeKey{}, keyError(err)
-	}
-	return MadeKey{Ref: string(made), GroupRef: ref, Text: text}, nil
 }
 
 // FoundKey is which of the supplier's keys a pasted text is: its ID there, the ref of the group it is listed under,
@@ -164,8 +131,6 @@ func keyError(err error) error {
 		return &KeyRefusal{Reason: "group_unavailable"}
 	case errors.Is(err, adapter.ErrKeyRefused):
 		return &KeyRefusal{Reason: "refused"}
-	case errors.Is(err, adapter.ErrNoKeyMaker):
-		return ErrCannotMakeKey
 	case errors.Is(err, adapter.ErrNoKeyFinder):
 		return ErrCannotFindKey
 	case errors.Is(err, adapter.ErrAuthRejected):
@@ -209,35 +174,6 @@ func (a *Admin) supplierToReach(ctx context.Context, r Reach, supplier uuid.UUID
 		return reachable{}, ErrNoAdapter
 	}
 	return reachable{id: supplier, origin: row.Origin, apiFormat: deref(row.ApiFormat), adapter: ad}, nil
-}
-
-// groupToReach is supplierToReach for a group of the supplier that a key can be made for, with the group's ref there:
-// one the supplier still lists and that has no credential.
-func (a *Admin) groupToReach(ctx context.Context, r Reach, supplier, group uuid.UUID) (reachable, string, error) {
-	sup, err := a.supplierToReach(ctx, r, supplier)
-	if err != nil {
-		return reachable{}, "", err
-	}
-	var ref string
-	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
-		g, err := a.group(ctx, tx, supplier, group)
-		if err != nil {
-			return err
-		}
-		if !g.Present {
-			return ErrGroupGone
-		}
-		has, err := store.New().GroupHasCredential(ctx, tx, group)
-		switch {
-		case err != nil:
-			return fmt.Errorf("read the group's keys: %w", err)
-		case has:
-			return ErrGroupHasKey
-		}
-		ref = g.UpstreamRef
-		return nil
-	})
-	return sup, ref, err
 }
 
 // manager logs in to the supplier with the login the sync uses. A login the adapter would refresh is not stored from

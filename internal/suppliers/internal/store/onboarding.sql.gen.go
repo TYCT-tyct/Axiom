@@ -258,3 +258,37 @@ func (q *Queries) SetGroupKeyError(ctx context.Context, db DBTX, arg SetGroupKey
 	)
 	return err
 }
+
+const supplierKeyRefs = `-- name: SupplierKeyRefs :many
+SELECT g.upstream_ref AS group_ref, c.upstream_key_ref
+FROM suppliers.credentials c
+JOIN suppliers.supplier_groups g ON g.id = c.supplier_group_id
+WHERE c.supplier_id = $1 AND c.status <> 'erased'
+ORDER BY g.upstream_ref, c.upstream_key_ref
+`
+
+type SupplierKeyRefsRow struct {
+	GroupRef       string
+	UpstreamKeyRef string
+}
+
+// The supplier's keys its credentials hold or wait for, with their group: the keys the sync never revokes.
+func (q *Queries) SupplierKeyRefs(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]SupplierKeyRefsRow, error) {
+	rows, err := db.Query(ctx, supplierKeyRefs, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SupplierKeyRefsRow
+	for rows.Next() {
+		var i SupplierKeyRefsRow
+		if err := rows.Scan(&i.GroupRef, &i.UpstreamKeyRef); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

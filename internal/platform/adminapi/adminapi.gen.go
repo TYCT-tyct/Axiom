@@ -31672,6 +31672,30 @@ func (response ConnectSupplierGroup201JSONResponse) VisitConnectSupplierGroupRes
 	return err
 }
 
+type ConnectSupplierGroup202ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ConnectSupplierGroup202JSONResponse struct {
+	Body    SupplierGroup
+	Headers ConnectSupplierGroup202ResponseHeaders
+}
+
+func (response ConnectSupplierGroup202JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ConnectSupplierGroup400JSONResponse struct{ BadRequestJSONResponse }
 
 func (response ConnectSupplierGroup400JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {

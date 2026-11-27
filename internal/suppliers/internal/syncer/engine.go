@@ -28,17 +28,25 @@ type Store interface {
 // KeyStore is the optional half of a Store that lets the sync onboard a supplier's groups by itself. A Store without it
 // keeps the keys a person bound, and makes none.
 type KeyStore interface {
-	// KeysToMake lists the groups that need a key of ours and have none, with the name the key is made under.
-	KeysToMake(ctx context.Context) ([]KeyTarget, error)
+	// KeyGroups lists the groups whose keys of ours the keys step reconciles: each that needs a key of ours and has
+	// none, and each that has a credential.
+	KeyGroups(ctx context.Context) ([]KeyGroup, error)
 	// KeysToBind lists the credentials a person bound by reference that the sync has not read the text of yet, and
 	// whose group is not waiting out a failure.
 	KeysToBind(ctx context.Context, now time.Time) ([]BindTarget, error)
+	// Revoked records that the sync revoked a key of the group at the supplier. It commits on its own: the key is gone
+	// whether or not the step that revoked it commits.
+	Revoked(ctx context.Context, groupRef string, ref adapter.KeyRef) error
 }
 
-// KeyTarget is a group the sync makes a key for, and the name that marks the key as ours.
-type KeyTarget struct {
+// KeyGroup is a group as the keys step reconciles it: Name marks a key Axiom made for it, Stored are the supplier's
+// refs of its credentials that are not erased, and Make is set when it needs a key of ours and has none (so Stored is
+// empty).
+type KeyGroup struct {
 	GroupRef string
 	Name     string
+	Stored   []adapter.KeyRef
+	Make     bool
 }
 
 // BindTarget is a credential waiting for its key's text.

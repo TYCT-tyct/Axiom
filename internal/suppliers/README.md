@@ -141,7 +141,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `MapModel`、`MapPending` | `ErrAliasExists`、`ErrAliasRevision`、`ErrNotPending`、`ErrModelTaken`、`ErrNoGroup`、`ErrStatusLocked` |
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`、`EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
-| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
-| `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
+| `FindKey`、`CheckKey`、`CheckCredential`、`AwaitKey`（经 `Reach`，不在调用方事务里） | `ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
+| `ConnectGroup`、`RequestKey`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrCannotMakeKey`、`ErrNoKeyNeeded`、`ErrKeyBound`、`ErrStatusLocked` |
 | `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
 | `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

@@ -37,6 +37,30 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	return createdKey(resp)
 }
 
+// DeleteKey implements adapter.KeyMaker with sub2api's delete of one of the account's keys. A key sub2api does not have
+// (404) is refused like any other, and the next listing no longer has it.
+func (m *manager) DeleteKey(ctx context.Context, ref adapter.KeyRef) error {
+	id, err := pathID(string(ref))
+	if err != nil {
+		return err
+	}
+	resp, err := m.s.authed(ctx, adapter.Request{Method: http.MethodDelete, Path: "/api/v1/keys/" + id, Buckets: []string{bucketPanel}})
+	switch {
+	case err != nil:
+		return err
+	case resp.Status == http.StatusOK:
+		return nil
+	case resp.Status == http.StatusForbidden:
+		return adapter.ErrKeyNotPermitted
+	case resp.Status == http.StatusNotFound, resp.Status == http.StatusBadRequest:
+		return adapter.ErrKeyRefused
+	case resp.Status >= http.StatusInternalServerError:
+		return statusError("delete the key", resp)
+	default:
+		return fmt.Errorf("%w: delete the key: status %d", adapter.ErrUnrecognised, resp.Status)
+	}
+}
+
 // createdKey names what sub2api said to a create: the account may not use the group, the login may not manage keys, the
 // group is gone, the supplier refuses, or its error is the task's to retry.
 func createdKey(resp adapter.Response) (adapter.KeyRef, error) {

@@ -22,7 +22,7 @@ import (
 // arrival, never returned beyond its last four characters, and never in an idempotency fingerprint or an audit entry.
 
 // supplierRequestLimit bounds a change that asks the supplier first: the requests to it, and the write after, outlive a
-// client that went away, so a key made at the supplier is stored.
+// client that went away, so a key the supplier confirmed is stored.
 const supplierRequestLimit = time.Minute
 
 // probed runs a change that needs answers from a supplier first, under its Idempotency-Key: a replay answers from the
@@ -103,7 +103,7 @@ func last4(text string) string {
 	return string(r[len(r)-4:])
 }
 
-// ConnectSupplierGroup selects a group that has no key yet and gives it one: made at the supplier now, or pasted.
+// ConnectSupplierGroup selects a group that has no key yet and gives it one: made by the sync, or pasted.
 func (a adminAPI) ConnectSupplierGroup(ctx context.Context, request adminapi.ConnectSupplierGroupRequestObject) (adminapi.ConnectSupplierGroupResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -123,11 +123,14 @@ func (a adminAPI) ConnectSupplierGroup(ctx context.Context, request adminapi.Con
 	if err != nil {
 		return nil, err
 	}
+	if b.KeySource == adminapi.Make {
+		return a.requestGroupKey(ctx, claim, supplier, group, b.Reason)
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
 	defer cancel()
 	var key suppliers.GroupKey
 	body, replayed, err := probed(ctx, a, claim, func(ctx context.Context) (err error) {
-		key, err = a.groupKey(ctx, supplier, group, b.KeySource, text)
+		key, err = a.pastedGroupKey(ctx, supplier, text)
 		return keyProblem(err, "/key")
 	}, func(tx pg.Tx) (adminapi.GroupConnected, error) {
 		g, c, err := a.suppliers.ConnectGroup(ctx, tx, actor(ctx), supplier, group, key, b.Reason)
@@ -157,13 +160,44 @@ func connectionKey(b *adminapi.GroupConnection) (secret.Secret, string, error) {
 	return text, last4(*b.Key), err
 }
 
-// groupKey asks the supplier for the key a group is connected with: one it makes now, or which of its keys the pasted
-// text is, which must be listed, usable, and is stored with what the supplier lets it call.
-func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, source adminapi.GroupConnectionKeySource, text secret.Secret) (suppliers.GroupKey, error) {
-	if source == adminapi.Make {
-		made, err := a.suppliers.MakeKey(ctx, a.reach(ctx), supplier, group)
-		return suppliers.GroupKey{Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text}, err
+// requestGroupKey connects a group with a key the sync makes: the change asks the sync for it, and the answer waits up to
+// keyWaitLimit for the round that stores it. A replay asks nothing again and does not wait: it answers how the key
+// stands now.
+func (a adminAPI) requestGroupKey(ctx context.Context, claim idem.Claim, supplier, group uuid.UUID, reason string) (adminapi.ConnectSupplierGroupResponseObject, error) {
+	_, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.SupplierGroup, error) {
+		g, err := a.suppliers.RequestKey(ctx, tx, actor(ctx), supplier, group, reason)
+		return groupBody(g), err
+	})
+	if err != nil {
+		return nil, err
 	}
+	limit := keyWaitLimit
+	if replayed {
+		limit = 0
+	}
+	wait, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	g, c, err := a.suppliers.AwaitKey(wait, a.reach(ctx), supplier, group)
+	if err != nil {
+		return nil, err
+	}
+	header := replayedHeader(replayed)
+	if c == nil {
+		return adminapi.ConnectSupplierGroup202JSONResponse{Body: groupBody(g), Headers: adminapi.ConnectSupplierGroup202ResponseHeaders{IdempotencyReplayed: header}}, nil
+	}
+	a.leaveRouting(ctx, false)
+	return adminapi.ConnectSupplierGroup201JSONResponse{
+		Body:    adminapi.GroupConnected{Group: groupBody(g), Credential: a.credentialBody(*c)},
+		Headers: adminapi.ConnectSupplierGroup201ResponseHeaders{IdempotencyReplayed: header},
+	}, nil
+}
+
+// keyWaitLimit is how long a make waits for the sync: one sweep (15 seconds) and a short round.
+const keyWaitLimit = 20 * time.Second
+
+// pastedGroupKey asks the supplier which of its keys the pasted text is, which must be listed, usable, and is stored
+// with what the supplier lets it call.
+func (a adminAPI) pastedGroupKey(ctx context.Context, supplier uuid.UUID, text secret.Secret) (suppliers.GroupKey, error) {
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
 	switch {
 	case err != nil:
@@ -172,7 +206,7 @@ func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, sourc
 	case found.Status != string(adminapi.KeyIdentificationStatusActive):
 		err = suppliers.ErrKeyUnusable
 	}
-	return suppliers.GroupKey{Source: "pasted", Ref: found.Ref, GroupRef: found.GroupRef, Text: text, Policy: found.Policy}, err
+	return suppliers.GroupKey{Ref: found.Ref, GroupRef: found.GroupRef, Text: text, Policy: found.Policy}, err
 }
 
 // IdentifySupplierKey asks the supplier which of its keys a pasted text is, and stores nothing: 10 a minute per session,
