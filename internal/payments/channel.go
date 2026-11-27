@@ -116,6 +116,10 @@ type Notice struct {
 	Order, TradeNo    string
 	Paid              Money
 	Raw               string
+	// Checkout, when set, is the reference Create returned (Checkout.TradeNo) for the payment this notice reports. The
+	// core credits an order only when it is that order's stored reference: an order ID alone can be named by anyone
+	// who can create a payment in the same provider account.
+	Checkout string
 	// Dispute is set when the event is a chargeback. It takes precedence over Success and Paid; the core books it
 	// against the order the payment intent belongs to.
 	Dispute *DisputeNotice
@@ -168,6 +172,7 @@ type RefundCall struct {
 	Order                OrderID
 	TradeNo, ProviderRef string
 	Amount               Money
+	Refunded             Money // what the order's earlier refunds through this channel returned, for channels that echo a running total
 	Reason               string
 	SentAt               time.Time // when the refund was first sent; zero when unknown
 }

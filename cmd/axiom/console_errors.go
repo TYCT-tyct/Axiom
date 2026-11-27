@@ -17,7 +17,6 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
-	"axiom/internal/routing"
 )
 
 // apiError is a failure with the status and code the contract gives it. A handler returns it, or an error that
@@ -41,74 +40,14 @@ type refusal struct {
 	message string
 }
 
-// refusals are how the modules' refusals are answered, in the order they are tried. The message is English for logs
-// and developers, and never repeats what the client sent.
-var refusals = []refusal{
-	{accounts.ErrProfileName, http.StatusBadRequest, codeInvalidRequest, "display name must be 1 to 100 characters after trimming"},
-	{accounts.ErrEmailChangeExpired, http.StatusUnprocessableEntity, codeInvalidVerification, "email change link expired; request another"},
-	{accounts.ErrEmailChangeInvalid, http.StatusUnprocessableEntity, codeInvalidVerification, "email change link invalid, replaced or already used"},
-	{accounts.ErrPreset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid preset configuration"},
-	{accounts.ErrPresetConflict, http.StatusConflict, codeConflict, "preset slug exists or limit reached"},
-	{accounts.ErrNotificationPreferences, http.StatusUnprocessableEntity, codeUnprocessable, "invalid notification preferences"},
-	{accounts.ErrBillingPreference, http.StatusUnprocessableEntity, codeUnprocessable, "invalid billing preference"},
-	{accounts.ErrBillingPreferenceRollout, http.StatusConflict, codeConflict, "billing preference waits for every gateway node to support it"},
-	{accounts.ErrAnnouncement, http.StatusUnprocessableEntity, codeUnprocessable, "invalid announcement validity window"},
-	{accounts.ErrInvalidReset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid or expired password reset link"},
-	{accounts.ErrOAuthNotConfigured, http.StatusNotFound, codeNotFound, "third-party sign-in is not configured"},
-	{accounts.ErrWrongLoginDomain, http.StatusForbidden, codeLoginDomainRequired, "use the site's login domain"},
-	{accounts.ErrAccountNotLinked, http.StatusForbidden, codeAccountNotLinked, "this provider account is not linked to a user"},
-	{accounts.ErrIdentityLinked, http.StatusConflict, codeIdentityTaken, "this provider account is linked to another user"},
-	{accounts.ErrIdentityAlreadyLinked, http.StatusConflict, codeIdentityAlreadyLinked, "unlink this provider before linking another account from it"},
-	{accounts.ErrMFARequired, http.StatusForbidden, codeMfaRequired, "this needs a session that passed two-step verification"},
-	{accounts.ErrConsentRequired, http.StatusForbidden, codeConsentRequired, "the current legal documents must be accepted first"},
-	{accounts.ErrOAuthFailed, http.StatusBadRequest, codeInvalidRequest, "the provider did not complete the sign-in"},
-	{accounts.ErrPasskeysOff, http.StatusNotFound, codeNotFound, "passkeys are not enabled"},
-	{accounts.ErrPasskeyFailed, http.StatusBadRequest, codeInvalidRequest, "the passkey ceremony failed"},
-	{accounts.ErrTooManyPasskeys, http.StatusConflict, codeConflict, "the user has the most passkeys a user may hold"},
-	{accounts.ErrLoginDomainLocked, http.StatusConflict, codeLoginDomainLocked, "the site's sign-in assets bind it to this login domain"},
-	{accounts.ErrLoginDomainRequired, http.StatusBadRequest, codeLoginDomainRequired, "passkeys need a login domain"},
-	{accounts.ErrPasskeysInUse, http.StatusConflict, codeConflict, "users of this site still hold passkeys; they must remove them before passkeys can be turned off"},
-	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
-	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},
-	{accounts.ErrMFAExhausted, http.StatusUnauthorized, codeUnauthenticated, "the pending sign-in has used up its attempts; sign in again"},
-	{accounts.ErrBadCode, http.StatusUnauthorized, codeInvalidCode, "wrong code"},
-	{accounts.ErrBadOrigin, http.StatusForbidden, codeOriginRejected, "the origin, content type or CSRF token is not accepted"},
-	{accounts.ErrForbidden, http.StatusForbidden, codeForbidden, "this session may not do that"},
-	{accounts.ErrNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
-	{accounts.ErrKeyNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
-	{accounts.ErrUnknownHost, http.StatusNotFound, codeNotFound, "no such resource"},
-	{pg.ErrNoRows, http.StatusNotFound, codeNotFound, "no such resource"},
-	{accounts.ErrInvalidInvite, http.StatusUnprocessableEntity, codeInvalidInvite, "the invite code is not usable"},
-	{accounts.ErrRegistrationClosed, http.StatusForbidden, codeRegistrationClosed, "registration is closed"},
-	{accounts.ErrHumanCheck, http.StatusUnprocessableEntity, codeHumanCheck, "the human check did not pass"},
-	{accounts.ErrEmailDomainNotAllowed, http.StatusUnprocessableEntity, codeEmailDomain, "the email domain is not allowed"},
-	{accounts.ErrInvalidVerification, http.StatusUnprocessableEntity, codeInvalidVerification, "invalid or expired verification link"},
-	{accounts.ErrWeakPassword, http.StatusUnprocessableEntity, codeWeakPassword, "the password must be 12 to 256 characters"},
-	{accounts.ErrBadEmail, http.StatusUnprocessableEntity, codeUnprocessable, "not an email address"},
-	{accounts.ErrEmailTaken, http.StatusConflict, codeEmailTaken, "the email is already registered"},
-	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
-	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
-	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
-	{accounts.ErrWorkspaceNotFound, http.StatusBadRequest, codeInvalidRequest, "workspace_id is not a workspace of the account"},
-	{accounts.ErrWorkspaceDisabled, http.StatusConflict, codeConflict, "the workspace is disabled; enable it or choose another"},
-	{accounts.ErrWorkspaceNameTaken, http.StatusConflict, codeNameTaken, "a workspace of the account has that name"},
-	{accounts.ErrTooManyWorkspaces, http.StatusConflict, codeConflict, "the account holds the most workspaces it may"},
-	{accounts.ErrDefaultWorkspace, http.StatusConflict, codeConflict, "the default workspace cannot be disabled; disable the account instead"},
-	{routing.ErrDefaultInvalid, http.StatusConflict, codePresetDefaultInvalid, "the default routing preset of this workspace cannot be used; an administrator must change it"},
-	{routing.ErrPresetNotSelectable, http.StatusBadRequest, codePresetNotSelectable, "the routing preset cannot be chosen here"},
-	{accounts.ErrKeyPreset, http.StatusBadRequest, codePresetNotSelectable, "a management key has no routing preset"},
-	{routing.ErrPresetNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
-	{routing.ErrPresetCurrency, http.StatusBadRequest, codeInvalidRequest, "a platform preset keeps the currency it was made with; make a new preset for prices in another currency"},
-	{routing.ErrPresetReadOnly, http.StatusForbidden, codeForbidden, "the routing preset belongs to another layer"},
-	{routing.ErrPresetSlugTaken, http.StatusConflict, codeNameTaken, "a routing preset of this layer has that slug"},
-	{routing.ErrPresetStale, http.StatusConflict, codeStaleRevision, "the routing preset or default changed since it was read"},
-	{routing.ErrPresetInUse, http.StatusConflict, codePresetInUse, "a default still points at the routing preset; change the default first"},
-	{routing.ErrPresetQuota, http.StatusConflict, codePresetQuota, "over the limit of routing presets"},
-	{routing.ErrPresetsSuspended, http.StatusServiceUnavailable, codePresetsSuspended, "the platform has suspended routing presets; try again once they are resumed"},
-	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
-	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
-	{accounts.ErrStale, http.StatusServiceUnavailable, codeUnavailable, "temporarily unavailable"},
-}
+// refusals are how the modules' refusals are answered, in the order they are tried; each module's are in a file of its
+// own (console_errors_<module>.go). The message is English for logs and developers, and never repeats what the client
+// sent.
+var refusals = slices.Concat(
+	accountsRefusals,
+	[]refusal{{pg.ErrNoRows, http.StatusNotFound, codeNotFound, "no such resource"}},
+	routingRefusals,
+)
 
 // invalidField is a 400 that names the one part of the request that is wrong.
 func invalidField(pointer, message string) *apiError {

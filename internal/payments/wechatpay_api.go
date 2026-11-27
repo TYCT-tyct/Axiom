@@ -122,6 +122,11 @@ func (c *wechatChannel) request(ctx context.Context, method, path, query string,
 		`WECHATPAY2-SHA256-RSA2048 mchid="%s",nonce_str="%s",signature="%s",timestamp="%s",serial_no="%s"`,
 		c.settings.MchID, nonce, signature, timestamp, c.settings.SerialNo,
 	))
+	if c.settings.PlatformKeyID != "" {
+		// Asks WeChat to sign the response with the public key we hold; without it, a merchant still migrating from
+		// platform certificates gets certificate-signed answers (pay.wechatpay.cn/doc/v3/merchant/4012154180).
+		req.Header.Set("Wechatpay-Serial", c.settings.PlatformKeyID)
+	}
 	return req, nil
 }
 

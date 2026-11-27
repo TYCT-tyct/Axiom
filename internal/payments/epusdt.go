@@ -61,10 +61,19 @@ func (c *easyPayChannel) probe(ctx context.Context) error {
 	return nil
 }
 
+// easyPayGenericCurrency: 彩虹易支付 and its forks charge money in yuan; another currency would be charged as that
+// many yuan and credited in its own.
+func easyPayGenericCurrency(currency platform.Currency) error {
+	if currency.String() != "CNY" {
+		return errors.New("easypay: the generic protocol charges in CNY")
+	}
+	return nil
+}
+
 func (s easyPaySettings) checkPreset(currency platform.Currency) error {
 	switch s.Preset {
 	case "":
-		return nil
+		return easyPayGenericCurrency(currency)
 	case "epusdt":
 	case "ezpay":
 		return s.checkEzPayPreset(currency)

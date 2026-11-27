@@ -46,7 +46,7 @@ func (c *stripeChannel) checkoutNotice(event stripe.Event) (Notice, error) {
 		}
 	}
 	return Notice{
-		Relevant: true, Success: true, Order: order, TradeNo: tradeNo,
+		Relevant: true, Success: true, Order: order, TradeNo: tradeNo, Checkout: session.ID,
 		Paid: stripeMoney(c.currency, session.AmountTotal, session.Currency), Raw: raw,
 	}, nil
 }

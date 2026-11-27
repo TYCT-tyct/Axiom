@@ -234,8 +234,9 @@ func (c *alipayChannel) refundResponse(node jsonx.Raw, r RefundCall, outRequestN
 	if result.OutTradeNo != r.Order.TypeID() {
 		return RefundState{}, errors.New("alipay: refund echoed another order")
 	}
+	// refund_fee is the trade's total refunded so far, this refund included.
 	if result.FundChange == "Y" &&
-		(result.RefundFee == "" || parseMinorText(result.RefundFee, c.currency.MinorDigits()) != r.Amount.Minor) {
+		(result.RefundFee == "" || parseMinorText(result.RefundFee, c.currency.MinorDigits()) != r.Refunded.Minor+r.Amount.Minor) {
 		return RefundState{}, errors.New("alipay: refund echoed another amount")
 	}
 	state := RefundPending

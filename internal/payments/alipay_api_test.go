@@ -111,6 +111,7 @@ type alipayRefundCase struct {
 	refundFee  string
 	omitFee    bool
 	emptyFee   bool
+	refunded   int64 // what earlier refunds of the order returned
 }
 
 // alipayRefundReply is the gateway's answer for a row, and whether it is signed.
@@ -209,9 +210,13 @@ func TestAlipayRefund(t *testing.T) {
 		"wrong amount": {fundChange: "Y", signed: true, wantErr: true, refundFee: "12.35"},
 		"missing fee":  {fundChange: "Y", signed: true, wantErr: true, omitFee: true},
 		"empty fee":    {fundChange: "Y", signed: true, wantErr: true, emptyFee: true},
+		// refund_fee is the trade's cumulative refunded amount, not this refund's.
+		"second partial":    {fundChange: "Y", signed: true, state: RefundSucceeded, refunded: 1000, refundFee: "22.34"},
+		"cumulative missed": {fundChange: "Y", signed: true, wantErr: true, refunded: 1000, refundFee: "12.34"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := call()
+			r.Refunded = Money{currency(t, "CNY"), tc.refunded}
 			ch, gateway := alipayChannelWith(t, func(method string, biz map[string]jsonx.Raw, _ url.Values) (string, bool) {
 				checkAlipayRefundRequest(t, method, biz, r)
 				return alipayRefundReply(t, tc, r)
