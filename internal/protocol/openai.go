@@ -58,7 +58,8 @@ type openAIDetails struct {
 // Cached modality counts are intersections, not additional usage: tokens that are both cached and of that modality,
 // already counted in cached_tokens and in the modality's own total. Members this struct does not name are intersections
 // too, so they are recorded as unknown but never charged (billing's unknownCost). Cached video is taken off the video
-// it is part of, as cached images are off the images: both are image_in once uncached.
+// it is part of, as cached images are off the images: both are image_in once uncached. A video total that is not
+// reported bounds nothing: the cached part is billed as cache reads all the same, and there is no video to take it off.
 type openAICachedDetails struct {
 	Image   int64                     `json:"image_tokens"`
 	Video   int64                     `json:"video_tokens"`
@@ -69,13 +70,18 @@ type openAICachedDetails struct {
 
 // within reports whether the intersections are counts that fit inside the input's modality totals and its cached tokens.
 func (c *openAICachedDetails) within(d openAIDetails) bool {
-	var video int64
-	if d.Video != nil {
-		video = *d.Video
-	}
 	parts := [...]int64{c.Image, c.Video, c.Text, c.Audio}
 	return !slices.ContainsFunc(parts[:], func(n int64) bool { return !countOK(n) }) &&
-		c.Image <= d.Image && c.Video <= video && c.Audio <= d.Audio && c.Image+c.Video+c.Text+c.Audio <= d.Cached
+		c.Image <= d.Image && (d.Video == nil || c.Video <= *d.Video) && c.Audio <= d.Audio &&
+		c.Image+c.Video+c.Text+c.Audio <= d.Cached
+}
+
+// cachedVideo is the cached video to take off the video total: none when the total is not reported.
+func (c *openAICachedDetails) cachedVideo(d openAIDetails) int64 {
+	if d.Video == nil {
+		return 0
+	}
+	return c.Video
 }
 
 // items maps the usage as catalog README.md「计费项与用量」 tabulates, at the service tier the reply names, if any.
@@ -223,7 +229,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 		if !c.within(d) {
 			return fmt.Errorf("usage: cached modality counts exceed their totals")
 		}
-		image, audio = image-c.Image-c.Video, audio-c.Audio
+		image, audio = image-c.Image-c.cachedVideo(d), audio-c.Audio
 	}
 	left := max(total-d.Cached-d.CacheWrite, 0)
 	audio = min(audio, left)

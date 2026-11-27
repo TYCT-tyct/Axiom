@@ -34,6 +34,7 @@ var overlapCases = []overlapCase{
 	{name: "video after audio", body: `{"input_tokens":100,"input_tokens_details":{"audio_tokens":80,"video_tokens":60}}`, audio: 80, image: 20},
 	{name: "cached image among video", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":10,"video_tokens":30,"cached_tokens_details":{"image_tokens":10}}}`, input: 30, read: 40, image: 30},
 	{name: "cached video beside uncached text", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":50,"video_tokens":50,"cached_tokens_details":{"video_tokens":50}}}`, input: 50, read: 50},
+	{name: "cached video without a video total", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"cached_tokens_details":{"video_tokens":800}}}`, read: 1000},
 	{name: "cached video above video", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":50,"video_tokens":40,"cached_tokens_details":{"video_tokens":41}}}`, invalid: true},
 	{name: "image output only", body: `{"output_tokens":100,"output_tokens_details":{"text_tokens":0,"image_tokens":100}}`, imageOut: 100},
 	{name: "video in output details is billed with the output", body: `{"output_tokens":100,"output_tokens_details":{"video_tokens":20}}`, output: 100},
