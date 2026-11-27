@@ -1,3 +1,4 @@
+import { basePriceHandlers } from "./admin-base-prices.ts";
 import type { AdminState, Schemas } from "./admin-data.ts";
 import { aSupplier, uuid } from "./admin-data.ts";
 import { base, type Ctx, changes, reads, route, safe } from "./admin-route.ts";
@@ -280,94 +281,6 @@ function setCredentialLimits({
   return ok(credential);
 }
 
-// Base prices a person confirmed, by group and upstream name, in the settlement currency. The mock prices the endpoint at
-// once, where the server makes the sync's next round due and that round prices it; the page shows the same either way.
-const bases = new WeakMap<AdminState, Map<string, Schemas["PriceSchedule"]>>();
-type Named = { group_id: string; upstream_name: string };
-const baseKey = (item: Named) => `${item.group_id}/${item.upstream_name}`;
-function basesOf(state: AdminState) {
-  const found = bases.get(state) ?? new Map<string, Schemas["PriceSchedule"]>();
-  bases.set(state, found);
-  return found;
-}
-const endpointOf = (detail: Schemas["SupplierDetail"], item: Named) =>
-  detail.endpoints.find((e) => e.group_id === item.group_id && e.upstream_name === item.upstream_name);
-
-function confirmBases({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_id}/base-prices", "post">) {
-  const detail = find(state, params.supplier_id);
-  if (!detail) {
-    return fail(404, "not_found");
-  }
-  if (detail.supplier.unit_value === undefined) {
-    return fail(409, "conflict");
-  }
-  const currency = detail.supplier.settlement_currency;
-  const data: Schemas["BasePriceList"]["data"] = [];
-  for (const item of body.items) {
-    const endpoint = endpointOf(detail, item);
-    const model = state.models.find((m) => m.id === endpoint?.model_id);
-    const price = item.price ?? model?.prices.find((p) => p.currency === currency)?.schedule;
-    if (!endpoint || !price) {
-      return fail(422, "unprocessable");
-    }
-    basesOf(state).set(baseKey(item), price);
-    endpoint.cost_state = "known";
-    data.push({ group_id: item.group_id, upstream_name: item.upstream_name, base: { ...price, currency: "XXX" } });
-  }
-  return ok({ data });
-}
-
-function clearBases({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_id}/base-price-removals", "post">) {
-  const detail = find(state, params.supplier_id);
-  if (!detail) {
-    return fail(404, "not_found");
-  }
-  const data: Schemas["BasePriceList"]["data"] = [];
-  for (const item of body.items) {
-    const base = basesOf(state).get(baseKey(item));
-    const endpoint = endpointOf(detail, item);
-    if (base && endpoint) {
-      basesOf(state).delete(baseKey(item));
-      endpoint.cost_state = "unknown";
-      data.push({ ...item, base: { ...base, currency: "XXX" } });
-    }
-  }
-  return ok({ data });
-}
-
-// An endpoint's price lines, for one priced by a confirmed base (the base times the group's ratio) or whose cost is
-// unknown; any other answers as a node without the read did before.
-function endpointCost({
-  params,
-  state,
-}: Ctx<"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost", "get">) {
-  const detail = find(state, params.supplier_id);
-  const endpoint = detail?.endpoints.find((e) => e.id === params.endpoint_id);
-  if (!detail || !endpoint) {
-    return fail(404, "not_found");
-  }
-  const settlement_currency = detail.supplier.settlement_currency;
-  const base = basesOf(state).get(baseKey(endpoint));
-  if (endpoint.cost_state === "unknown") {
-    return ok({ endpoint_id: endpoint.id, cost_state: "unknown", settlement_currency, lines: [] } as Cost);
-  }
-  if (!base) {
-    return fail(404, "not_found");
-  }
-  const ratio = detail.groups.find((g) => g.id === endpoint.group_id)?.ratio ?? "1";
-  const lines = Object.entries(base.rates).map(([item, price]) => ({
-    item: item as Schemas["MeteringItem"],
-    unit: "token" as const,
-    price: String(Number(price) * Number(ratio)),
-    factors: [
-      { kind: "base_price" as const, value: String(price) },
-      { kind: "group_ratio" as const, value: ratio },
-    ],
-  }));
-  return ok({ endpoint_id: endpoint.id, cost_state: "known", source: "confirmed", settlement_currency, lines } as Cost);
-}
-type Cost = Schemas["EndpointCost"];
-
 type Finding = Pick<Schemas["EndpointTest"], "outcome" | "problem" | "upstream_status" | "first_token_ms">;
 const findings: Record<string, Finding> = {
   "broken-stream-model": {
@@ -523,10 +436,8 @@ export const supplyHandlers: Handler<AdminState>[] = [
     changes("suppliers.manage"),
     setEndpointEnabled,
   ),
-  route("get", `${base}/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost`, reads("suppliers.view"), endpointCost),
-  route("post", `${base}/suppliers/{supplier_id}/base-prices`, changes("suppliers.manage"), confirmBases),
-  route("post", `${base}/suppliers/{supplier_id}/base-price-removals`, changes("suppliers.manage"), clearBases),
   route("post", `${base}/suppliers/endpoint-tests`, changes("suppliers.manage"), testEndpoint),
+  ...basePriceHandlers,
   route("get", `${base}/pending-mappings`, reads("suppliers.view"), listPending),
   route("post", `${base}/suppliers/{supplier_id}/model-mappings`, changes("suppliers.manage"), mapModel),
 ];

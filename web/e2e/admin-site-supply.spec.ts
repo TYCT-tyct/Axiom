@@ -154,16 +154,19 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(row).toContainText(zhText("suppliers.endpoints.state.unknown"));
 
     await page.getByRole("button", { name: "确认 unpriced-model 的底价（分组 Maple 2）" }).click();
-    // the official price is the default: input 3 per million tokens, which costs 4.5 after the group ratio 1.5
-    await expect(dialog(page).getByText("4.5", { exact: true })).toBeVisible();
+    // the official price is the default (input 3 per million tokens); the cost is the server's, said as a formula
+    await expect(dialog(page).getByText("3", { exact: true })).toBeVisible();
+    await expect(dialog(page)).toContainText(zhText("upstream.basePrice.formula"));
     await send(page, "the supplier publishes no price");
     await expect(done(page)).toBeVisible();
     expect(endpoint.cost_state).toBe("known");
     await close(page);
     await expect(row).toContainText(zhText("suppliers.endpoints.state.ready"));
 
+    // the price lines are the server's figure: the base times the group ratio 1.5
     await page.getByRole("button", { name: "打开 unpriced-model 的价目和检测" }).click();
     await expect(page.getByText(zhText("upstream.endpoint.sources.confirmed"))).toBeVisible();
+    await expect(page.getByText("4.5 USD")).toBeVisible();
     await press(page, "upstream.basePrice.clear").click();
     await send(page, "the supplier published its price");
     await expect(done(page)).toBeVisible();

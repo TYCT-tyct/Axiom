@@ -2,6 +2,7 @@ import type { AdminSchemas } from "@axiom/api";
 import { ActionButton, Cluster, EmptyState, Table, Tag, Td } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { Code, Head, State } from "../parts";
+import type { BaseTarget } from "./base-price";
 import { endpointState, testFormats } from "./endpoint-test";
 import type { Open } from "./open";
 
@@ -74,14 +75,14 @@ const endpointTones = {
 export function Endpoints({
   endpoints,
   groups,
-  priceable,
+  baseOf,
   onOpen,
   onShow,
 }: {
   endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
   groups: AdminSchemas["SupplierGroup"][];
-  // Whether a person can confirm the base price of an endpoint whose cost is unknown: a relay's, which states no price.
-  priceable: boolean;
+  // What a base price can be confirmed for from an endpoint's row, when one can (base-price.ts targetOf).
+  baseOf: (endpoint: AdminSchemas["SupplierEndpoint"]) => BaseTarget | undefined;
   onOpen: OnOpen;
   onShow: (endpoint: AdminSchemas["SupplierEndpoint"]) => void;
 }) {
@@ -110,7 +111,7 @@ export function Endpoints({
             key={endpoint.id}
             endpoint={endpoint}
             group={groupName(groups, endpoint.group_id)}
-            priceable={priceable}
+            target={baseOf(endpoint)}
             onOpen={onOpen}
             onShow={() => onShow(endpoint)}
           />
@@ -123,13 +124,13 @@ export function Endpoints({
 function EndpointRow({
   endpoint,
   group,
-  priceable,
+  target,
   onOpen,
   onShow,
 }: {
   endpoint: AdminSchemas["SupplierEndpoint"];
   group: string;
-  priceable: boolean;
+  target: BaseTarget | undefined;
   onOpen: OnOpen;
   onShow: () => void;
 }) {
@@ -161,11 +162,11 @@ function EndpointRow({
           >
             {t("upstream.byModel.details")}
           </ActionButton>
-          {onOpen && priceable && endpoint.cost_state === "unknown" ? (
+          {onOpen && target ? (
             <ActionButton
               size="sm"
               aria-label={t("upstream.basePrice.openFor", { name: endpoint.upstream_name, group })}
-              onClick={() => onOpen({ kind: "basePrice", endpoint })}
+              onClick={() => onOpen({ kind: "basePrice", target })}
             >
               {t("upstream.basePrice.open")}
             </ActionButton>

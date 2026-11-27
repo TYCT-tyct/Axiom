@@ -6,15 +6,15 @@ export default {
     open: "Confirm base price",
     openFor: "Confirm the base price of {{name}} (group {{group}})",
     title: "Confirm the base price of {{name}}",
-    body: "{{supplier}} publishes no price for this model, so its cost is unknown and it is not routed. Once you confirm a base price, the cost is the base × the group ratio {{ratio}}, in {{currency}}. A price the supplier publishes later always wins.",
+    body: "{{supplier}} publishes no price for this model, so its cost is unknown and it is not routed. The base is confirmed for {{model}}, the catalog model this name maps to now. A price the supplier publishes later always wins.",
+    formula:
+      "Cost = base ÷ unit value × group ratio. It shows in the endpoint's price lines after the next sync round.",
     source: "Where the base comes from",
     official: "Catalog official price",
     entered: "Enter per item",
     officialPrice: "The catalog's official price",
     noOfficial: "The catalog has no {{currency}} official price for this model. Enter the prices item by item.",
     enteredHint: "In {{currency}}. An item left empty has no price.",
-    after: "Cost after the group ratio {{ratio}}",
-    afterNone: "Enter a price to see the cost after the group ratio.",
     unitMissingBody: "A base price is stored in the supplier's own unit, which needs the unit value.",
     unitAction: "Confirm the unit value first",
     refused: {
@@ -23,7 +23,7 @@ export default {
       unprocessable:
         "This base price cannot be stored: the name is not mapped to a catalog model yet, every price is 0, or a price is above the unit price limit after conversion.",
     },
-    done: "Base price confirmed. The sync runs now: its next round prices the model at the base × the group ratio, and the endpoint then joins routing.",
+    done: "Base price confirmed, and the sync runs now. After its next round, open the endpoint's price lines: they show the cost calls are priced at.",
     clear: "Clear base price",
     clearTitle: "Clear the base price of {{name}}",
     clearBody: "After the next sync round, this model's cost is unknown again and its endpoint leaves routing.",
