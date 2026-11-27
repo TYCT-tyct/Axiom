@@ -2,8 +2,10 @@
 // application, a migration administrator that is not a superuser, and every migration applied by it. One cluster
 // serves all test binaries of a run when `just test` has started it (cmd/withcluster, ClusterEnv); a binary run on its
 // own starts a container of its own. Each test gets its own copy of a migrated template, so tests run in parallel and
-// never see each other's rows. A copy is dropped when its test ends, so a run's cluster holds only the copies of the
-// tests in flight instead of one for every test that has run; the cluster, with its templates, is removed at the end.
+// never see each other's rows; they do see each other's sessions, so a test that counts sessions in pg_stat_activity
+// filters it by datname = current_database(). A copy is dropped when its test ends, so a run's cluster holds only the
+// copies of the tests in flight instead of one for every test that has run; the cluster, with its templates, is
+// removed at the end.
 package pgtest
 
 import (
