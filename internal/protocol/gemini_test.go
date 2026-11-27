@@ -175,6 +175,49 @@ func TestChatFromGemini(t *testing.T) {
 	}
 }
 
+// What a Gemini stream reported is billed, by modality, also when the stream then fails: audio and image tokens at
+// their own price, and the cumulative usage of a stream that broke off or stopped for a reason Chat has no word for.
+func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
+	t.Parallel()
+	const usage = `"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"totalTokenCount":13}`
+	for _, c := range []struct {
+		name, stream string
+		failed       bool
+		want         map[catalog.Item]int64
+	}{
+		{
+			"audio and image tokens",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Heard."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":5,"totalTokenCount":14,` +
+				`"promptTokensDetails":[{"modality":"TEXT","tokenCount":4},{"modality":"AUDIO","tokenCount":3},{"modality":"IMAGE","tokenCount":2}],` +
+				`"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}]}}` + "\n\n",
+			false,
+			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2},
+		},
+		{
+			"cut off after reporting",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
+			true,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+		},
+		{
+			"a malformed call after reporting",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}],` + usage + `}` + "\n\n",
+			true,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(c.stream))),
+				protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
+			if failed := errors.Is(got.err, protocol.ErrUpstream); failed != c.failed {
+				t.Fatalf("error %v, want failed %v", got.err, c.failed)
+			}
+			checkBilledAs(t, c.name, got.r.Usage(), c.want)
+		})
+	}
+}
+
 // A Chat stream reaches a Gemini client as Gemini's: the thoughts only when asked for, each call whole at the finish with
 // its signature, and Gemini's usage.
 func TestGeminiReply(t *testing.T) {

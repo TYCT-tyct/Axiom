@@ -192,7 +192,13 @@ func (s *chatFromGemini) chunk(choice requestObject, usage *chatUsageCounts) {
 
 // end closes a stream Gemini finished: the finish reason, the usage and the end marker.
 func (s *chatFromGemini) end() {
-	if s.finished || s.finish == "" {
+	switch {
+	case s.finished:
+		return
+	case s.finish == "" && s.usage != nil: // cut off, but what it reported was used and is billed
+		s.fail(502, "The Gemini stream ended before the reply finished.")
+		return
+	case s.finish == "":
 		return
 	}
 	s.finished = true
@@ -204,9 +210,14 @@ func (s *chatFromGemini) end() {
 	s.out = append(s.out, "data: [DONE]\n\n"...)
 }
 
-// fail ends the stream with Chat's error chunk.
+// fail ends the stream with Chat's error chunk, carrying the usage Gemini reported so far, which the relay bills from
+// an error chunk as from a usage one.
 func (s *chatFromGemini) fail(status int, message string) {
 	s.finished = true
 	e := requestObject{"message": jsonValue(message), "type": jsonValue("upstream_error"), "code": jsonValue(status)}
-	s.out = slices.Concat(s.out, []byte("data: "), jsonValue(requestObject{"error": jsonValue(e)}), []byte("\n\n"))
+	chunk := requestObject{"error": jsonValue(e)}
+	if s.usage != nil {
+		chunk["usage"] = jsonValue(s.usage.chat())
+	}
+	s.out = slices.Concat(s.out, []byte("data: "), jsonValue(chunk), []byte("\n\n"))
 }

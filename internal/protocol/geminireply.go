@@ -14,14 +14,32 @@ import (
 // errors map through the tables here both ways.
 
 // geminiUsage is usageMetadata. Gemini counts thinking apart from the answer and tool prompts apart from the prompt,
-// where Chat counts both in the totals and the thinking again as a detail.
+// where Chat counts both in the totals and the thinking again as a detail; both break the counts down by modality, in
+// lists on Gemini's side and in the details' members on Chat's, which is how audio and images get their own price.
 type geminiUsage struct {
-	PromptTokenCount        int64 `json:"promptTokenCount"`
-	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
-	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount,omitzero"`
-	CachedContentTokenCount int64 `json:"cachedContentTokenCount,omitzero"`
-	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount,omitzero"`
-	TotalTokenCount         int64 `json:"totalTokenCount"`
+	PromptTokenCount        int64           `json:"promptTokenCount"`
+	CandidatesTokenCount    int64           `json:"candidatesTokenCount"`
+	ThoughtsTokenCount      int64           `json:"thoughtsTokenCount,omitzero"`
+	CachedContentTokenCount int64           `json:"cachedContentTokenCount,omitzero"`
+	ToolUsePromptTokenCount int64           `json:"toolUsePromptTokenCount,omitzero"`
+	TotalTokenCount         int64           `json:"totalTokenCount"`
+	PromptTokensDetails     []geminiByMedia `json:"promptTokensDetails,omitzero"`
+	CacheTokensDetails      []geminiByMedia `json:"cacheTokensDetails,omitzero"`
+	CandidatesTokensDetails []geminiByMedia `json:"candidatesTokensDetails,omitzero"`
+}
+
+// geminiByMedia is Gemini's ModalityTokenCount.
+type geminiByMedia struct {
+	Modality   string `json:"modality"`
+	TokenCount int64  `json:"tokenCount"`
+}
+
+// chatMedia are the modality counts Chat's usage details carry, the same members on both sides of the usage; video is
+// only an input (openai.go).
+type chatMedia struct {
+	Audio int64 `json:"audio_tokens,omitzero"`
+	Image int64 `json:"image_tokens,omitzero"`
+	Video int64 `json:"video_tokens,omitzero"`
 }
 
 type chatUsageCounts struct {
@@ -29,11 +47,41 @@ type chatUsageCounts struct {
 	CompletionTokens    int64 `json:"completion_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails struct {
-		CachedTokens int64 `json:"cached_tokens"`
+		CachedTokens  int64      `json:"cached_tokens"`
+		CachedDetails *chatMedia `json:"cached_tokens_details,omitzero"`
+		chatMedia
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
+		chatMedia
 	} `json:"completion_tokens_details"`
+}
+
+// mediaOf is a modality list as Chat's counts; TEXT and modalities Chat has no member for stay in the plain total.
+func mediaOf(counts []geminiByMedia) chatMedia {
+	var m chatMedia
+	for _, c := range counts {
+		switch c.Modality {
+		case "AUDIO":
+			m.Audio += c.TokenCount
+		case "IMAGE":
+			m.Image += c.TokenCount
+		case "VIDEO":
+			m.Video += c.TokenCount
+		}
+	}
+	return m
+}
+
+// byMedia is mediaOf the other way: Chat's counts as Gemini's list, the modalities with tokens only.
+func byMedia(m chatMedia) []geminiByMedia {
+	var out []geminiByMedia
+	for _, c := range [...]geminiByMedia{{"AUDIO", m.Audio}, {"IMAGE", m.Image}, {"VIDEO", m.Video}} {
+		if c.TokenCount > 0 {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (u geminiUsage) chat() chatUsageCounts {
@@ -42,16 +90,27 @@ func (u geminiUsage) chat() chatUsageCounts {
 	c.CompletionTokens = u.CandidatesTokenCount + u.ThoughtsTokenCount
 	c.TotalTokens = c.PromptTokens + c.CompletionTokens
 	c.PromptTokensDetails.CachedTokens = u.CachedContentTokenCount
+	c.PromptTokensDetails.chatMedia = mediaOf(u.PromptTokensDetails)
+	if len(u.CacheTokensDetails) > 0 {
+		cached := mediaOf(u.CacheTokensDetails)
+		c.PromptTokensDetails.CachedDetails = &cached
+	}
 	c.CompletionTokensDetails.ReasoningTokens = u.ThoughtsTokenCount
+	c.CompletionTokensDetails.chatMedia = mediaOf(u.CandidatesTokensDetails)
 	return c
 }
 
 func (c chatUsageCounts) gemini() geminiUsage {
 	thoughts := min(c.CompletionTokensDetails.ReasoningTokens, c.CompletionTokens)
-	return geminiUsage{
+	u := geminiUsage{
 		PromptTokenCount: c.PromptTokens, CandidatesTokenCount: c.CompletionTokens - thoughts, ThoughtsTokenCount: thoughts,
 		CachedContentTokenCount: c.PromptTokensDetails.CachedTokens, TotalTokenCount: c.PromptTokens + c.CompletionTokens,
+		PromptTokensDetails: byMedia(c.PromptTokensDetails.chatMedia), CandidatesTokensDetails: byMedia(c.CompletionTokensDetails.chatMedia),
 	}
+	if d := c.PromptTokensDetails.CachedDetails; d != nil {
+		u.CacheTokensDetails = byMedia(*d)
+	}
+	return u
 }
 
 // geminiFinish are Gemini's finish reasons and Chat's. One Gemini gives for a reply it cut off for another reason
@@ -168,17 +227,7 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	if c.Error != nil {
 		return geminiErrorEvent(*c.Error), nil
 	}
-	var parts []geminiPart
-	finish := ""
-	for _, choice := range c.Choices {
-		if choice.Delta != nil {
-			parts = g.deltaParts(parts, choice.Delta)
-		}
-		if choice.FinishReason != nil && !g.finished {
-			g.finished, finish = true, geminiFinishOf(*choice.FinishReason)
-			parts = append(parts, g.flushCalls()...)
-		}
-	}
+	parts, finish := g.chunkParts(c)
 	switch {
 	case g.held != nil:
 		g.held.parts = append(g.held.parts, parts...)
@@ -190,6 +239,22 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return geminiResponseOf(c, parts, finish), nil
+}
+
+// chunkParts are a chunk's parts and the finish reason it gives first: a call's parts come whole at the finish.
+func (g *GeminiReply) chunkParts(c chatReply) ([]geminiPart, string) {
+	var parts []geminiPart
+	finish := ""
+	for _, choice := range c.Choices {
+		if choice.Delta != nil {
+			parts = g.deltaParts(parts, choice.Delta)
+		}
+		if choice.FinishReason != nil && !g.finished {
+			g.finished, finish = true, geminiFinishOf(*choice.FinishReason)
+			parts = append(parts, g.flushCalls()...)
+		}
+	}
+	return parts, finish
 }
 
 // release gives the held finishing event with the usage, if one is held.
