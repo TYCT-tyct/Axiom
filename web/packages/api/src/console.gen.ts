@@ -1159,7 +1159,7 @@ export interface paths {
          * Register with an invite code or open registration
          * @description On a site registering by invitation, makes the user, their personal account, its default workspace and balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
          *
-         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers `unavailable`, and a closed site `registration_closed`.
+         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers `unavailable`, and a closed site `registration_closed`. An invite code given there names the inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown, its user disabled, or of another site) is `invalid_invite` and stores nothing.
          *
          *     Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
          */
@@ -2678,7 +2678,7 @@ export interface components {
             recovery_codes?: string[];
         };
         RegisterRequest: {
-            /** @description Required on an invite-only site; ignored where registration is open. */
+            /** @description Required on an invite-only site; optional where registration is open, where it names the inviter the verified user keeps. */
             invite_code?: string;
             email: string;
             /** @description Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own. */

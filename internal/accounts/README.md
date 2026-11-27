@@ -21,7 +21,7 @@
 - 主键是 Go 生成的 UUIDv7；金额 `bigint`（[钱的表示](../../docs/domains/billing.md#钱的表示)）；名字 1 到 100 个字符。
 - 站点数据的表有 `site_id`，账户数据的表有 `(site_id, account_id)`，都不为空、不可改；父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用，所以两列与"key → 工作区 → 账户 → 站点"一致。范围策略用 [pg 的 InitPlan 参数](../platform/pg/README.md#决策与理由)比较这两列。
 - `axiom_app` 只对可改的列有 `UPDATE`；`DELETE` 只给过期的找回请求与令牌、待验证注册、待换邮箱和超过 30 天的已派发提醒。
-- 结构约束：`sites` 只有一个主站，上级只能是主站，`(parent IS NULL) = (owner IS NULL)`，默认等级和 `logo_hash` 都用复合外键指向本站的行，`currency` 不可改；`users.account_id` 唯一且只能指向 personal 账户，`(site_id, email)`、`(site_id, invite_code)` 唯一，邀请人同站且不是自己；`members` 用生成列外键让个人账户只有它的用户；每个账户一个 `is_default` 工作区，未删除的工作区 `lower(name)` 唯一；`api_keys` 的管理 key 必须有 `expires_at`，`CHECK (kind = 'call' OR preset_id IS NULL)`；`platform_grants` 只能指向主站用户，每个（用户、角色）一条未撤销的授予；`site_logos`、`legal_documents`、`legal_acceptances`、`announcements` 只插入（公告只能写 `withdrawn_at`）；TOTP 和 OAuth secret 的 `secret.Sealed` 四列同空同有，触发器拒绝已退役的密钥版本。
+- 结构约束：`sites` 只有一个主站，上级只能是主站，`(parent IS NULL) = (owner IS NULL)`，默认等级和 `logo_hash` 都用复合外键指向本站的行，`currency` 不可改；`users.account_id` 唯一且只能指向 personal 账户，`(site_id, email)`、`(site_id, invite_code)` 唯一，邀请人同站且不是自己，待验证注册的邀请人也用复合外键指向本站用户；`members` 用生成列外键让个人账户只有它的用户；每个账户一个 `is_default` 工作区，未删除的工作区 `lower(name)` 唯一；`api_keys` 的管理 key 必须有 `expires_at`，`CHECK (kind = 'call' OR preset_id IS NULL)`；`platform_grants` 只能指向主站用户，每个（用户、角色）一条未撤销的授予；`site_logos`、`legal_documents`、`legal_acceptances`、`announcements` 只插入（公告只能写 `withdrawn_at`）；TOTP 和 OAuth secret 的 `secret.Sealed` 四列同空同有，触发器拒绝已退役的密钥版本。
 
 ### 行级安全的写法
 

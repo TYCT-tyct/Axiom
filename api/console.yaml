@@ -2066,7 +2066,9 @@ paths:
         learn which addresses exist. A password in this request is ignored: the verification page sets it after the
         address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found
         when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot
-        send mail answers `unavailable`, and a closed site `registration_closed`.
+        send mail answers `unavailable`, and a closed site `registration_closed`. An invite code given there names the
+        inviter the user is created with at verification, a repeated request replacing it; an unusable code (unknown,
+        its user disabled, or of another site) is `invalid_invite` and stores nothing.
 
 
         Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
@@ -4650,7 +4652,7 @@ components:
       type: object
       required: [email]
       properties:
-        invite_code: {type: string, minLength: 1, maxLength: 64, description: "Required on an invite-only site; ignored where registration is open."}
+        invite_code: {type: string, minLength: 1, maxLength: 64, description: "Required on an invite-only site; optional where registration is open, where it names the inviter the verified user keeps."}
         email: {type: string, minLength: 3, maxLength: 254}
         password: {type: string, minLength: 12, maxLength: 256, description: "Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own."}
         human_check: {type: string, pattern: '^[0-9]{1,20}$', description: "The decimal nonce that solves the site's proof of work. Required where `human_check` is present."}

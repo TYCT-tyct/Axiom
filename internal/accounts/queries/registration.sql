@@ -10,15 +10,21 @@ FROM accounts.registration_site(@domain::text) AS t (site_id, default_tier_id, r
 -- name: InsertRegistrationRequest :one
 -- A second request for the same address replaces the first pending one and invalidates its link; the older job finds
 -- the same row and sends the newer link.
-INSERT INTO accounts.registration_requests (id, site_id, email_hash, email, tier_id, domain, language)
-VALUES (@id, @site_id, @email_hash, @email, @tier_id, @domain, @language)
+INSERT INTO accounts.registration_requests (id, site_id, email_hash, email, tier_id, domain, language, inviter_user_id)
+VALUES (@id, @site_id, @email_hash, @email, @tier_id, @domain, @language, sqlc.narg(inviter_user_id))
 ON CONFLICT (site_id, email_hash) DO UPDATE SET tier_id = excluded.tier_id, domain = excluded.domain,
-    language = excluded.language, expires_at = excluded.expires_at, token_hash = NULL
+    language = excluded.language, expires_at = excluded.expires_at, token_hash = NULL,
+    inviter_user_id = excluded.inviter_user_id
 RETURNING id;
+
+-- name: RegistrationInviter :many
+-- The user whose invite code admits an open registration: an active user of the site, as invite_tenant requires for
+-- an invitation. No row is an invalid code.
+SELECT id FROM accounts.users WHERE site_id = @site_id AND invite_code = @code AND status = 'active';
 
 -- name: LockRegistrationRequest :many
 -- The worker that issues the link and the transaction that consumes it both hold this row first.
-SELECT site_id, email, tier_id, domain, language, token_hash,
+SELECT site_id, email, tier_id, domain, language, token_hash, inviter_user_id,
     expires_at > clock_timestamp() AS unexpired
 FROM accounts.registration_requests WHERE id = @id FOR UPDATE;
 

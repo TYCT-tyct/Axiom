@@ -24,21 +24,23 @@ func (q *Queries) DeleteRegistrationRequest(ctx context.Context, db DBTX, id uui
 }
 
 const insertRegistrationRequest = `-- name: InsertRegistrationRequest :one
-INSERT INTO accounts.registration_requests (id, site_id, email_hash, email, tier_id, domain, language)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO accounts.registration_requests (id, site_id, email_hash, email, tier_id, domain, language, inviter_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (site_id, email_hash) DO UPDATE SET tier_id = excluded.tier_id, domain = excluded.domain,
-    language = excluded.language, expires_at = excluded.expires_at, token_hash = NULL
+    language = excluded.language, expires_at = excluded.expires_at, token_hash = NULL,
+    inviter_user_id = excluded.inviter_user_id
 RETURNING id
 `
 
 type InsertRegistrationRequestParams struct {
-	ID        uuid.UUID
-	SiteID    uuid.UUID
-	EmailHash []byte
-	Email     string
-	TierID    uuid.UUID
-	Domain    string
-	Language  string
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	EmailHash     []byte
+	Email         string
+	TierID        uuid.UUID
+	Domain        string
+	Language      string
+	InviterUserID *uuid.UUID
 }
 
 // A second request for the same address replaces the first pending one and invalidates its link; the older job finds
@@ -52,6 +54,7 @@ func (q *Queries) InsertRegistrationRequest(ctx context.Context, db DBTX, arg In
 		arg.TierID,
 		arg.Domain,
 		arg.Language,
+		arg.InviterUserID,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -59,19 +62,20 @@ func (q *Queries) InsertRegistrationRequest(ctx context.Context, db DBTX, arg In
 }
 
 const lockRegistrationRequest = `-- name: LockRegistrationRequest :many
-SELECT site_id, email, tier_id, domain, language, token_hash,
+SELECT site_id, email, tier_id, domain, language, token_hash, inviter_user_id,
     expires_at > clock_timestamp() AS unexpired
 FROM accounts.registration_requests WHERE id = $1 FOR UPDATE
 `
 
 type LockRegistrationRequestRow struct {
-	SiteID    uuid.UUID
-	Email     string
-	TierID    uuid.UUID
-	Domain    string
-	Language  string
-	TokenHash []byte
-	Unexpired bool
+	SiteID        uuid.UUID
+	Email         string
+	TierID        uuid.UUID
+	Domain        string
+	Language      string
+	TokenHash     []byte
+	InviterUserID *uuid.UUID
+	Unexpired     bool
 }
 
 // The worker that issues the link and the transaction that consumes it both hold this row first.
@@ -91,6 +95,7 @@ func (q *Queries) LockRegistrationRequest(ctx context.Context, db DBTX, id uuid.
 			&i.Domain,
 			&i.Language,
 			&i.TokenHash,
+			&i.InviterUserID,
 			&i.Unexpired,
 		); err != nil {
 			return nil, err
@@ -112,6 +117,37 @@ DELETE FROM accounts.registration_requests WHERE id IN (
 func (q *Queries) PurgeRegistrationRequests(ctx context.Context, db DBTX) error {
 	_, err := db.Exec(ctx, purgeRegistrationRequests)
 	return err
+}
+
+const registrationInviter = `-- name: RegistrationInviter :many
+SELECT id FROM accounts.users WHERE site_id = $1 AND invite_code = $2 AND status = 'active'
+`
+
+type RegistrationInviterParams struct {
+	SiteID uuid.UUID
+	Code   string
+}
+
+// The user whose invite code admits an open registration: an active user of the site, as invite_tenant requires for
+// an invitation. No row is an invalid code.
+func (q *Queries) RegistrationInviter(ctx context.Context, db DBTX, arg RegistrationInviterParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, registrationInviter, arg.SiteID, arg.Code)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const registrationSite = `-- name: RegistrationSite :one

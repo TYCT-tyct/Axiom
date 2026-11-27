@@ -482,3 +482,59 @@ func TestVerificationJoinsTheDefaultTierOfTheClick(t *testing.T) {
 		t.Errorf("the new account joined %v, want the default at the click, Pro", got)
 	}
 }
+
+// TestOpenRegistrationKeepsTheInviter: the invite code of an open registration is checked at the request like an
+// invitation's, kept on the pending request, replaced by a repeated request, and written as the user's inviter when the
+// link is clicked.
+func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	gone, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: inviteCode(t, x.db, ":u1"), Email: "gone@example.com", Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneCode := inviteCode(t, x.db, "'"+uuid.UUID(gone.User).String()+"'")
+	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.users SET status = 'disabled' WHERE email = 'gone@example.com'"); err != nil {
+		t.Fatal(err)
+	}
+	x.open(t, false, 100, 1000)
+	first, second := inviteCode(t, x.db, ":u1"), inviteCode(t, x.db, "'"+uuid.UUID(x.user).String()+"'")
+	for name, c := range map[string]struct {
+		codes   []string // one request per code, in order; all but the last succeed
+		refused error    // the last request's error; a refused request leaves no pending request
+		inviter string   // the verified user's inviter, "" for none
+	}{
+		"an invite through verification":         {codes: []string{first}, inviter: u1.String()},
+		"a repeated request with another invite": {codes: []string{first, second}, inviter: uuid.UUID(x.user).String()},
+		"a repeated request with no invite":      {codes: []string{first, ""}},
+		"no invite":                              {codes: []string{""}},
+		"an unknown code":                        {codes: []string{"nosuchcode0000"}, refused: accounts.ErrInvalidInvite},
+		"a disabled inviter's code":              {codes: []string{goneCode}, refused: accounts.ErrInvalidInvite},
+		"another site's code":                    {codes: []string{inviteCode(t, x.db, ":u2")}, refused: accounts.ErrInvalidInvite},
+	} {
+		email := strings.ReplaceAll(strings.ReplaceAll(name, "'", ""), " ", "-") + "@example.com"
+		for i, code := range c.codes {
+			var want error
+			if i == len(c.codes)-1 {
+				want = c.refused
+			}
+			if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client}); !errors.Is(err, want) {
+				t.Fatalf("%s: request %d = %v, want %v", name, i, err, want)
+			}
+		}
+		if c.refused != nil {
+			if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests WHERE email = '"+email+"'"); got != 0 {
+				t.Errorf("%s: %d pending requests, want none", name, got)
+			}
+			continue
+		}
+		if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
+			t.Fatal(err)
+		}
+		x.verifyAt(t, console, x.token(t, email))
+		got := texts(t, x.db, platform, "SELECT coalesce(inviter_user_id::text, '') FROM accounts.users WHERE email = '"+email+"'")
+		if len(got) != 1 || got[0] != c.inviter {
+			t.Errorf("%s: inviter %q, want %q", name, got, c.inviter)
+		}
+	}
+}
