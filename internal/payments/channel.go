@@ -172,7 +172,7 @@ type RefundCall struct {
 	Order                OrderID
 	TradeNo, ProviderRef string
 	Amount               Money
-	Refunded             Money // what the order's earlier, succeeded refunds returned, for channels that echo a running total
+	Refunded             Money // what the order's earlier refunds through this channel returned, for channels that echo a running total
 	Reason               string
 	SentAt               time.Time // when the refund was first sent; zero when unknown
 }

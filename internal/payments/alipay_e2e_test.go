@@ -341,17 +341,40 @@ func TestAlipayLocalGatewayEndToEnd(t *testing.T) {
 	f.checkNoSecrets()
 }
 
-// TestAlipaySecondPartialRefundSucceeds: Alipay's refund_fee is the trade's running total, so a second partial refund
-// succeeds on its first answer instead of waiting for a refund query.
+// TestAlipaySecondPartialRefundSucceeds: Alipay's refund_fee is the trade's running total of Alipay refunds, so a
+// second partial refund succeeds on its first answer instead of waiting for a refund query, and money returned
+// offline before it is not part of that total.
 func TestAlipaySecondPartialRefundSucceeds(t *testing.T) {
 	f := newAlipayE2E(t)
 	f.checkCheckoutAndCallback()
-	for i, credits := range []int64{f.paid.Credits / 2, f.paid.Credits - f.paid.Credits/2} {
+	offline := f.paid.Credits / 4
+	f.offlineRefund(offline)
+	rest := f.paid.Credits - offline
+	for i, credits := range []int64{rest / 2, rest - rest/2} {
 		refund := f.w.approve(f.w.mustRefund(f.paid, credits, fmt.Sprintf("alipay-partial-%d", i)))
 		f.w.dueRefunds()
 		stored, err := f.w.p.GetRefund(f.t.Context(), f.w.accountA(), refund.ID)
 		if err != nil || stored.State != "succeeded" {
 			t.Fatalf("partial refund %d: %+v %v", i, stored, err)
 		}
+	}
+}
+
+// offlineRefund returns credits of the paid order outside Alipay, concluded by two people.
+func (f *alipayE2E) offlineRefund(credits int64) {
+	f.t.Helper()
+	request := refundRequest(f.w, f.paid, credits, "alipay-offline")
+	request.Via = "offline"
+	r, err := f.w.p.Refund(f.t.Context(), siteScope(f.w.siteA), request)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	r = f.w.approve(r)
+	proposal := Resolution{Order: f.paid.ID, Refund: r.ID, Outcome: "succeeded", Key: "offline", User: f.w.user, Reason: "bank transfer", Evidence: "transfer receipt"}
+	if err = f.w.p.Resolve(f.t.Context(), siteScope(f.w.siteA), proposal); err != nil {
+		f.t.Fatal(err)
+	}
+	if err = f.w.p.ApproveResolution(f.t.Context(), siteScope(f.w.siteA), f.paid.ID, proposal.Key, uuid.NewV7()); err != nil {
+		f.t.Fatal(err)
 	}
 }

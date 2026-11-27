@@ -42,7 +42,7 @@ type Channel interface {
 // Checkout: TradeNo, PayURL, QRCode, ClientSecret（只交给浏览器，不存库）
 // Notice: Relevant, Success, Order, TradeNo, Paid, Raw, Checkout（非空时必须是订单下单时存的 Checkout.TradeNo，否则转待处理）, Dispute *DisputeNotice（非 nil 时只走拒付）
 // DisputeNotice: ID, PaymentIntent, Order（可空）, Status, Reason, Amount, Action（Open | Lost | Won | Warning）
-// RefundCall: Refund, Order, TradeNo, ProviderRef, Amount, Refunded（该订单此前成功退款之和）, Reason, SentAt（首次发送时间，零值表示不知道）
+// RefundCall: Refund, Order, TradeNo, ProviderRef, Amount, Refunded（该订单此前经渠道成功退款之和，不含线下退款）, Reason, SentAt（首次发送时间，零值表示不知道）
 // Payment{State Pending|Paid|Closed}；RefundState{State Succeeded|Failed|Pending, ProviderRef}；*Rejected 实现 error
 ```
 
