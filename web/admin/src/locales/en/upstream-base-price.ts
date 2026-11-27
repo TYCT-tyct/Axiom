@@ -8,7 +8,7 @@ export default {
     title: "Confirm the base price of {{name}}",
     body: "{{supplier}} publishes no price for this model, so its cost is unknown and it is not routed. The base is confirmed for {{model}}, the catalog model this name maps to now. A price the supplier publishes later always wins.",
     formula:
-      "Cost = base ÷ unit value × group ratio. It shows in the endpoint's price lines after the next sync round.",
+      "Cost = base ÷ unit value (rounded up) × group ratio (rounded up). It shows in the endpoint's price lines after the next sync round. If it exceeds the unit price limit, the cost stays unknown and no price line appears.",
     source: "Where the base comes from",
     official: "Catalog official price",
     entered: "Enter per item",
