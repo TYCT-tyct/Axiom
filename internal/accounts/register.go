@@ -179,9 +179,12 @@ func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, re
 	}
 	var id uuid.UUID
 	err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(d.site)), func(tx pg.Tx) error {
-		inviter, err := s.registrationInviter(ctx, tx, uuid.UUID(d.site), r.InviteCode)
-		if err != nil {
-			return err
+		var inviter *uuid.UUID
+		var err error
+		if r.InviteCode != "" {
+			if inviter, err = s.registrationInviter(ctx, tx, uuid.UUID(d.site), r.InviteCode); err != nil {
+				return err
+			}
 		}
 		id, err = s.queries.InsertRegistrationRequest(ctx, tx, InsertRegistrationRequestParams{
 			ID: uuid.NewV7(), SiteID: uuid.UUID(d.site), EmailHash: emailHash[:], Email: email,
@@ -199,12 +202,9 @@ func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, re
 	return RegisterResult{Pending: true}, nil
 }
 
-// registrationInviter is the user an open registration's invite code names, nil with no code, or ErrInvalidInvite for
-// a code that would not admit an invitation: unknown, of a disabled user, or of another site.
+// registrationInviter is the user an open registration's invite code names, or ErrInvalidInvite for a code that would
+// not admit an invitation: unknown, of a disabled user, or of another site.
 func (s *Service) registrationInviter(ctx context.Context, tx pg.Tx, site uuid.UUID, code string) (*uuid.UUID, error) {
-	if code == "" {
-		return nil, nil
-	}
 	inviters, err := s.queries.RegistrationInviter(ctx, tx, RegistrationInviterParams{SiteID: site, Code: code})
 	if err != nil {
 		return nil, err
