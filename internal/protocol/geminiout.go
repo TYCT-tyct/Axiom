@@ -63,7 +63,7 @@ func geminiNative(model string) bool {
 var partMembers = map[string]map[string]bool{
 	"":          {"type": true, "text": true, "refusal": true, "image_url": true, "file": true, "cache_control": true},
 	"image_url": {"url": true, "detail": true},
-	"file":      {"file_data": true, "file_id": true, "filename": true},
+	"file":      {"file_data": true, "file_id": true},
 }
 
 // partsRead reports a content part of body that holds a member the conversion does not read, which the shared decoder
@@ -427,7 +427,11 @@ func (c *canon) geminiChoice(g *geminiRequest, strict bool) error {
 func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) error {
 	chat := map[string]jsonx.Raw{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
 	maps.Copy(chat, c.Unknown)
-	if n := c.maxOutput(); n > 0 {
+	n := c.maxOutput()
+	if n > geminiOutputCap {
+		return &NotSupported{Reason: "an output past one request's cap is not asked of Gemini natively"}
+	}
+	if n > 0 {
 		chat["max_tokens"] = jsonValue(n)
 	}
 	moveSettings(chat, config)
@@ -444,6 +448,10 @@ func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) erro
 	}
 	return c.geminiThinking(config, model)
 }
+
+// geminiOutputCap is the most output one generateContent request of a natively called model gives (Google《Long
+// decode》, read 2026-11-27): a larger max_tokens goes to Google's OpenAI-compatible layer, as Gemini would refuse it.
+const geminiOutputCap = 65536
 
 // moveSettings moves the settings both sides share from chat into Gemini's config; a lone stop is Gemini's list of one.
 func moveSettings(chat, config map[string]jsonx.Raw) {

@@ -181,6 +181,8 @@ func TestChatToGemini(t *testing.T) {
 		{"an assistant turn's audio", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","audio":{"id":"audio_1"}},{"role":"user","content":"Again"}]}`, ""},
 		{"a part member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"Hi","annotations":[{"x":1}]}]}]}`, ""},
 		{"an image member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","crop":"top"}}]}]}`, ""},
+		{"a file's name", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,AAAA","filename":"a.pdf"}}]}]}`, ""},
+		{"an output past one request's cap", native, ask(`,"max_tokens":70000`), ""},
 		{"an inline image", native, image(`"auto"`), `{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}]}`},
 		{"an image's detail", native, image(`"low"`), ""},
 		{"a late system message", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"system","content":"late"}]}`, ""},

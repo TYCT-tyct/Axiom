@@ -198,6 +198,7 @@ func TestAWholeCompatibleAnswerTakesTheHeadersTier(t *testing.T) {
 		`{"id":"r1","object":"chat.completion"}`:                             `{"service_tier":"default","id":"r1","object":"chat.completion"}`,
 		` {"service_tier":"priority","object":"chat.completion"}`:            ` {"service_tier":"priority","object":"chat.completion"}`,
 		`{"id":"r1","choices":[{"message":{"content":"\"service_tier\""}}]}`: `{"service_tier":"default","id":"r1","choices":[{"message":{"content":"\"service_tier\""}}]}`,
+		`{"id":"r1","choices":[{"message":{"content":"service_tier"}}]}`:     `{"service_tier":"default","id":"r1","choices":[{"message":{"content":"service_tier"}}]}`,
 	} {
 		h := http.Header{"Content-Type": {"application/json"}, "X-Gemini-Service-Tier": {"standard"}}
 		resp := google.New().Calls().(adapter.Signer).Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: h, Body: io.NopCloser(strings.NewReader(body))})

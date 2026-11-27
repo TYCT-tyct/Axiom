@@ -6,11 +6,9 @@ import (
 	"errors"
 	"io"
 	"strconv"
-)
 
-// tierKey is the member the tier is named by. In JSON a quote inside a string is escaped, so these bytes are only ever
-// a member's name, never text.
-var tierKey = []byte(`"service_tier"`)
+	"axiom/internal/platform/jsonx"
+)
 
 // withTier is a Chat answer of the compatible layer, streamed or whole, with the tier, in Chat's name, as its
 // service_tier where it names none: Google says a downgrade in the x-gemini-service-tier header and need not say it
@@ -81,11 +79,18 @@ func (t *tierWhole) Read(p []byte) (int, error) {
 
 func (t *tierWhole) Close() error { return t.body.Close() }
 
-// insertTier is b with member after the opening of the object that starts with open (leading space aside), when b names
-// no tier; b as it is otherwise.
+// insertTier is b with member after the opening of the object that starts with open (leading space aside), when the
+// object is sound JSON and has no service_tier member of its own; b as it is otherwise. Only the object's own members
+// are read: a nested one, or text that reads "service_tier", is not the reply's tier.
 func insertTier(b, open, member []byte) []byte {
 	trimmed := bytes.TrimLeft(b, " \t\r\n")
-	if !bytes.HasPrefix(trimmed, open) || bytes.Contains(b, tierKey) {
+	if !bytes.HasPrefix(trimmed, open) {
+		return b
+	}
+	var top struct {
+		Tier jsonx.Raw `json:"service_tier"`
+	}
+	if jsonx.Unmarshal(trimmed[len(open)-1:], &top) != nil || len(top.Tier) > 0 {
 		return b
 	}
 	at := len(b) - len(trimmed) + len(open)
