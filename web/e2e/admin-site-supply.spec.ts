@@ -184,7 +184,8 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     const unpriced = newapi?.endpoints.find((one) => one.upstream_name === "unpriced-model");
     const unexpressible = newapi?.endpoints.find((one) => one.upstream_name === "rate-limited-model");
     if (!newapi || !unpriced || !unexpressible) throw new Error("the usual data has supplier 1's endpoints");
-    newapi.supplier.unit_value = "1";
+    // settled in US dollars, so the catalog's official price is the default
+    Object.assign(newapi.supplier, { unit_value: "1", settlement_currency: "USD" });
     Object.assign(unpriced, { model_id: uuid(5, 1), cost_reason: "unpriced" });
     Object.assign(unexpressible, { cost_state: "unknown", cost_reason: "unexpressible" });
     await page.goto(`/suppliers/${uuid(2, 1)}?tab=models`);
