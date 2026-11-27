@@ -8,10 +8,9 @@ import { ChangeDialog } from "../change";
 import { RatesFields, useInvalid } from "../models/price-fields";
 import { Rates } from "../models/prices";
 import { modelQuery } from "../queries";
-import { type BaseModel, type BaseTarget, confirmation, officialIn, readBase } from "./base-price";
+import { type BaseModel, type BaseTarget, confirmation, type Reference, readBase, referenceIn } from "./base-price";
 
 type Supplier = AdminSchemas["Supplier"];
-type Schedule = AdminSchemas["PriceSchedule"];
 
 const base = "/api/admin/v1/suppliers/{supplier_id}";
 const params = (supplier: Supplier, key: string) => ({
@@ -53,7 +52,7 @@ export function ConfirmBaseDialog({
       ready={!noUnit && model.isSuccess}
       fields={() => (
         <DataState query={model} compact>
-          {(found) => <BaseFields official={officialIn(found, currency)} currency={currency} />}
+          {(found) => <BaseFields reference={referenceIn(found, currency)} currency={currency} />}
         </DataState>
       )}
       read={(values) => readBase(values, currency, invalid)}
@@ -91,11 +90,14 @@ function UnitMissing({ supplier }: { supplier: Supplier }) {
 
 type Source = "official" | "entered";
 
-// The choice of where the base comes from: the official price as the catalog has it, or prices typed item by item,
-// prefilled from its standard prices. The typed fields stay mounted while the official price is chosen, only hidden,
-// so going back to them finds what was typed; the source field says which of the two is sent.
-export function BaseFields({ official, currency }: { official?: Schedule; currency: string }) {
+// The choice of where the base comes from: the catalog's reference price, named by its own source (an official price,
+// one entered by hand, or one synced), or prices typed item by item, prefilled from its standard prices. The typed
+// fields stay mounted while the reference price is chosen, only hidden, so going back to them finds what was typed;
+// the source field says which of the two is sent.
+export function BaseFields({ reference, currency }: { reference?: Reference; currency: string }) {
   const { t } = useTranslation();
+  const official = reference?.schedule;
+  const from = reference ? t(`models.source.${reference.source}`) : "";
   const [source, setSource] = useState<Source>(official ? "official" : "entered");
   return (
     <Stack gap={16}>
@@ -106,7 +108,7 @@ export function BaseFields({ official, currency }: { official?: Schedule; curren
           value={source}
           options={(["official", "entered"] as const).map((value) => ({
             value,
-            label: t(`upstream.basePrice.${value}`),
+            label: t(`upstream.basePrice.${value}`, { source: from }),
           }))}
           onChange={setSource}
         />
@@ -116,7 +118,7 @@ export function BaseFields({ official, currency }: { official?: Schedule; curren
       {official && source === "official" ? (
         <Stack gap={8}>
           <Text size="sm" tone="muted">
-            {t("upstream.basePrice.officialPrice")}
+            {t("upstream.basePrice.officialPrice", { source: from })}
           </Text>
           <Rates schedule={official} />
         </Stack>

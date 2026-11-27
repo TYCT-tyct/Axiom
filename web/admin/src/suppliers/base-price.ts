@@ -42,10 +42,13 @@ export function nameTarget(row: AdminSchemas["SupplierModel"]): BaseTarget | und
     : undefined;
 }
 
-// The catalog's current price of the model in the currency: the whole price list, tiers and all, which is what the
-// server takes as the base when no price is given.
-export function officialIn(model: AdminSchemas["Model"], currency: string): Schedule | undefined {
-  return model.prices.find((price) => price.currency === currency)?.schedule;
+// The catalog's current reference price of the model in the currency, with where it came from (official, entered by
+// hand, or synced): the whole price list, tiers and all, which is what the server takes as the base when no price is
+// given.
+export type Reference = { schedule: Schedule; source: AdminSchemas["PriceSource"] };
+export function referenceIn(model: AdminSchemas["Model"], currency: string): Reference | undefined {
+  const price = model.prices.find((one) => one.currency === currency);
+  return price?.schedule ? { schedule: price.schedule, source: price.source } : undefined;
 }
 
 // The choice the form holds; the entered prices are in the settlement currency, whatever the form was filled from.

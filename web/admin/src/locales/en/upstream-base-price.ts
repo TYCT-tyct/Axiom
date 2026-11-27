@@ -10,16 +10,16 @@ export default {
     formula:
       "Cost = base ÷ unit value (rounded up) × group ratio (rounded up). It shows in the endpoint's price lines after the next sync round. If it exceeds the unit price limit, the cost stays unknown and no price line appears.",
     source: "Where the base comes from",
-    official: "Catalog official price",
+    official: "Catalog reference price ({{source}})",
     entered: "Enter per item",
-    officialPrice: "The catalog's official price",
-    noOfficial: "The catalog has no {{currency}} official price for this model. Enter the prices item by item.",
+    officialPrice: "The catalog's reference price, from: {{source}}",
+    noOfficial: "The catalog has no {{currency}} reference price for this model. Enter the prices item by item.",
     enteredHint: "In {{currency}}. An item left empty has no price.",
     unitMissingBody: "A base price is stored in the supplier's own unit, which needs the unit value.",
     unitAction: "Confirm the unit value first",
     refused: {
       conflict:
-        "This supplier's unit value is not confirmed yet, or it is not a relay. Confirm the unit value in settings first.",
+        "Not stored: this supplier's unit value is not confirmed yet, it is not a relay, or it now publishes a price for this model, so no base is needed.",
       unprocessable:
         "This base price cannot be stored: the name is not mapped to a catalog model yet, every price is 0, or a price is above the unit price limit after conversion.",
       stale_revision:

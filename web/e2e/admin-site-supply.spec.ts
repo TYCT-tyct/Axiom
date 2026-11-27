@@ -188,6 +188,10 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     Object.assign(newapi.supplier, { unit_value: "1", settlement_currency: "USD" });
     Object.assign(unpriced, { model_id: uuid(5, 1), cost_reason: "unpriced" });
     Object.assign(unexpressible, { cost_state: "unknown", cost_reason: "unexpressible" });
+    // the model's reference price was entered by hand, and the dialog says so rather than calling it official
+    const reference = state.models.find((one) => one.id === uuid(5, 1))?.prices[0];
+    if (!reference) throw new Error("the usual data prices model 1");
+    reference.source = "manual";
     await page.goto(`/suppliers/${uuid(2, 1)}?tab=models`);
     await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
     await expect(page.getByRole("row").filter({ hasText: "rate-limited-model" })).toContainText(
@@ -197,6 +201,7 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(offer).toBeVisible();
     await expect(page.getByRole("button", { name: "确认 rate-limited-model 的底价（分组 Maple）" })).toHaveCount(0);
     await offer.click();
+    await expect(dialog(page)).toContainText(`（${zhText("models.source.manual")}）`);
     const sent = page.waitForRequest(
       (request) => request.method() === "POST" && request.url().includes("/base-prices"),
     );
