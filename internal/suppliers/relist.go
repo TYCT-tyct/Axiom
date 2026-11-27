@@ -299,43 +299,58 @@ func (l *lines) relistKeys(ctx context.Context, snap *catalog.Snapshot, r store.
 		return err
 	}
 	var keys []lineKey
-	if err := l.db.ReadTx(ctx, l.scope, func(tx pg.Tx) error {
-		rows, err := store.New().ListLineKeys(ctx, tx, r.ID)
-		if err != nil {
-			return fmt.Errorf("read the keys: %w", err)
-		}
-		for _, k := range rows {
-			key, err := l.admin.openKey(ctx, tx, k.ID)
-			if err != nil {
-				return fmt.Errorf("credential %s: %w", k.ID, err)
-			}
-			keys = append(keys, lineKey{id: k.ID, key: key, settings: settingsOf(k.Settings)})
-		}
-		return nil
+	if err := l.db.ReadTx(ctx, l.scope, func(tx pg.Tx) (err error) {
+		keys, err = l.keysOf(ctx, tx, line)
+		return err
 	}); err != nil {
 		return err
 	}
-	said, err := l.ask(ctx, line, keys)
-	if err != nil {
-		return err
-	}
+	said := l.ask(ctx, line, keys)
 	return l.db.Tx(ctx, l.scope, func(tx pg.Tx) error { return l.writeKeys(ctx, tx, snap, line, said) })
 }
 
-// lineKey is one key of a line, opened for the requests that ask about it and kept nowhere.
+// keysOf is a line's keys, opened, each asked through its calls' exit; one whose exit is disabled waits for it, as calls do.
+func (l *lines) keysOf(ctx context.Context, tx pg.Tx, line pastedLine) ([]lineKey, error) {
+	rows, err := store.New().ListLineKeys(ctx, tx, line.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the keys: %w", err)
+	}
+	exits, err := readExits(ctx, tx, l.admin.egress, l.admin.keys, nil)
+	if err != nil {
+		return nil, err
+	}
+	var keys []lineKey
+	for _, k := range rows {
+		exit, _, err := exits.client(k.EgressID)
+		switch {
+		case errors.Is(err, errNoExit):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("credential %s: %w", k.ID, err)
+		}
+		c, err := client.New(line.Origin, exit, client.NewLimiter(nil, l.admin.now), l.admin.now)
+		if err != nil {
+			return nil, err
+		}
+		key, err := l.admin.openKey(ctx, tx, k.ID)
+		if err != nil {
+			return nil, fmt.Errorf("credential %s: %w", k.ID, err)
+		}
+		keys = append(keys, lineKey{id: k.ID, key: key, settings: settingsOf(k.Settings), client: c})
+	}
+	return keys, nil
+}
+
+// lineKey is one key of a line, opened for the requests that ask about it and kept nowhere, and the client they go by.
 type lineKey struct {
 	id       uuid.UUID
 	key      secret.Secret
 	settings adapter.Settings
+	client   adapter.Client
 }
 
 // ask is what the provider says of each key, a few keys at once.
-func (l *lines) ask(ctx context.Context, line pastedLine, keys []lineKey) ([]relisted, error) {
-	a := l.admin
-	c, err := client.New(line.Origin, a.egress, client.NewLimiter(nil, a.now), a.now)
-	if err != nil {
-		return nil, err
-	}
+func (l *lines) ask(ctx context.Context, line pastedLine, keys []lineKey) []relisted {
 	said := make([]relisted, len(keys))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, checkParallel)
@@ -343,24 +358,24 @@ func (l *lines) ask(ctx context.Context, line pastedLine, keys []lineKey) ([]rel
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			said[i] = l.askKey(ctx, c, line, k) // each goroutine writes only its own element
+			said[i] = l.askKey(ctx, line, k) // each goroutine writes only its own element
 		})
 	}
 	wg.Wait()
-	return said, nil
+	return said
 }
 
 // askKey lists one key's models, when its type lists them, and reads its balance, when its type reads one. A balance
 // that does not read stays as last read, and the next hour reads it again.
-func (l *lines) askKey(ctx context.Context, c adapter.Client, line pastedLine, key lineKey) relisted {
+func (l *lines) askKey(ctx context.Context, line pastedLine, key lineKey) relisted {
 	ad, _ := l.admin.registry.Get(adapter.Kind(line.Kind))
 	d := ad.(adapter.Direct) // the line's mode is direct
 	k := relisted{id: key.id}
 	if line.t.Lists {
-		k.check = d.CheckKey(ctx, c, line.family, key.key, key.settings)
+		k.check = d.CheckKey(ctx, key.client, line.family, key.key, key.settings)
 	}
 	if b, ok := d.(adapter.Balancer); ok && line.t.Balance {
-		m, err := b.ReadBalance(ctx, c, key.key, key.settings, line.currency)
+		m, err := b.ReadBalance(ctx, key.client, key.key, key.settings, line.currency)
 		if err != nil {
 			l.logger.WarnContext(ctx, "suppliers: a key's balance did not read", "supplier", line.ID.String(), "credential", key.id.String(), "err", err)
 		} else {

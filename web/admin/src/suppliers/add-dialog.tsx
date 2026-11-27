@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import { useAllSuppliers } from "../all-suppliers";
 import { ChangeDialog, isProblem, type Problem } from "../change";
 import { ConnectDialog } from "./connect";
+import { EgressSelect } from "./egress";
 import { Checks, LimitFields, readLimits } from "./key-fields";
 import { supplierTypesQuery } from "./queries";
 import { choosableFamilies, formLabel, formOf, readFields, type SupplierType } from "./supplier-types";
@@ -197,6 +198,7 @@ function NewFields(props: ChoiceProps) {
       ) : null}
       <TypeFields key={choice.form} fields={askedOf(type, choice.form)} error={error} />
       <LimitFields error={error} />
+      <EgressSelect />
       <Field
         label={t("upstream.addDialog.name")}
         placeholder={t("upstream.addDialog.namePlaceholder")}
@@ -286,7 +288,8 @@ function readTyped(type: SupplierType, choice: Choice, values: Record<string, st
   const name = (values.name ?? "").trim();
   if (!name) return { problem: t("upstream.addDialog.problems.name") };
   const form = type.forms.length > 1 ? choice.form : undefined;
-  return { to: null, body: { name, ...where, form, ...read, ...limits } };
+  const egress_id = values.egress_id || undefined;
+  return { to: null, body: { name, ...where, form, ...read, ...limits, egress_id } };
 }
 
 // Where a new supplier is connected: the entry chosen, or for a type without entries the address, the currency and,

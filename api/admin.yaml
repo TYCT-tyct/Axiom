@@ -5302,6 +5302,180 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress:
+    put:
+      operationId: setSupplierCredentialEgress
+      tags: [Suppliers]
+      summary: Set the egress proxy one credential's calls and checks go through
+      description: >-
+        `egress_id` names an egress proxy (`listEgressProxies`), and null or absent is direct. The credential's calls,
+        its checks and its re-list go through it from each node's next reload; while the proxy is disabled they go
+        through its fallback, and while that is disabled or absent the credential is not called and not checked, never
+        sent direct instead. A proxy that is not there is 422; an `erased` credential is 409. Already as asked: nothing
+        changes and nothing is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialEgressUpdate"}
+      responses:
+        "200":
+          description: The credential as changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/egress-proxies:
+    get:
+      operationId: listEgressProxies
+      tags: [Suppliers]
+      summary: The egress proxies suppliers' credentials can go through
+      description: >-
+        Every proxy by id, without its password: only whether it has one (docs/domains/suppliers.md「出口代理」).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      responses:
+        "200":
+          description: The proxies.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EgressProxyList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createEgressProxy
+      tags: [Suppliers]
+      summary: Add an egress proxy
+      description: >-
+        An http or https proxy that opens tunnels with CONNECT, or a socks5 one, at an address of the operator's
+        choosing, which may be a private one; the targets reached through it are still refused when they are private or
+        internal. Its scheme, host and port do not change after: another address is another proxy. The password is
+        sealed on arrival and never returned. A fallback is another proxy with no fallback of its own (422 otherwise).
+        An id already taken is 409.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EgressProxyCreate"}
+      responses:
+        "201":
+          description: The proxy, without its password.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EgressProxy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/egress-proxies/{proxy_id}:
+    put:
+      operationId: updateEgressProxy
+      tags: [Suppliers]
+      summary: Change an egress proxy's name, fallback, status or credentials
+      description: >-
+        Sets the name, the fallback (absent or null for none) and the status; `auth` replaces the username and the
+        password, and absent keeps them. A disabled proxy hands its credentials to its fallback while that is active.
+        A fallback is another proxy with no fallback of its own, and a proxy that is a fallback has none (422). The nodes
+        take the change at their next reload; calls in flight finish on the connection they have.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - {name: proxy_id, in: path, required: true, schema: {$ref: "#/components/schemas/EgressProxyId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EgressProxyUpdate"}
+      responses:
+        "200":
+          description: The proxy as changed, without its password.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EgressProxy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/egress-proxies/{proxy_id}/removal:
+    post:
+      operationId: removeEgressProxy
+      tags: [Suppliers]
+      summary: Remove an egress proxy
+      description: >-
+        Only a proxy that no credential uses and that is no other proxy's fallback: 409 otherwise. An erased credential
+        does not keep it. Sending it again after it is gone is 404.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - {name: proxy_id, in: path, required: true, schema: {$ref: "#/components/schemas/EgressProxyId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The proxy as it was, without its password.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EgressProxy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/supplier-credentials:
     get:
       operationId: listSupplierCredentials
@@ -10687,6 +10861,9 @@ components:
             The upstream account's requests in the rolling minute, as the node that answered counted them: the count
             `requests_per_minute` is compared with.
         last_check: {$ref: "#/components/schemas/CredentialCheck"}
+        egress_id:
+          allOf: [{$ref: "#/components/schemas/EgressProxyId"}]
+          description: The egress proxy its calls and checks go through; absent is direct.
     CredentialLimits:
       type: object
       required: [max_concurrency, reason]
@@ -11623,6 +11800,11 @@ components:
           description: >-
             The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1.
           allOf: [{$ref: "#/components/schemas/Decimal"}]
+        egress_id:
+          allOf: [{$ref: "#/components/schemas/EgressProxyId"}]
+          description: >-
+            The egress proxy every key or region it stores is checked and called through (`listEgressProxies`);
+            absent is direct. One that is not there is 422; one disabled with no active fallback is 409.
         reason: {$ref: "#/components/schemas/Reason"}
     SupplierCostRatioUpdate:
       type: object
@@ -11797,6 +11979,78 @@ components:
           items: {type: string, minLength: 8, maxLength: 4096}
         max_concurrency: {type: integer, minimum: 1, maximum: 2147483647, description: "The calls each key has in flight at once."}
         requests_per_minute: {type: integer, minimum: 1, maximum: 100000, description: "Each key's rolling-minute ceiling; absent for none."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    EgressProxyId:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'
+      description: What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+    EgressProxy:
+      type: object
+      required: [id, name, scheme, host, port, has_password, status]
+      properties:
+        id: {$ref: "#/components/schemas/EgressProxyId"}
+        name: {type: string}
+        scheme: {type: string, enum: [http, https, socks5]}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        username: {type: string, description: "Absent for a proxy that asks for none."}
+        has_password: {type: boolean, description: Whether a password is sealed; the password is never returned.}
+        fallback_id: {$ref: "#/components/schemas/EgressProxyId"}
+        status: {type: string, enum: [active, disabled]}
+    EgressProxyList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/EgressProxy"}
+    EgressProxyAuth:
+      type: object
+      required: [username]
+      writeOnly: true
+      properties:
+        username: {type: string, minLength: 1, maxLength: 255}
+        password:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Sealed on arrival and never returned; absent for none.
+    EgressProxyCreate:
+      type: object
+      required: [id, name, scheme, host, port, reason]
+      properties:
+        id: {$ref: "#/components/schemas/EgressProxyId"}
+        name: {type: string, minLength: 1, maxLength: 200}
+        scheme: {type: string, enum: [http, https, socks5]}
+        host:
+          type: string
+          pattern: '^[A-Za-z0-9.:-]{1,253}$'
+          description: A name or an IP address, an IPv6 one without brackets.
+        port: {type: integer, minimum: 1, maximum: 65535}
+        auth: {$ref: "#/components/schemas/EgressProxyAuth"}
+        fallback_id: {$ref: "#/components/schemas/EgressProxyId"}
+        status: {type: string, enum: [active, disabled], description: "Absent is active."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    EgressProxyUpdate:
+      type: object
+      required: [name, status, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {type: string, enum: [active, disabled]}
+        fallback_id:
+          allOf: [{$ref: "#/components/schemas/EgressProxyId"}]
+          nullable: true
+          description: Absent or null for none.
+        auth: {$ref: "#/components/schemas/EgressProxyAuth"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    CredentialEgressUpdate:
+      type: object
+      required: [reason]
+      properties:
+        egress_id:
+          allOf: [{$ref: "#/components/schemas/EgressProxyId"}]
+          nullable: true
+          description: The proxy; absent or null is direct.
         reason: {$ref: "#/components/schemas/Reason"}
     CredentialEnabledUpdate:
       type: object

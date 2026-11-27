@@ -15,6 +15,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -60,6 +61,7 @@ type CloudRequest struct {
 	Currency           platform.Currency
 	Limits             Limits
 	Reason             string
+	EgressID           string // the proxy it is checked and called through in every region; empty for direct
 }
 
 // Deployment is a model a person names for a platform that does not list them (Azure OpenAI): the name its calls
@@ -77,6 +79,7 @@ type CloudPlan struct {
 	settings adapter.Settings
 	ratio    *big.Rat  // the line's: the request's for a new one, the supplier's for a replacement
 	supplier uuid.UUID // the supplier a replacement is for; zero for a new one
+	exit     *egress.Client
 	Checks   []KeyCheck
 	regions  []cloudRegion // one for each of Checks
 	// lineNames is, for a name a region lists, the other name the line's endpoint of its model is stored by: set once
@@ -146,6 +149,9 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 		return nil, err
 	}
 	p.r, p.ratio = r, ratio
+	if p.exit, err = a.exitFor(ctx, tx, r.EgressID); err != nil {
+		return nil, err
+	}
 	return p, p.skipStored(ctx, tx)
 }
 
@@ -257,7 +263,7 @@ func (a *Admin) CheckCloud(ctx context.Context, p *CloudPlan) error {
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			got := p.cloud.CheckRegion(ctx, a.egress, p.origin, p.Checks[i].Region, p.cred.Key, p.settings, a.now())
+			got := p.cloud.CheckRegion(ctx, p.exit, p.origin, p.Checks[i].Region, p.cred.Key, p.settings, a.now())
 			p.Checks[i] = checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, p.Checks[i], a.now())
 			if got.Models != nil { // a platform whose models are named lists none
 				p.regions[i].models, p.regions[i].listed = got.Models, true // each goroutine writes only its own
@@ -389,8 +395,8 @@ func (a *Admin) insertRegion(ctx context.Context, tx pg.Tx, q *store.Queries, id
 		ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: p.regions[i].ref,
 		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
 		MaxConcurrency: concurrency, RequestsPerMinute: perMinute, AllowedModels: s.allowed, CallNames: s.callNames,
-		Hint: &c.Last4, Region: regionColumn(c.Region), CheckedAt: &c.CheckedAt, CheckStatus: &status,
-		Settings: settingsColumn(p.settings),
+		Hint: &c.Last4, Region: orNull(c.Region), CheckedAt: &c.CheckedAt, CheckStatus: &status,
+		Settings: settingsColumn(p.settings), EgressID: orNull(p.r.EgressID),
 	}); err != nil {
 		return fmt.Errorf("store the region %q: %w", c.Region, err)
 	}
@@ -420,14 +426,6 @@ func (o lineOffer) knownAs(name string) string {
 		return name
 	}
 	return o.known(name)
-}
-
-// regionColumn is a region as the column holds it: none for a platform without regions.
-func regionColumn(r string) *string {
-	if r == "" {
-		return nil
-	}
-	return &r
 }
 
 // offer is what the regions that passed serve: the names their checks listed, and for a platform that lists none,
@@ -488,7 +486,7 @@ func cloudAudit(p *CloudPlan) map[string]any {
 	for i, c := range p.Checks {
 		regions[i] = map[string]any{"region": c.Region, "outcome": string(c.Outcome)}
 	}
-	detail := map[string]any{"kind": p.kind, "last4": p.cred.Last4, "regions": regions, "max_concurrency": p.r.Limits.MaxConcurrency}
+	detail := map[string]any{"kind": p.kind, "last4": p.cred.Last4, "regions": regions, "max_concurrency": p.r.Limits.MaxConcurrency, "egress": exitName(p.r.EgressID)}
 	if p.r.Limits.RequestsPerMinute != nil {
 		detail["requests_per_minute"] = *p.r.Limits.RequestsPerMinute
 	}

@@ -57,6 +57,9 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 		return nil, err
 	}
 	p.r, p.supplier = r, supplier
+	if err := a.lineExit(ctx, tx, p); err != nil {
+		return nil, err
+	}
 	return p, p.skipStored(ctx, tx)
 }
 
@@ -111,6 +114,30 @@ func servedRegions(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]string,
 	}
 	slices.Sort(regions)
 	return regions, nil
+}
+
+// lineExit sets the exit a replacement is checked through and a region it adds is stored with: the one the supplier's
+// credentials share now, direct when they share none.
+func (a *Admin) lineExit(ctx context.Context, tx pg.Tx, p *CloudPlan) error {
+	creds, err := store.New().ListCredentialsOf(ctx, tx, p.supplier)
+	if err != nil {
+		return fmt.Errorf("read the credentials: %w", err)
+	}
+	shared, first := "", true
+	for _, c := range creds {
+		if c.Status == "erased" {
+			continue
+		}
+		if id := deref(c.EgressID); first {
+			shared, first = id, false
+		} else if id != shared {
+			shared = ""
+			break
+		}
+	}
+	p.r.EgressID = shared
+	p.exit, err = a.exitFor(ctx, tx, shared)
+	return err
 }
 
 // ReplaceCloud puts the new credential in place in the caller's transaction, under the supplier's lock: each region

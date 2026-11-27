@@ -33,7 +33,7 @@ func (a adminAPI) createCloud(ctx context.Context, key, kind string, b *adminapi
 	}
 	claim, err := idempotencyClaim(ctx, "createTypedSupplier", key, []any{
 		r.Kind, r.Name, r.Entry, r.Origin, r.Form, r.Regions, r.Deployments, r.Currency.String(), plan.Settings(),
-		r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Ratio, r.Reason, plan.Account(), plan.Checks[0].Last4,
+		r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Ratio, r.EgressID, r.Reason, plan.Account(), plan.Checks[0].Last4,
 	})
 	if err != nil {
 		return adminapi.SupplierConnected{}, false, err
@@ -115,7 +115,8 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 func cloudRequest(kind string, b *adminapi.TypedSupplierCreate) (suppliers.CloudRequest, error) {
 	r := suppliers.CloudRequest{
 		Kind: kind, Name: b.Name, Form: textValue(b.Form), Fields: fieldsOf(b.Fields), Reason: b.Reason, Ratio: textValue(b.CostRatio),
-		Limits: suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute},
+		EgressID: textValue(b.EgressId),
+		Limits:   suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute},
 	}
 	switch {
 	case b.Keys != nil:

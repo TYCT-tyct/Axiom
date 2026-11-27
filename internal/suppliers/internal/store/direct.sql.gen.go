@@ -15,10 +15,10 @@ import (
 const insertDirectCredential = `-- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings, balance_native,
-    balance_observed_at)
+    balance_observed_at, egress_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
     'active', $9, $10, $11, $12, $13, $14,
-    $15::text::numeric, $16)
+    $15::text::numeric, $16, $17)
 `
 
 type InsertDirectCredentialParams struct {
@@ -38,6 +38,7 @@ type InsertDirectCredentialParams struct {
 	Settings          []byte
 	BalanceNative     *string
 	BalanceObservedAt *time.Time
+	EgressID          *string
 }
 
 func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg InsertDirectCredentialParams) error {
@@ -58,6 +59,7 @@ func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg Inser
 		arg.Settings,
 		arg.BalanceNative,
 		arg.BalanceObservedAt,
+		arg.EgressID,
 	)
 	return err
 }
@@ -162,7 +164,7 @@ func (q *Queries) LineNames(ctx context.Context, db DBTX, supplierGroupID uuid.U
 }
 
 const listLineKeys = `-- name: ListLineKeys :many
-SELECT id, settings FROM suppliers.credentials
+SELECT id, settings, egress_id FROM suppliers.credentials
 WHERE supplier_id = $1 AND status = 'active' AND ciphertext IS NOT NULL
 ORDER BY id
 `
@@ -170,6 +172,7 @@ ORDER BY id
 type ListLineKeysRow struct {
 	ID       uuid.UUID
 	Settings []byte
+	EgressID *string
 }
 
 // The keys of a direct supplier that are in service and hold a key, with their settings.
@@ -182,7 +185,7 @@ func (q *Queries) ListLineKeys(ctx context.Context, db DBTX, supplierID uuid.UUI
 	var items []ListLineKeysRow
 	for rows.Next() {
 		var i ListLineKeysRow
-		if err := rows.Scan(&i.ID, &i.Settings); err != nil {
+		if err := rows.Scan(&i.ID, &i.Settings, &i.EgressID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

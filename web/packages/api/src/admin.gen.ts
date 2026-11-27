@@ -2491,6 +2491,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the egress proxy one credential's calls and checks go through
+         * @description `egress_id` names an egress proxy (`listEgressProxies`), and null or absent is direct. The credential's calls, its checks and its re-list go through it from each node's next reload; while the proxy is disabled they go through its fallback, and while that is disabled or absent the credential is not called and not checked, never sent direct instead. A proxy that is not there is 422; an `erased` credential is 409. Already as asked: nothing changes and nothing is audited.
+         */
+        put: operations["setSupplierCredentialEgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The egress proxies suppliers' credentials can go through
+         * @description Every proxy by id, without its password: only whether it has one (docs/domains/suppliers.md「出口代理」).
+         */
+        get: operations["listEgressProxies"];
+        put?: never;
+        /**
+         * Add an egress proxy
+         * @description An http or https proxy that opens tunnels with CONNECT, or a socks5 one, at an address of the operator's choosing, which may be a private one; the targets reached through it are still refused when they are private or internal. Its scheme, host and port do not change after: another address is another proxy. The password is sealed on arrival and never returned. A fallback is another proxy with no fallback of its own (422 otherwise). An id already taken is 409.
+         */
+        post: operations["createEgressProxy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies/{proxy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change an egress proxy's name, fallback, status or credentials
+         * @description Sets the name, the fallback (absent or null for none) and the status; `auth` replaces the username and the password, and absent keeps them. A disabled proxy hands its credentials to its fallback while that is active. A fallback is another proxy with no fallback of its own, and a proxy that is a fallback has none (422). The nodes take the change at their next reload; calls in flight finish on the connection they have.
+         */
+        put: operations["updateEgressProxy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies/{proxy_id}/removal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove an egress proxy
+         * @description Only a proxy that no credential uses and that is no other proxy's fallback: 409 otherwise. An erased credential does not keep it. Sending it again after it is gone is 404.
+         */
+        post: operations["removeEgressProxy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/supplier-credentials": {
         parameters: {
             query?: never;
@@ -6042,6 +6126,8 @@ export interface components {
             /** @description The upstream account's requests in the rolling minute, as the node that answered counted them: the count `requests_per_minute` is compared with. */
             requests_last_minute?: number;
             last_check?: components["schemas"]["CredentialCheck"];
+            /** @description The egress proxy its calls and checks go through; absent is direct. */
+            egress_id?: components["schemas"]["EgressProxyId"];
         };
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
@@ -6671,6 +6757,8 @@ export interface components {
             requests_per_minute?: number;
             /** @description The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1. */
             cost_ratio?: components["schemas"]["Decimal"];
+            /** @description The egress proxy every key or region it stores is checked and called through (`listEgressProxies`); absent is direct. One that is not there is 422; one disabled with no active fallback is 409. */
+            egress_id?: components["schemas"]["EgressProxyId"];
             reason: components["schemas"]["Reason"];
         };
         SupplierCostRatioUpdate: {
@@ -6787,6 +6875,62 @@ export interface components {
             max_concurrency: number;
             /** @description Each key's rolling-minute ceiling; absent for none. */
             requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id. */
+        EgressProxyId: string;
+        EgressProxy: {
+            id: components["schemas"]["EgressProxyId"];
+            name: string;
+            /** @enum {string} */
+            scheme: "http" | "https" | "socks5";
+            host: string;
+            port: number;
+            /** @description Absent for a proxy that asks for none. */
+            username?: string;
+            /** @description Whether a password is sealed; the password is never returned. */
+            has_password: boolean;
+            fallback_id?: components["schemas"]["EgressProxyId"];
+            /** @enum {string} */
+            status: "active" | "disabled";
+        };
+        EgressProxyList: {
+            data: components["schemas"]["EgressProxy"][];
+        };
+        EgressProxyAuth: {
+            username: string;
+            /** @description Sealed on arrival and never returned; absent for none. */
+            password?: string;
+        };
+        EgressProxyCreate: {
+            id: components["schemas"]["EgressProxyId"];
+            name: string;
+            /** @enum {string} */
+            scheme: "http" | "https" | "socks5";
+            /** @description A name or an IP address, an IPv6 one without brackets. */
+            host: string;
+            port: number;
+            auth?: components["schemas"]["EgressProxyAuth"];
+            fallback_id?: components["schemas"]["EgressProxyId"];
+            /**
+             * @description Absent is active.
+             * @enum {string}
+             */
+            status?: "active" | "disabled";
+            reason: components["schemas"]["Reason"];
+        };
+        EgressProxyUpdate: {
+            name: string;
+            /** @enum {string} */
+            status: "active" | "disabled";
+            /** @description Absent or null for none. */
+            fallback_id?: components["schemas"]["EgressProxyId"] | null;
+            auth?: components["schemas"]["EgressProxyAuth"];
+            reason: components["schemas"]["Reason"];
+        };
+        CredentialEgressUpdate: {
+            /** @description The proxy; absent or null is direct. */
+            egress_id?: components["schemas"]["EgressProxyId"] | null;
             reason: components["schemas"]["Reason"];
         };
         CredentialEnabledUpdate: {
@@ -12368,6 +12512,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialEgress: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialEgressUpdate"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listEgressProxies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proxies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressProxyCreate"];
+            };
+        };
+        responses: {
+            /** @description The proxy, without its password. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                proxy_id: components["schemas"]["EgressProxyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressProxyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The proxy as changed, without its password. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    removeEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                proxy_id: components["schemas"]["EgressProxyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The proxy as it was, without its password. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -173,6 +173,8 @@ func typedProblem(err error) error {
 		return invalidField("/name", "1 to 200 characters")
 	case errors.Is(err, suppliers.ErrCostRatio):
 		return costRatioProblem(err, "/cost_ratio")
+	case errors.Is(err, suppliers.ErrUnknownEgress):
+		return unprocessableFields("/egress_id", "no egress proxy has that id")
 	}
 	return nil
 }

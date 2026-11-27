@@ -13,10 +13,10 @@ RETURNING id;
 -- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings, balance_native,
-    balance_observed_at)
+    balance_observed_at, egress_id)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
     'active', @max_concurrency, sqlc.narg(requests_per_minute), @allowed_models, sqlc.narg(call_names), @hint, sqlc.narg(settings),
-    sqlc.narg(balance_native)::text::numeric, sqlc.narg(balance_observed_at));
+    sqlc.narg(balance_native)::text::numeric, sqlc.narg(balance_observed_at), sqlc.narg(egress_id));
 
 -- name: StoredKeyRefs :many
 -- The pasted keys already stored as a credential that is not erased, by the reference a pasted key is stored under.
@@ -39,7 +39,7 @@ ORDER BY s.id;
 
 -- name: ListLineKeys :many
 -- The keys of a direct supplier that are in service and hold a key, with their settings.
-SELECT id, settings FROM suppliers.credentials
+SELECT id, settings, egress_id FROM suppliers.credentials
 WHERE supplier_id = @supplier_id AND status = 'active' AND ciphertext IS NOT NULL
 ORDER BY id;
 

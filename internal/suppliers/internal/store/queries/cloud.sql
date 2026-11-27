@@ -13,10 +13,10 @@ RETURNING id;
 -- A region that passed its check, at its first check's answer.
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, source, region,
-    checked_at, check_outcome, check_status, settings)
+    checked_at, check_outcome, check_status, settings, egress_id)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
     'active', @max_concurrency, sqlc.narg(requests_per_minute), sqlc.narg(allowed_models), sqlc.narg(call_names), @hint,
-    'pasted', sqlc.narg(region), @checked_at, 'passed', @check_status, sqlc.narg(settings));
+    'pasted', sqlc.narg(region), @checked_at, 'passed', @check_status, sqlc.narg(settings), sqlc.narg(egress_id));
 
 -- name: LockCloudCredentials :many
 -- A cloud supplier's credentials, erased ones too, held until the replacement commits.

@@ -68,7 +68,7 @@ func (a adminAPI) planDirect(ctx context.Context, r suppliers.DirectRequest) (*s
 func directRequest(kind string, b *adminapi.TypedSupplierCreate) (suppliers.DirectRequest, error) {
 	r := suppliers.DirectRequest{
 		Kind: kind, Name: b.Name, Fields: fieldsOf(b.Fields), MaxConcurrency: int32(b.MaxConcurrency), Reason: b.Reason, //nolint:gosec // the schema bounds it to 2³¹-1
-		Ratio: textValue(b.CostRatio),
+		Ratio: textValue(b.CostRatio), EgressID: textValue(b.EgressId),
 	}
 	switch {
 	case b.Regions != nil:
@@ -101,7 +101,7 @@ func directIdentity(r suppliers.DirectRequest) []any {
 	for i, k := range r.Keys {
 		tails[i] = suppliers.Last4(k)
 	}
-	return []any{r.Kind, r.Name, r.Entry, r.Origin, r.Family, r.Currency.String(), r.Fields, tails, r.MaxConcurrency, r.RequestsPerMinute, r.Ratio, r.Reason}
+	return []any{r.Kind, r.Name, r.Entry, r.Origin, r.Family, r.Currency.String(), r.Fields, tails, r.MaxConcurrency, r.RequestsPerMinute, r.Ratio, r.EgressID, r.Reason}
 }
 
 // connectedBody is the API's view of what the keys, or a cloud credential's regions, came to: a pasted key's check has

@@ -775,6 +775,102 @@ func (e EasyPaySettingsSignType) Valid() bool {
 	}
 }
 
+// Defines values for EgressProxyScheme.
+const (
+	EgressProxySchemeHttp   EgressProxyScheme = "http"
+	EgressProxySchemeHttps  EgressProxyScheme = "https"
+	EgressProxySchemeSocks5 EgressProxyScheme = "socks5"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyScheme enum.
+func (e EgressProxyScheme) Valid() bool {
+	switch e {
+	case EgressProxySchemeHttp:
+		return true
+	case EgressProxySchemeHttps:
+		return true
+	case EgressProxySchemeSocks5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyStatus.
+const (
+	EgressProxyStatusActive   EgressProxyStatus = "active"
+	EgressProxyStatusDisabled EgressProxyStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyStatus enum.
+func (e EgressProxyStatus) Valid() bool {
+	switch e {
+	case EgressProxyStatusActive:
+		return true
+	case EgressProxyStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyCreateScheme.
+const (
+	EgressProxyCreateSchemeHttp   EgressProxyCreateScheme = "http"
+	EgressProxyCreateSchemeHttps  EgressProxyCreateScheme = "https"
+	EgressProxyCreateSchemeSocks5 EgressProxyCreateScheme = "socks5"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyCreateScheme enum.
+func (e EgressProxyCreateScheme) Valid() bool {
+	switch e {
+	case EgressProxyCreateSchemeHttp:
+		return true
+	case EgressProxyCreateSchemeHttps:
+		return true
+	case EgressProxyCreateSchemeSocks5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyCreateStatus.
+const (
+	EgressProxyCreateStatusActive   EgressProxyCreateStatus = "active"
+	EgressProxyCreateStatusDisabled EgressProxyCreateStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyCreateStatus enum.
+func (e EgressProxyCreateStatus) Valid() bool {
+	switch e {
+	case EgressProxyCreateStatusActive:
+		return true
+	case EgressProxyCreateStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyUpdateStatus.
+const (
+	EgressProxyUpdateStatusActive   EgressProxyUpdateStatus = "active"
+	EgressProxyUpdateStatusDisabled EgressProxyUpdateStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyUpdateStatus enum.
+func (e EgressProxyUpdateStatus) Valid() bool {
+	switch e {
+	case EgressProxyUpdateStatusActive:
+		return true
+	case EgressProxyUpdateStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EndpointCostCostState.
 const (
 	EndpointCostCostStateConflict EndpointCostCostState = "conflict"
@@ -4018,6 +4114,15 @@ type CredentialCheckList struct {
 // CredentialCheckOutcome `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not checked.
 type CredentialCheckOutcome string
 
+// CredentialEgressUpdate defines model for CredentialEgressUpdate.
+type CredentialEgressUpdate struct {
+	// EgressId The proxy; absent or null is direct.
+	EgressId *EgressProxyId `json:"egress_id,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // CredentialEnabledUpdate defines model for CredentialEnabledUpdate.
 type CredentialEnabledUpdate struct {
 	Enabled bool `json:"enabled"`
@@ -4192,6 +4297,92 @@ type EffectiveKeyLimits struct {
 	CreationsPerHour int `json:"creations_per_hour"`
 	MaxKeys          int `json:"max_keys"`
 }
+
+// EgressProxy defines model for EgressProxy.
+type EgressProxy struct {
+	// FallbackId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+
+	// HasPassword Whether a password is sealed; the password is never returned.
+	HasPassword bool   `json:"has_password"`
+	Host        string `json:"host"`
+
+	// Id What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	Id     EgressProxyId     `json:"id"`
+	Name   string            `json:"name"`
+	Port   int               `json:"port"`
+	Scheme EgressProxyScheme `json:"scheme"`
+	Status EgressProxyStatus `json:"status"`
+
+	// Username Absent for a proxy that asks for none.
+	Username *string `json:"username,omitempty"`
+}
+
+// EgressProxyScheme defines model for EgressProxy.Scheme.
+type EgressProxyScheme string
+
+// EgressProxyStatus defines model for EgressProxy.Status.
+type EgressProxyStatus string
+
+// EgressProxyAuth defines model for EgressProxyAuth.
+type EgressProxyAuth struct {
+	// Password Sealed on arrival and never returned; absent for none.
+	Password *string `json:"password,omitempty"`
+	Username string  `json:"username"`
+}
+
+// EgressProxyCreate defines model for EgressProxyCreate.
+type EgressProxyCreate struct {
+	Auth *EgressProxyAuth `json:"auth,omitempty"`
+
+	// FallbackId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+
+	// Host A name or an IP address, an IPv6 one without brackets.
+	Host string `json:"host"`
+
+	// Id What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	Id   EgressProxyId `json:"id"`
+	Name string        `json:"name"`
+	Port int           `json:"port"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason                  `json:"reason"`
+	Scheme EgressProxyCreateScheme `json:"scheme"`
+
+	// Status Absent is active.
+	Status *EgressProxyCreateStatus `json:"status,omitempty"`
+}
+
+// EgressProxyCreateScheme defines model for EgressProxyCreate.Scheme.
+type EgressProxyCreateScheme string
+
+// EgressProxyCreateStatus Absent is active.
+type EgressProxyCreateStatus string
+
+// EgressProxyId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+type EgressProxyId = string
+
+// EgressProxyList defines model for EgressProxyList.
+type EgressProxyList struct {
+	Data []EgressProxy `json:"data"`
+}
+
+// EgressProxyUpdate defines model for EgressProxyUpdate.
+type EgressProxyUpdate struct {
+	Auth *EgressProxyAuth `json:"auth,omitempty"`
+
+	// FallbackId Absent or null for none.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+	Name       string         `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason                  `json:"reason"`
+	Status EgressProxyUpdateStatus `json:"status"`
+}
+
+// EgressProxyUpdateStatus defines model for EgressProxyUpdate.Status.
+type EgressProxyUpdateStatus string
 
 // EndpointCost defines model for EndpointCost.
 type EndpointCost struct {
@@ -7854,7 +8045,10 @@ type SupplierCreate struct {
 type SupplierCredential struct {
 	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+
+	// EgressId The egress proxy its calls and checks go through; absent is direct.
+	EgressId  *EgressProxyId `json:"egress_id,omitempty"`
+	ExpiresAt *time.Time     `json:"expires_at,omitempty"`
 
 	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	GroupId Uuid `json:"group_id"`
@@ -8519,6 +8713,9 @@ type TypedSupplierCreate struct {
 	// Deployments For a type with `deployments` (Azure OpenAI), which the platform does not list to its key.
 	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
 
+	// EgressId The egress proxy every key or region it stores is checked and called through (`listEgressProxies`); absent is direct. One that is not there is 422; one disabled with no active fallback is 409.
+	EgressId *EgressProxyId `json:"egress_id,omitempty"`
+
 	// Entry The price entry to connect at; absent for the first. Only for a type with entries (400).
 	Entry *string `json:"entry,omitempty"`
 
@@ -8859,6 +9056,24 @@ type ListAdminCallsParams struct {
 
 	// Plugin Only calls that used this plugin.
 	Plugin *AdminPlugin `form:"plugin,omitempty" json:"plugin,omitempty"`
+}
+
+// CreateEgressProxyParams defines parameters for CreateEgressProxy.
+type CreateEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateEgressProxyParams defines parameters for UpdateEgressProxy.
+type UpdateEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RemoveEgressProxyParams defines parameters for RemoveEgressProxy.
+type RemoveEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // ListModelsParams defines parameters for ListModels.
@@ -9604,6 +9819,12 @@ type BindSupplierKeyParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetSupplierCredentialEgressParams defines parameters for SetSupplierCredentialEgress.
+type SetSupplierCredentialEgressParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSupplierCredentialEnabledParams defines parameters for SetSupplierCredentialEnabled.
 type SetSupplierCredentialEnabledParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -9813,6 +10034,15 @@ type ConfirmTotpSetupJSONRequestBody = TotpConfirmRequest
 
 // SaveAuthorJSONRequestBody defines body for SaveAuthor for application/json ContentType.
 type SaveAuthorJSONRequestBody = AuthorSave
+
+// CreateEgressProxyJSONRequestBody defines body for CreateEgressProxy for application/json ContentType.
+type CreateEgressProxyJSONRequestBody = EgressProxyCreate
+
+// UpdateEgressProxyJSONRequestBody defines body for UpdateEgressProxy for application/json ContentType.
+type UpdateEgressProxyJSONRequestBody = EgressProxyUpdate
+
+// RemoveEgressProxyJSONRequestBody defines body for RemoveEgressProxy for application/json ContentType.
+type RemoveEgressProxyJSONRequestBody = ReasonRequest
 
 // CreateModelJSONRequestBody defines body for CreateModel for application/json ContentType.
 type CreateModelJSONRequestBody = ModelCreate
@@ -10062,6 +10292,9 @@ type SetSupplierCostRatioJSONRequestBody = SupplierCostRatioUpdate
 
 // BindSupplierKeyJSONRequestBody defines body for BindSupplierKey for application/json ContentType.
 type BindSupplierKeyJSONRequestBody = BindKey
+
+// SetSupplierCredentialEgressJSONRequestBody defines body for SetSupplierCredentialEgress for application/json ContentType.
+type SetSupplierCredentialEgressJSONRequestBody = CredentialEgressUpdate
 
 // SetSupplierCredentialEnabledJSONRequestBody defines body for SetSupplierCredentialEnabled for application/json ContentType.
 type SetSupplierCredentialEnabledJSONRequestBody = CredentialEnabledUpdate

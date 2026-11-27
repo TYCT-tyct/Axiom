@@ -63,6 +63,15 @@ func deref(s *string) string {
 	return *s
 }
 
+// orNull is deref's inverse: a text as a nullable column holds it, NULL for empty (a platform without regions, a
+// credential that goes direct).
+func orNull(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // Group is one of a supplier's groups. Facts is the supplier's own statement about it.
 type Group struct {
 	ID                uuid.UUID
@@ -114,6 +123,8 @@ type Credential struct {
 	Region string
 	// Settings is what is not secret about a direct or cloud credential, by its type's field names; nil for none.
 	Settings adapter.Settings
+	// EgressID is the proxy the credential's calls and checks go through; empty is direct.
+	EgressID string
 }
 
 // credentialFacts is one credential row as the tables hold it. Every read of a credential for the admin selects these
@@ -136,6 +147,7 @@ type credentialFacts struct {
 	CheckStatus       *int32
 	Region            *string
 	Settings          []byte
+	EgressID          *string
 }
 
 // credentialOf is a credential as the admin shows it.
@@ -144,7 +156,7 @@ func credentialOf(f credentialFacts) Credential {
 		ID: f.ID, Supplier: f.SupplierID, Group: f.SupplierGroupID, UpstreamKeyRef: f.UpstreamKeyRef, Status: f.Status,
 		CooldownUntil: f.CooldownUntil, ExpiresAt: f.ExpiresAt, MaxConcurrency: int(f.MaxConcurrency),
 		RequestsPerMinute: limited(f.RequestsPerMinute), Source: deref(f.Source), Last4: deref(f.Hint), CreatedAt: createdAt(f.ID),
-		Region: deref(f.Region), Settings: settingsOf(f.Settings),
+		Region: deref(f.Region), Settings: settingsOf(f.Settings), EgressID: deref(f.EgressID),
 	}
 	if f.CheckedAt != nil && f.CheckOutcome != nil && f.CheckStatus != nil {
 		c.LastCheck = &KeyCheck{
