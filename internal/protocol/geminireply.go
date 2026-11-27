@@ -212,6 +212,9 @@ type GeminiReply struct {
 	// last is the latest content part, held back for the finishing event: Google's last event carries the candidate's
 	// final parts, and the Google SDKs refuse a candidate without any.
 	last []geminiPart
+	// delivered is set once the stream has made a part the client is given: text, a thought it asked for, or a whole
+	// call. A part held back still reaches it, with the finish or before an error.
+	delivered bool
 }
 
 // geminiFrame is an event's makings: the chunk it came of, its parts and the finish reason.
@@ -238,6 +241,7 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 		return g.failed(c), nil
 	}
 	parts, finish := g.chunkParts(c)
+	g.delivered = g.delivered || len(parts) > 0
 	parts, g.last = append(g.last, parts...), nil
 	switch {
 	case g.held != nil:
@@ -254,6 +258,10 @@ func (g *GeminiReply) Event(data []byte) ([]byte, error) {
 	}
 	return events(geminiResponseOf(c, parts, finish)), nil
 }
+
+// Delivered reports whether the stream converted so far gave the client any content (docs/domains/billing.md「免单规则」):
+// a Chat stream that carried only a call's unfinished arguments or thoughts the client did not ask for gave it none.
+func (g *GeminiReply) Delivered() bool { return g.delivered }
 
 // failed is the events of a Chat stream's error chunk c: what was held back and c's usage, then the error that ends
 // the stream.

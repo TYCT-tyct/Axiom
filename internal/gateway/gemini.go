@@ -24,6 +24,7 @@ type geminiInbound struct {
 	stream bool
 	count  bool // countTokens, whose body may wrap the request it counts
 	opts   protocol.GeminiOptions
+	w      *geminiWriter // the answer's conversion, which knows what of it reached the client
 }
 
 // geminiMethods are the methods served, and whether each streams.
@@ -38,6 +39,7 @@ func (h *Handler) geminiRoutes() {
 func (h *Handler) gemini(w http.ResponseWriter, r *http.Request) {
 	in := &geminiInbound{}
 	gw := &geminiWriter{ResponseWriter: w, out: w, in: in, writeFor: h.Limits.cfg.WriteTimeout}
+	in.w = gw
 	defer h.finishGemini(r.Context(), gw)
 	geminiKey(r)
 	action := r.PathValue("action")
@@ -190,6 +192,10 @@ func (g *geminiWriter) replyOf() *protocol.GeminiReply {
 	}
 	return g.reply
 }
+
+// delivered reports whether a stream's conversion gave the client any content; the caller holds the session's write
+// lock, under which the conversion runs.
+func (g *geminiWriter) delivered() bool { return g.reply != nil && g.reply.Delivered() }
 
 // drain converts the whole events received: a comment, the keep-alive, goes as it is; data becomes Gemini's.
 func (g *geminiWriter) drain() error {
