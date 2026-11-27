@@ -68,9 +68,13 @@ func newPastedWorld(t *testing.T) *pastedWorld {
 	}
 	aggregate := typeOf("aggregate")
 	aggregate.Serves = nil
+	// regional is acme's own API at an entry whose prices the catalog does not hold (another region's list).
+	regional := typeOf("regional")
+	regional.Entries = []adapter.PriceEntry{{ID: "elsewhere", Origin: provider.server.URL, Currency: "USD", Unpriced: true}}
 	reg, err := registry.New(
 		direct.New(direct.Provider{Type: typeOf("pasted")}),
 		direct.New(direct.Provider{Type: aggregate}),
+		direct.New(direct.Provider{Type: regional}),
 		direct.New(direct.Provider{Type: typeOf("wallet"), Balance: &direct.Balance{Path: "/v1/balance", Read: walletBalance}}),
 	)
 	if err != nil {

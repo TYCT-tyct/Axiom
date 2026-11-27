@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"runtime"
+	"runtime/metrics"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -257,8 +258,9 @@ type peakState struct {
 
 // peakRun prepares the given number of large requests, of pairs message pairs each, at once over m, and returns what
 // they keep. Every body is read and charged before any preparation starts, as the gateway reads a body before preparing
-// it. With refusable, some preparations must be refused; without, none may be.
-func peakRun(m *Memory, requests, pairs int, refusable bool, t *testing.T) any {
+// it. The budget has room for one preparation's peak beyond the bodies, so some preparations must be served and some
+// refused.
+func peakRun(m *Memory, requests, pairs int, t *testing.T) any {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(requests + 1)) // a processor of its own for the sampler reading the heap
 	s := &peakState{
 		m:     m,
@@ -279,11 +281,8 @@ func peakRun(m *Memory, requests, pairs int, refusable bool, t *testing.T) any {
 	s.ready.Wait()
 	close(s.start)
 	done.Wait()
-	switch {
-	case refusable && (s.made.Load() == 0 || s.refused.Load() == 0):
+	if s.made.Load() == 0 || s.refused.Load() == 0 {
 		t.Errorf("%d prepared, %d refused: a budget for one preparation's peak must both serve and refuse", s.made.Load(), s.refused.Load())
-	case !refusable && s.refused.Load() != 0:
-		t.Errorf("%d refused with a budget nothing spends", s.refused.Load())
 	}
 	return s.kept
 }
@@ -321,6 +320,69 @@ func (s *peakState) prepare(i int) {
 	}
 }
 
+// overlappedRun is the control: the same requests prepared without a limit, each on a budget of its own, and each held
+// at a draw once it holds half a preparation's peak until the sampler has read the heap with all of them held. Left to
+// the scheduler, preparations nothing refuses overlap only as much as the machine runs them at once: a loaded CI runner
+// once ran them so nearly in turn that the control peaked within the bound. Holding them makes the overlap the
+// control's own. A preparation that finishes before it is held prepares again, so every one is held in time.
+func overlappedRun(requests, pairs int, need int64) any {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(requests + 1)) // a processor of its own for the sampler reading the heap
+	upstream := make([]Upstream, requests)
+	memories := make([]*Memory, requests)
+	var released atomic.Bool
+	var done sync.WaitGroup
+	for i := range memories {
+		memories[i] = NewMemory(unlimited)
+		done.Go(func() {
+			body := peakBody(pairs)
+			r, err := Inspect(Chat, body)
+			for err == nil && !released.Load() {
+				var held int64
+				upstream[i], held, err = PrepareBudgeted(memories[i], &r, body, Target{Format: Messages, Model: "up", MaxOutput: 4096}, Rewrites{})
+				memories[i].Refund(held)
+			}
+			if err != nil {
+				panic(err) // a budget nothing spends refuses nothing; the budgeted run reports the shape's errors
+			}
+		})
+	}
+	for _, m := range memories {
+		holdAt(m, need/2)
+	}
+	awaitReadings(2)
+	released.Store(true)
+	for _, m := range memories {
+		m.preparationMu.Unlock()
+	}
+	done.Wait()
+	return upstream
+}
+
+// holdAt takes m's draw lock once its preparation holds at least n bytes, and keeps it: the preparation stops at its
+// next draw with what it drew so far live.
+func holdAt(m *Memory, n int64) {
+	for {
+		m.preparationMu.Lock()
+		if m.preparationHeld >= n {
+			return
+		}
+		m.preparationMu.Unlock()
+		runtime.Gosched()
+	}
+}
+
+// awaitReadings returns once n collections have completed after it was called. Only the sampler collects in the child,
+// and the first collection that completes may have begun before the call, so n is 2 for one whole reading.
+func awaitReadings(n uint64) {
+	cycles := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
+	metrics.Read(cycles)
+	from := cycles[0].Value.Uint64()
+	for cycles[0].Value.Uint64() < from+n {
+		runtime.Gosched()
+		metrics.Read(cycles)
+	}
+}
+
 // peakOverhead is what the concurrent preparations may hold beyond their budget. Each may allocate up to budgetSlack
 // without drawing it, the bound TestPrepareAllocatesOnlyWhatItDrew holds this shape to. A body is charged by its length
 // while the runtime allocates whole 8 KiB pages, so each may take a page more. Each goroutine also keeps the Request
@@ -338,8 +400,8 @@ func peakOverhead(requests int) int64 {
 // TestConcurrentLargeRequestsStayWithinTheBudget: the node's budget is what concurrent preparations may hold, so with
 // room for one large preparation's peak beyond the bodies, the same requests at once must leave the live heap within
 // the budget plus peakOverhead. A child process reads the live heap while they run. The same preparations with a budget
-// nothing spends are the control: the measurement must see that peak pass the bound, or it could not see this one pass
-// it either.
+// nothing spends, held together at half their peak (overlappedRun), are the control: the measurement must see that
+// peak pass the bound, or it could not see this one pass it either.
 func TestConcurrentLargeRequestsStayWithinTheBudget(t *testing.T) {
 	t.Parallel()
 	requests, pairs := 8, 2000
@@ -355,10 +417,10 @@ func TestConcurrentLargeRequestsStayWithinTheBudget(t *testing.T) {
 	budget := int64(requests)*int64(len(body)) + need // the bodies and one preparation's peak: only one fits at a time
 	peaks := alloctest.MeasurePeak(t,
 		alloctest.PeakFunction{Name: "budgeted", F: func() any {
-			return peakRun(NewMemory(budget), requests, pairs, true, t)
+			return peakRun(NewMemory(budget), requests, pairs, t)
 		}},
 		alloctest.PeakFunction{Name: "unbudgeted", F: func() any {
-			return peakRun(NewMemory(unlimited), requests, pairs, false, t)
+			return overlappedRun(requests, pairs, need)
 		}},
 	)
 	overhead := peakOverhead(requests)
