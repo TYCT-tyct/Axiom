@@ -23,6 +23,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
 	"axiom/internal/observability"
+	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -315,14 +316,14 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 // rigUpstreams are the handler's credentials: the test's fake ones once it gives some (fakeUpstreams), none before.
 type rigUpstreams struct{ r *rig }
 
-func (u rigUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
+func (u rigUpstreams) AcquireWithin(id suppliers.EndpointID, bound platform.Exact) (Conn, error) {
 	u.r.mu.Lock()
 	up := u.r.up
 	u.r.mu.Unlock()
 	if up == nil {
 		return nil, suppliers.ErrNoEndpoint
 	}
-	return up.Acquire(id)
+	return up.AcquireWithin(id, bound)
 }
 
 // fakeUpstreams gives the handler fake credentials for the rig's endpoints, each answering by its script.

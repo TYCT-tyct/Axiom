@@ -14,6 +14,7 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrNoCredential, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoSupplierEndpoint, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrSupplierExists, http.StatusConflict, codeConflict, "that origin and account are already connected"},
+	{suppliers.ErrEgressUnavailable, http.StatusConflict, codeConflict, "the egress proxy is disabled and has no active fallback"},
 	{suppliers.ErrStatusLocked, http.StatusConflict, codeConflict, "the supplier's status does not allow this"},
 	{suppliers.ErrGroupGone, http.StatusConflict, codeConflict, "the supplier no longer lists that group"},
 	{suppliers.ErrKeyBound, http.StatusConflict, codeConflict, "that key is already bound"},
@@ -49,4 +50,10 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrNoUnitValue, http.StatusConflict, codeConflict, "confirm the supplier's unit value first"},
 	{suppliers.ErrNoOfficialPrice, http.StatusUnprocessableEntity, codeUnprocessable, "a model has no official price in the settlement currency: give one"},
 	{suppliers.ErrBasePrice, http.StatusUnprocessableEntity, codeUnprocessable, "a base price is in the settlement currency, charges something, and stays within a unit price in the supplier's unit"},
+	{suppliers.ErrNoEgressProxy, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrEgressProxyExists, http.StatusConflict, codeConflict, "an egress proxy has that id"},
+	{suppliers.ErrEgressInUse, http.StatusConflict, codeConflict, "credentials or another proxy's fallback use the egress proxy"},
+	{suppliers.ErrEgressProxy, http.StatusUnprocessableEntity, codeUnprocessable, "an egress proxy is http, https or socks5 at a host and port, with a username and password of at most 255 bytes"},
+	{suppliers.ErrEgressFallback, http.StatusUnprocessableEntity, codeUnprocessable, "a fallback is another proxy without a fallback, set on a proxy that is no proxy's fallback"},
+	{suppliers.ErrUnknownEgress, http.StatusUnprocessableEntity, codeUnprocessable, "no egress proxy has that id"},
 }

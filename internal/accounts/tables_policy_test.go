@@ -48,7 +48,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
 		"email_changes":           {"email", "token_hash", "factor_version", "language", "expires_at"},
-		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash"},
+		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash", "inviter_user_id"},
 		"agent_credentials":       {"revoked_at", "last_used_at"},
 		"agent_credential_tokens": {"retires_at"},
 	}

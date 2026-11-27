@@ -237,7 +237,7 @@ func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snap
 	now := s.now()
 	if err := createUser(ctx, tx, s.queries, s.opened, newUser{
 		id: id, account: account, site: pending.SiteID, tier: tier, role: snap.roleIDs["owner"],
-		email: pending.Email, passwordHash: passwordHash, verified: &now, consent: consent,
+		email: pending.Email, passwordHash: passwordHash, inviter: pending.InviterUserID, verified: &now, consent: consent,
 	}); err != nil {
 		return UserID{}, false, err
 	}

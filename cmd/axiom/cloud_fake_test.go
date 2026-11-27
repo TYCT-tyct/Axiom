@@ -65,22 +65,22 @@ func newFakeCloud(t *testing.T, messages, chat string) *fakeCloud {
 	t.Helper()
 	c := &fakeCloud{messages: messages, chat: chat}
 	c.server = httptest.NewUnstartedServer(http.HandlerFunc(c.serve))
-	certificate, leaf := cloudCertificate(t)
+	certificate, leaf := certificateFor(t, cloudHosts...)
 	c.server.TLS, c.cert = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}, leaf
 	c.server.StartTLS()
 	t.Cleanup(c.server.Close)
 	return c
 }
 
-// cloudCertificate is a self-signed certificate for every one of cloudHosts.
-func cloudCertificate(t *testing.T) (tls.Certificate, *x509.Certificate) {
+// certificateFor is a self-signed certificate for every one of hosts.
+func certificateFor(t *testing.T, hosts ...string) (tls.Certificate, *x509.Certificate) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1), DNSNames: cloudHosts, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		SerialNumber: big.NewInt(1), DNSNames: hosts, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

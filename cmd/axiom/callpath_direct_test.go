@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,7 +27,8 @@ const directCost = 25*3_000 + 15*15_000
 // TestADirectSupplierServesAtTheOfficialPrice: a provider's own API connected with a pasted key serves a call with no
 // balance to read, through the provider's own key header, and the call costs the model's official price: the supplier's
 // cost row holds it at a unit value of 1, with no request id to wait for a charge, and the client is charged the sale
-// price as for any supplier.
+// price as for any supplier. The provider is Anthropic's own API, which sells its own models at their official prices;
+// the node reaches api.anthropic.com at the fake.
 func TestADirectSupplierServesAtTheOfficialPrice(t *testing.T) {
 	t.Parallel()
 	w := newCallWorld(t)
@@ -37,9 +40,16 @@ func TestADirectSupplierServesAtTheOfficialPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := newFakeProvider(t, string(stream), "claude-opus-5-5")
-	w.trusted = append(w.trusted, provider.server.Certificate())
-	supplier := w.connectDirect(provider)
+	provider := unstartedFakeProvider(t, string(stream), "claude-opus-5-5")
+	certificate, leaf := certificateFor(t, "api.anthropic.com")
+	provider.server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	provider.server.StartTLS()
+	w.trusted = append(w.trusted, leaf)
+	w.routes = map[string]netip.AddrPort{"api.anthropic.com": netip.MustParseAddrPort(provider.server.Listener.Addr().String())}
+	admin, snap := w.directAdmin(egress.NewForTesting(withRoutes(egresstest.Loopback(t, leaf), w.routes)))
+	supplier := w.connectDirect(admin, snap, w.checkedDirect(admin, suppliers.DirectRequest{
+		Kind: "anthropic", Name: "Anthropic", Keys: []string{"sk-good-direct-key"}, MaxConcurrency: 4, Reason: "a direct source",
+	}))
 	w.price()
 	n := w.start()
 	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
@@ -69,13 +79,10 @@ func TestADirectSupplierServesAtTheOfficialPrice(t *testing.T) {
 	}
 }
 
-// connectDirect connects the provider as a compatible Anthropic API with one key, through the suppliers module as the
-// admin handler does, and returns the supplier's ID.
-func (w *callWorld) connectDirect(provider *fakeProvider) string {
+// connectDirect stores the plan through the suppliers module as the admin handler does, and returns the supplier's ID.
+func (w *callWorld) connectDirect(admin *suppliers.Admin, snap *catalog.Snapshot, plan *suppliers.DirectPlan) string {
 	w.t.Helper()
 	ctx := w.t.Context()
-	admin, snap := w.directAdmin(provider)
-	plan := w.checkedDirect(admin, provider)
 	var made suppliers.Connected
 	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
 		made, err = admin.CreateDirect(ctx, tx, audit.System("callpath.test"), snap, plan)
@@ -89,8 +96,8 @@ func (w *callWorld) connectDirect(provider *fakeProvider) string {
 	return made.Supplier.ID.String()
 }
 
-// directAdmin is the suppliers module's admin side reaching the provider, and the world's catalog as it is now.
-func (w *callWorld) directAdmin(provider *fakeProvider) (*suppliers.Admin, *catalog.Snapshot) {
+// directAdmin is the suppliers module's admin side reaching providers through out, and the world's catalog as it is now.
+func (w *callWorld) directAdmin(out *egress.Client) (*suppliers.Admin, *catalog.Snapshot) {
 	w.t.Helper()
 	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
 	if err != nil {
@@ -103,32 +110,34 @@ func (w *callWorld) directAdmin(provider *fakeProvider) (*suppliers.Admin, *cata
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	admin, err := suppliers.NewAdmin(suppliers.AdminConfig{
-		Keys: masterKeys(w.t), Egress: egress.NewForTesting(egresstest.Loopback(w.t, provider.server.Certificate())),
-	})
+	admin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(w.t), Egress: out})
 	if err != nil {
 		w.t.Fatal(err)
 	}
 	return admin, snap
 }
 
-// checkedDirect is the provider as a compatible Anthropic API with one key, planned and checked as the admin handler
-// does before it stores anything.
-func (w *callWorld) checkedDirect(admin *suppliers.Admin, provider *fakeProvider) *suppliers.DirectPlan {
-	w.t.Helper()
-	ctx := w.t.Context()
+// compatibleAt is the provider as a compatible Anthropic API with one key.
+func compatibleAt(t *testing.T, provider *fakeProvider) suppliers.DirectRequest {
+	t.Helper()
 	origin, err := suppliers.NormalizeOrigin(provider.server.URL)
 	if err != nil {
-		w.t.Fatal(err)
+		t.Fatal(err)
 	}
 	usd, err := platform.ParseCurrency("USD")
 	if err != nil {
-		w.t.Fatal(err)
+		t.Fatal(err)
 	}
-	r := suppliers.DirectRequest{
+	return suppliers.DirectRequest{
 		Kind: "compatible", Name: "Harbor", Origin: origin, Family: "anthropic", Currency: usd,
 		Keys: []string{"sk-good-direct-key"}, MaxConcurrency: 4, Reason: "a direct source",
 	}
+}
+
+// checkedDirect is r planned and checked as the admin handler does before it stores anything.
+func (w *callWorld) checkedDirect(admin *suppliers.Admin, r suppliers.DirectRequest) *suppliers.DirectPlan {
+	w.t.Helper()
+	ctx := w.t.Context()
 	var plan *suppliers.DirectPlan
 	if err := w.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
 		plan, err = admin.PlanDirect(ctx, tx, r)

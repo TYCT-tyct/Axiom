@@ -152,7 +152,7 @@ func (h *Handler) countUpstream(r *http.Request, in routing.Input, body []byte) 
 		if h.Router.Blocked(e) {
 			continue
 		}
-		conn, err := h.Upstreams.Acquire(suppliers.EndpointID(e.Endpoint))
+		conn, err := h.Upstreams.AcquireWithin(suppliers.EndpointID(e.Endpoint), e.Bound)
 		if err != nil {
 			continue
 		}

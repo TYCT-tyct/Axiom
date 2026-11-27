@@ -482,3 +482,65 @@ func TestVerificationJoinsTheDefaultTierOfTheClick(t *testing.T) {
 		t.Errorf("the new account joined %v, want the default at the click, Pro", got)
 	}
 }
+
+// TestOpenRegistrationKeepsTheInviter: the inviter an open registration's invite code names is kept on the pending
+// request, replaced by a repeated request, and written as the user's inviter when the link is clicked. A code that
+// would not admit an invitation is ignored, with the same answer, so the answer does not tell which codes are valid.
+func TestOpenRegistrationKeepsTheInviter(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	gone, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: inviteCode(t, x.db, ":u1"), Email: "gone@example.com", Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneCode := inviteCode(t, x.db, "'"+uuid.UUID(gone.User).String()+"'")
+	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.users SET status = 'disabled' WHERE email = 'gone@example.com'"); err != nil {
+		t.Fatal(err)
+	}
+	x.open(t, false, 100, 1000)
+	first, second := inviteCode(t, x.db, ":u1"), inviteCode(t, x.db, "'"+uuid.UUID(x.user).String()+"'")
+	for name, c := range map[string]struct {
+		codes   []string // one request per code, in order; each is a pending registration
+		inviter string   // the verified user's inviter, "" for none
+	}{
+		"an invite through verification":         {codes: []string{first}, inviter: u1.String()},
+		"a repeated request with another invite": {codes: []string{first, second}, inviter: uuid.UUID(x.user).String()},
+		"a repeated request with no invite":      {codes: []string{first, ""}},
+		"no invite":                              {codes: []string{""}},
+		"an unknown code":                        {codes: []string{"nosuchcode0000"}},
+		"a disabled inviter's code":              {codes: []string{goneCode}},
+		"another site's code":                    {codes: []string{inviteCode(t, x.db, ":u2")}},
+		"a valid code then an unknown one":       {codes: []string{first, "nosuchcode0000"}},
+	} {
+		email := strings.ReplaceAll(strings.ReplaceAll(name, "'", ""), " ", "-") + "@example.com"
+		for _, code := range c.codes {
+			x.registerInvited(t, email, code)
+		}
+		if got := x.verifiedInviter(t, email); got != c.inviter {
+			t.Errorf("%s: inviter %q, want %q", name, got, c.inviter)
+		}
+	}
+}
+
+// registerInvited makes an open registration of email with code, and fails the test unless it is pending.
+func (x registrationWorld) registerInvited(t *testing.T, email, code string) {
+	t.Helper()
+	out, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: email, ClientIP: client})
+	if err != nil || !out.Pending {
+		t.Fatalf("register %s with %q: %+v, %v", email, code, out, err)
+	}
+}
+
+// verifiedInviter clicks email's pending link and returns the inviter of the user it made, "" for none.
+func (x registrationWorld) verifiedInviter(t *testing.T, email string) string {
+	t.Helper()
+	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
+		t.Fatal(err)
+	}
+	x.verifyAt(t, console, x.token(t, email))
+	got := texts(t, x.db, platform, "SELECT coalesce(inviter_user_id::text, '') FROM accounts.users WHERE email = '"+email+"'")
+	if len(got) != 1 {
+		t.Fatalf("%s: %d users, want 1", email, len(got))
+	}
+	return got[0]
+}

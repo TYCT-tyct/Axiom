@@ -400,6 +400,8 @@ function OpenRegistration({ site, stage, attempt }: { site: Schemas["Site"]; sta
 // useOpenForm is open registration's email step (useEmailStep) and its request, after the site's proof of work.
 function useOpenForm(site: Schemas["Site"], stage: Stage, attempt: Attempt, onOutcome: (outcome: Outcome) => void) {
   const language = useMailLanguage();
+  // An invite link keeps naming its inviter on an open site: the code rides along, and the account records who invited.
+  const invite = useLoginNavigation().search.invite || undefined;
   const step = useEmailStep(stage, attempt, "register", emailRefused);
   const [working, setWorking] = useState(false);
   const send = async (address: string) => {
@@ -411,7 +413,9 @@ function useOpenForm(site: Schemas["Site"], stage: Stage, attempt: Attempt, onOu
       human = await solveProof(site.id, address.toLowerCase(), site.human_check.bits).finally(() => setWorking(false));
     }
     await unwrap(
-      consoleApi.POST("/api/console/v1/auth/register", { body: { email: address, human_check: human, language } }),
+      consoleApi.POST("/api/console/v1/auth/register", {
+        body: { email: address, human_check: human, language, invite_code: invite },
+      }),
     );
     onOutcome("sent");
   };

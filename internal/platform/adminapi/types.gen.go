@@ -198,19 +198,19 @@ func (e AnnouncementState) Valid() bool {
 
 // Defines values for ApiFormat.
 const (
-	ApiFormatAnthropic ApiFormat = "anthropic"
-	ApiFormatGemini    ApiFormat = "gemini"
-	ApiFormatOpenai    ApiFormat = "openai"
+	Anthropic ApiFormat = "anthropic"
+	Gemini    ApiFormat = "gemini"
+	Openai    ApiFormat = "openai"
 )
 
 // Valid indicates whether the value is a known member of the ApiFormat enum.
 func (e ApiFormat) Valid() bool {
 	switch e {
-	case ApiFormatAnthropic:
+	case Anthropic:
 		return true
-	case ApiFormatGemini:
+	case Gemini:
 		return true
-	case ApiFormatOpenai:
+	case Openai:
 		return true
 	default:
 		return false
@@ -475,27 +475,6 @@ func (e CashMovementKind) Valid() bool {
 	}
 }
 
-// Defines values for CloudProvider.
-const (
-	Azure   CloudProvider = "azure"
-	Bedrock CloudProvider = "bedrock"
-	Vertex  CloudProvider = "vertex"
-)
-
-// Valid indicates whether the value is a known member of the CloudProvider enum.
-func (e CloudProvider) Valid() bool {
-	switch e {
-	case Azure:
-		return true
-	case Bedrock:
-		return true
-	case Vertex:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ConfigTestResultStatus.
 const (
 	ConfigAccepted    ConfigTestResultStatus = "accepted"
@@ -745,33 +724,6 @@ func (e CreditSource) Valid() bool {
 	}
 }
 
-// Defines values for DirectProvider.
-const (
-	DirectProviderAnthropic  DirectProvider = "anthropic"
-	DirectProviderCompatible DirectProvider = "compatible"
-	DirectProviderGoogle     DirectProvider = "google"
-	DirectProviderMoonshot   DirectProvider = "moonshot"
-	DirectProviderOpenai     DirectProvider = "openai"
-)
-
-// Valid indicates whether the value is a known member of the DirectProvider enum.
-func (e DirectProvider) Valid() bool {
-	switch e {
-	case DirectProviderAnthropic:
-		return true
-	case DirectProviderCompatible:
-		return true
-	case DirectProviderGoogle:
-		return true
-	case DirectProviderMoonshot:
-		return true
-	case DirectProviderOpenai:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for EasyPaySettingsMode.
 const (
 	Api      EasyPaySettingsMode = "api"
@@ -817,6 +769,102 @@ const (
 func (e EasyPaySettingsSignType) Valid() bool {
 	switch e {
 	case MD5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyScheme.
+const (
+	EgressProxySchemeHttp   EgressProxyScheme = "http"
+	EgressProxySchemeHttps  EgressProxyScheme = "https"
+	EgressProxySchemeSocks5 EgressProxyScheme = "socks5"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyScheme enum.
+func (e EgressProxyScheme) Valid() bool {
+	switch e {
+	case EgressProxySchemeHttp:
+		return true
+	case EgressProxySchemeHttps:
+		return true
+	case EgressProxySchemeSocks5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyStatus.
+const (
+	EgressProxyStatusActive   EgressProxyStatus = "active"
+	EgressProxyStatusDisabled EgressProxyStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyStatus enum.
+func (e EgressProxyStatus) Valid() bool {
+	switch e {
+	case EgressProxyStatusActive:
+		return true
+	case EgressProxyStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyCreateScheme.
+const (
+	EgressProxyCreateSchemeHttp   EgressProxyCreateScheme = "http"
+	EgressProxyCreateSchemeHttps  EgressProxyCreateScheme = "https"
+	EgressProxyCreateSchemeSocks5 EgressProxyCreateScheme = "socks5"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyCreateScheme enum.
+func (e EgressProxyCreateScheme) Valid() bool {
+	switch e {
+	case EgressProxyCreateSchemeHttp:
+		return true
+	case EgressProxyCreateSchemeHttps:
+		return true
+	case EgressProxyCreateSchemeSocks5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyCreateStatus.
+const (
+	EgressProxyCreateStatusActive   EgressProxyCreateStatus = "active"
+	EgressProxyCreateStatusDisabled EgressProxyCreateStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyCreateStatus enum.
+func (e EgressProxyCreateStatus) Valid() bool {
+	switch e {
+	case EgressProxyCreateStatusActive:
+		return true
+	case EgressProxyCreateStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EgressProxyUpdateStatus.
+const (
+	EgressProxyUpdateStatusActive   EgressProxyUpdateStatus = "active"
+	EgressProxyUpdateStatusDisabled EgressProxyUpdateStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the EgressProxyUpdateStatus enum.
+func (e EgressProxyUpdateStatus) Valid() bool {
+	switch e {
+	case EgressProxyUpdateStatusActive:
+		return true
+	case EgressProxyUpdateStatusDisabled:
 		return true
 	default:
 		return false
@@ -1581,19 +1629,19 @@ func (e NameAddVisibility) Valid() bool {
 
 // Defines values for OAuthProvider.
 const (
-	OAuthProviderGithub  OAuthProvider = "github"
-	OAuthProviderGoogle  OAuthProvider = "google"
-	OAuthProviderLinuxdo OAuthProvider = "linuxdo"
+	Github  OAuthProvider = "github"
+	Google  OAuthProvider = "google"
+	Linuxdo OAuthProvider = "linuxdo"
 )
 
 // Valid indicates whether the value is a known member of the OAuthProvider enum.
 func (e OAuthProvider) Valid() bool {
 	switch e {
-	case OAuthProviderGithub:
+	case Github:
 		return true
-	case OAuthProviderGoogle:
+	case Google:
 		return true
-	case OAuthProviderLinuxdo:
+	case Linuxdo:
 		return true
 	default:
 		return false
@@ -2892,19 +2940,19 @@ func (e SupplierIntakeMode) Valid() bool {
 
 // Defines values for SupplierMode.
 const (
-	Cloud  SupplierMode = "cloud"
-	Direct SupplierMode = "direct"
-	Relay  SupplierMode = "relay"
+	SupplierModeCloud  SupplierMode = "cloud"
+	SupplierModeDirect SupplierMode = "direct"
+	SupplierModeRelay  SupplierMode = "relay"
 )
 
 // Valid indicates whether the value is a known member of the SupplierMode enum.
 func (e SupplierMode) Valid() bool {
 	switch e {
-	case Cloud:
+	case SupplierModeCloud:
 		return true
-	case Direct:
+	case SupplierModeDirect:
 		return true
-	case Relay:
+	case SupplierModeRelay:
 		return true
 	default:
 		return false
@@ -2998,6 +3046,60 @@ func (e SupplierStatusUpdateStatus) Valid() bool {
 	case SupplierStatusUpdateStatusActive:
 		return true
 	case SupplierStatusUpdateStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierTypeGroup.
+const (
+	SupplierTypeGroupCloud    SupplierTypeGroup = "cloud"
+	SupplierTypeGroupDomestic SupplierTypeGroup = "domestic"
+	SupplierTypeGroupOfficial SupplierTypeGroup = "official"
+	SupplierTypeGroupRelay    SupplierTypeGroup = "relay"
+)
+
+// Valid indicates whether the value is a known member of the SupplierTypeGroup enum.
+func (e SupplierTypeGroup) Valid() bool {
+	switch e {
+	case SupplierTypeGroupCloud:
+		return true
+	case SupplierTypeGroupDomestic:
+		return true
+	case SupplierTypeGroupOfficial:
+		return true
+	case SupplierTypeGroupRelay:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierTypeFieldKind.
+const (
+	SupplierTypeFieldKindDeployments SupplierTypeFieldKind = "deployments"
+	SupplierTypeFieldKindJson        SupplierTypeFieldKind = "json"
+	SupplierTypeFieldKindKeys        SupplierTypeFieldKind = "keys"
+	SupplierTypeFieldKindRegions     SupplierTypeFieldKind = "regions"
+	SupplierTypeFieldKindSecret      SupplierTypeFieldKind = "secret"
+	SupplierTypeFieldKindText        SupplierTypeFieldKind = "text"
+)
+
+// Valid indicates whether the value is a known member of the SupplierTypeFieldKind enum.
+func (e SupplierTypeFieldKind) Valid() bool {
+	switch e {
+	case SupplierTypeFieldKindDeployments:
+		return true
+	case SupplierTypeFieldKindJson:
+		return true
+	case SupplierTypeFieldKindKeys:
+		return true
+	case SupplierTypeFieldKindRegions:
+		return true
+	case SupplierTypeFieldKindSecret:
+		return true
+	case SupplierTypeFieldKindText:
 		return true
 	default:
 		return false
@@ -3668,7 +3770,7 @@ type AnnouncementResult struct {
 // AnnouncementState defines model for AnnouncementState.
 type AnnouncementState string
 
-// ApiFormat The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The paths follow from it.
+// ApiFormat A call family: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The one a `compatible` direct API speaks is its supplier's, and the paths follow from it.
 type ApiFormat string
 
 // AuditEntry defines model for AuditEntry.
@@ -3932,20 +4034,13 @@ type CloudAccount struct {
 	ProjectId *string `json:"project_id,omitempty"`
 }
 
-// CloudCredentialInput The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
-type CloudCredentialInput struct {
-	AccessKeyId     *string `json:"access_key_id,omitempty"`
-	ApiKey          *string `json:"api_key,omitempty"`
-	SecretAccessKey *string `json:"secret_access_key,omitempty"`
-
-	// ServiceAccountJson The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`.
-	ServiceAccountJson *string `json:"service_account_json,omitempty"`
-}
-
 // CloudCredentialReplace defines model for CloudCredentialReplace.
 type CloudCredentialReplace struct {
-	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
-	Credential *CloudCredentialInput `json:"credential,omitempty"`
+	// Fields The new credential's fields by name, as `TypedSupplierCreate.fields`.
+	Fields *map[string]string `json:"fields,omitempty"`
+
+	// Form The new credential's form; absent for the type's first.
+	Form *string `json:"form,omitempty"`
 
 	// MaxConcurrency For a region added here; absent is 4. A region kept keeps its limits.
 	MaxConcurrency *int `json:"max_concurrency,omitempty"`
@@ -3969,42 +4064,8 @@ type CloudDeployment struct {
 	Name string `json:"name"`
 }
 
-// CloudProvider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
-type CloudProvider string
-
 // CloudRegion A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
 type CloudRegion = string
-
-// CloudSupplierCreate defines model for CloudSupplierCreate.
-type CloudSupplierCreate struct {
-	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
-	Credential *CloudCredentialInput `json:"credential,omitempty"`
-
-	// Deployments Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once.
-	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
-
-	// MaxConcurrency The calls each region has in flight at once.
-	MaxConcurrency int    `json:"max_concurrency"`
-	Name           string `json:"name"`
-
-	// Origin Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com.
-	Origin *string `json:"origin,omitempty"`
-
-	// Provider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
-	Provider CloudProvider `json:"provider"`
-
-	// Reason Why the person is doing this. It goes to the audit log.
-	Reason Reason `json:"reason"`
-
-	// Regions Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400).
-	Regions *[]CloudRegion `json:"regions,omitempty"`
-
-	// RequestsPerMinute Each region's rolling-minute ceiling; absent for none.
-	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
-
-	// SettlementCurrency The currency the platform bills in, fixed once connected; absent is USD.
-	SettlementCurrency *string `json:"settlement_currency,omitempty"`
-}
 
 // ConfigTestResult defines model for ConfigTestResult.
 type ConfigTestResult struct {
@@ -4123,6 +4184,15 @@ type CredentialCheckList struct {
 
 // CredentialCheckOutcome `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not checked.
 type CredentialCheckOutcome string
+
+// CredentialEgressUpdate defines model for CredentialEgressUpdate.
+type CredentialEgressUpdate struct {
+	// EgressId The proxy; absent or null is direct.
+	EgressId *EgressProxyId `json:"egress_id,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
 
 // CredentialEnabledUpdate defines model for CredentialEnabledUpdate.
 type CredentialEnabledUpdate struct {
@@ -4254,37 +4324,6 @@ type DetectionRequest struct {
 	Origin string `json:"origin"`
 }
 
-// DirectProvider A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
-type DirectProvider string
-
-// DirectSupplierCreate defines model for DirectSupplierCreate.
-type DirectSupplierCreate struct {
-	// Format Only for `compatible`, where it is required; a built-in provider's format is its own (400).
-	Format *ApiFormat `json:"format,omitempty"`
-
-	// Keys The keys, one per item, sealed on arrival and never returned.
-	Keys *[]string `json:"keys,omitempty"`
-
-	// MaxConcurrency The calls each key has in flight at once.
-	MaxConcurrency int    `json:"max_concurrency"`
-	Name           string `json:"name"`
-
-	// Origin Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path. A built-in provider's origin is its own, so giving one is a 400.
-	Origin *string `json:"origin,omitempty"`
-
-	// Provider A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
-	Provider DirectProvider `json:"provider"`
-
-	// Reason Why the person is doing this. It goes to the audit log.
-	Reason Reason `json:"reason"`
-
-	// RequestsPerMinute Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none.
-	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
-
-	// SettlementCurrency The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states. Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or CNY for `moonshot`).
-	SettlementCurrency *string `json:"settlement_currency,omitempty"`
-}
-
 // EasyPaySettings An `easypay` merchant account's settings (internal/payments/README.md「易支付配置与边界」).
 type EasyPaySettings struct {
 	// Cids The gateway's channel ID for each of the site's payment methods that has one.
@@ -4329,6 +4368,92 @@ type EffectiveKeyLimits struct {
 	CreationsPerHour int `json:"creations_per_hour"`
 	MaxKeys          int `json:"max_keys"`
 }
+
+// EgressProxy defines model for EgressProxy.
+type EgressProxy struct {
+	// FallbackId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+
+	// HasPassword Whether a password is sealed; the password is never returned.
+	HasPassword bool   `json:"has_password"`
+	Host        string `json:"host"`
+
+	// Id What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	Id     EgressProxyId     `json:"id"`
+	Name   string            `json:"name"`
+	Port   int               `json:"port"`
+	Scheme EgressProxyScheme `json:"scheme"`
+	Status EgressProxyStatus `json:"status"`
+
+	// Username Absent for a proxy that asks for none.
+	Username *string `json:"username,omitempty"`
+}
+
+// EgressProxyScheme defines model for EgressProxy.Scheme.
+type EgressProxyScheme string
+
+// EgressProxyStatus defines model for EgressProxy.Status.
+type EgressProxyStatus string
+
+// EgressProxyAuth defines model for EgressProxyAuth.
+type EgressProxyAuth struct {
+	// Password Sealed on arrival and never returned; absent for none.
+	Password *string `json:"password,omitempty"`
+	Username string  `json:"username"`
+}
+
+// EgressProxyCreate defines model for EgressProxyCreate.
+type EgressProxyCreate struct {
+	Auth *EgressProxyAuth `json:"auth,omitempty"`
+
+	// FallbackId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+
+	// Host A name or an IP address, an IPv6 one without brackets.
+	Host string `json:"host"`
+
+	// Id What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+	Id   EgressProxyId `json:"id"`
+	Name string        `json:"name"`
+	Port int           `json:"port"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason                  `json:"reason"`
+	Scheme EgressProxyCreateScheme `json:"scheme"`
+
+	// Status Absent is active.
+	Status *EgressProxyCreateStatus `json:"status,omitempty"`
+}
+
+// EgressProxyCreateScheme defines model for EgressProxyCreate.Scheme.
+type EgressProxyCreateScheme string
+
+// EgressProxyCreateStatus Absent is active.
+type EgressProxyCreateStatus string
+
+// EgressProxyId What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id.
+type EgressProxyId = string
+
+// EgressProxyList defines model for EgressProxyList.
+type EgressProxyList struct {
+	Data []EgressProxy `json:"data"`
+}
+
+// EgressProxyUpdate defines model for EgressProxyUpdate.
+type EgressProxyUpdate struct {
+	Auth *EgressProxyAuth `json:"auth,omitempty"`
+
+	// FallbackId Absent or null for none.
+	FallbackId *EgressProxyId `json:"fallback_id,omitempty"`
+	Name       string         `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason                  `json:"reason"`
+	Status EgressProxyUpdateStatus `json:"status"`
+}
+
+// EgressProxyUpdateStatus defines model for EgressProxyUpdate.Status.
+type EgressProxyUpdateStatus string
 
 // EndpointCost defines model for EndpointCost.
 type EndpointCost struct {
@@ -7967,6 +8092,15 @@ type SupplierConnected struct {
 	Supplier *Supplier `json:"supplier,omitempty"`
 }
 
+// SupplierCostRatioUpdate defines model for SupplierCostRatioUpdate.
+type SupplierCostRatioUpdate struct {
+	// Ratio Above 0 and at most 10, with at most 6 decimals.
+	Ratio Decimal `json:"ratio"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
 	Kind string `json:"kind"`
@@ -7988,7 +8122,10 @@ type SupplierCreate struct {
 type SupplierCredential struct {
 	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+
+	// EgressId The egress proxy its calls and checks go through; absent is direct.
+	EgressId  *EgressProxyId `json:"egress_id,omitempty"`
+	ExpiresAt *time.Time     `json:"expires_at,omitempty"`
 
 	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	GroupId Uuid `json:"group_id"`
@@ -8015,6 +8152,9 @@ type SupplierCredential struct {
 
 	// RequestsPerMinute The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling.
 	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// Settings What is not secret about a direct or cloud credential, by the type's field names.
+	Settings *map[string]string `json:"settings,omitempty"`
 
 	// Status `SupplierCredential.status`: `rejected` is a credential the supplier refused as not valid, which routing never picks until a check passes; `disabled` a person stopped it.
 	Status CredentialStatus `json:"status"`
@@ -8246,6 +8386,9 @@ type SupplierIntakeRuleUpdate struct {
 
 // SupplierKeysAdd defines model for SupplierKeysAdd.
 type SupplierKeysAdd struct {
+	// Fields For a direct API: the settings of these keys by name, as the type's text fields (`TypedSupplierCreate.fields`); refused for a relay (400).
+	Fields *map[string]string `json:"fields,omitempty"`
+
 	// GroupId Required for a relay, refused for a direct API (400).
 	GroupId *Uuid `json:"group_id,omitempty"`
 
@@ -8494,6 +8637,83 @@ type SupplierSyncTaskList struct {
 	Data []SupplierSyncTask `json:"data"`
 }
 
+// SupplierType A channel type as its adapter describes it. A relay's type has no fields: it is connected by detection and a login (`detectSupplier`, `createSupplier`).
+type SupplierType struct {
+	// Entries The price lists the type is connected at, the default first; empty for a type whose address and settlement currency a person gives.
+	Entries []SupplierTypeEntry `json:"entries"`
+
+	// Families The call families the type speaks; for one without entries, the one a person chooses.
+	Families []ApiFormat `json:"families"`
+
+	// Fields Asked whatever the form, in order.
+	Fields []SupplierTypeField `json:"fields"`
+
+	// Forms The shapes the credential may take, the default first; empty for a relay.
+	Forms []SupplierTypeForm `json:"forms"`
+	Group SupplierTypeGroup  `json:"group"`
+
+	// Kind The adapter's name, the supplier's `kind`.
+	Kind string `json:"kind"`
+
+	// ListsModels A free, authenticated request lists the models a key serves. Without it the models come from the catalog, a key is checked once with the smallest generation, and the models are never re-listed.
+	ListsModels bool `json:"lists_models"`
+
+	// Mode How Axiom reaches the supplier. `relay`: a relay or a pool Axiom logs in to, whose groups are its lines. `direct`: a provider's own API, or a compatible one, reached with pasted keys; one line. `cloud`: a cloud platform's model service reached with its credential; one line, one credential per region.
+	Mode SupplierMode `json:"mode"`
+
+	// Name The brand's own name, not translated.
+	Name string `json:"name"`
+
+	// ReadsBalance Each key's balance is read, and a key that cannot pay is not chosen.
+	ReadsBalance bool `json:"reads_balance"`
+
+	// Serves The catalog authors whose models the type sells at their official prices; empty for any.
+	Serves *[]string `json:"serves,omitempty"`
+
+	// Vendor The maker's slug, which also picks the icon; absent for a type of no one maker.
+	Vendor *string `json:"vendor,omitempty"`
+}
+
+// SupplierTypeGroup defines model for SupplierType.Group.
+type SupplierTypeGroup string
+
+// SupplierTypeEntry defines model for SupplierTypeEntry.
+type SupplierTypeEntry struct {
+	// Currency The price list's currency: the settlement currency.
+	Currency string `json:"currency"`
+	Id       string `json:"id"`
+
+	// Models Listed catalog models of the type's makers with a reference price in the currency; absent for a type that sells any maker's models.
+	Models *int   `json:"models,omitempty"`
+	Origin string `json:"origin"`
+}
+
+// SupplierTypeField defines model for SupplierTypeField.
+type SupplierTypeField struct {
+	// Kind `keys` (one a line, each its own credential) are the request's `keys`; `regions` and `deployments` its own members; the others are its `fields`. Only `text` is a setting, shown again; the rest are secret.
+	Kind      SupplierTypeFieldKind `json:"kind"`
+	MaxLength *int                  `json:"max_length,omitempty"`
+
+	// Name One of a fixed vocabulary, which the page has words for.
+	Name     string  `json:"name"`
+	Pattern  *string `json:"pattern,omitempty"`
+	Required bool    `json:"required"`
+}
+
+// SupplierTypeFieldKind `keys` (one a line, each its own credential) are the request's `keys`; `regions` and `deployments` its own members; the others are its `fields`. Only `text` is a setting, shown again; the rest are secret.
+type SupplierTypeFieldKind string
+
+// SupplierTypeForm defines model for SupplierTypeForm.
+type SupplierTypeForm struct {
+	Fields []SupplierTypeField `json:"fields"`
+	Name   string              `json:"name"`
+}
+
+// SupplierTypeList defines model for SupplierTypeList.
+type SupplierTypeList struct {
+	Data []SupplierType `json:"data"`
+}
+
 // SyncEventKind What one difference is: a group or a model the supplier lists that appeared or left; a group's ratio, facts or formats; a model's formats or limits; a new cost plan of an endpoint; a key's status; the balance crossing the alert line or zero; where calls are paid from; the supplier needing a person; a task stopping.
 type SyncEventKind string
 
@@ -8596,6 +8816,52 @@ type TotpSetup struct {
 
 	// Uri The otpauth:// URI for a QR code.
 	Uri string `json:"uri"`
+}
+
+// TypedSupplierCreate defines model for TypedSupplierCreate.
+type TypedSupplierCreate struct {
+	// CostRatio The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1.
+	CostRatio *Decimal `json:"cost_ratio,omitempty"`
+
+	// Deployments For a type with `deployments` (Azure OpenAI), which the platform does not list to its key.
+	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
+
+	// EgressId The egress proxy every key or region it stores is checked and called through (`listEgressProxies`); absent is direct. One that is not there is 422; one disabled with no active fallback is 409.
+	EgressId *EgressProxyId `json:"egress_id,omitempty"`
+
+	// Entry The price entry to connect at; absent for the first. Only for a type with entries (400).
+	Entry *string `json:"entry,omitempty"`
+
+	// Fields The form's and the type's fields other than keys, regions and deployments, by name: secrets, sealed on arrival and never returned, and settings, which the credential view shows. A field the type does not ask for is a 400.
+	Fields *map[string]string `json:"fields,omitempty"`
+
+	// Form The credential's form; absent for the type's first.
+	Form *string `json:"form,omitempty"`
+
+	// Format Only for a type whose family a person chooses (`compatible`), where it is required.
+	Format *ApiFormat `json:"format,omitempty"`
+
+	// Keys For a type whose form has `keys`: the keys, one per item, sealed on arrival and never returned.
+	Keys *[]string `json:"keys,omitempty"`
+
+	// MaxConcurrency The calls each key or region has in flight at once.
+	MaxConcurrency int    `json:"max_concurrency"`
+	Name           string `json:"name"`
+
+	// Origin Required for a type without price entries, refused for the others (400).
+	Origin *string `json:"origin,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Regions For a type with `regions`, each checked and limited on its own.
+	Regions *[]CloudRegion `json:"regions,omitempty"`
+
+	// RequestsPerMinute Each key's or region's rolling-minute ceiling; absent for none.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// SettlementCurrency Only for a type without price entries, where it is required for a direct API and absent is USD for a cloud platform. A type with entries settles in its entry's currency (400 when given).
+	SettlementCurrency *string `json:"settlement_currency,omitempty"`
 }
 
 // UnitPrice A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
@@ -8903,6 +9169,24 @@ type ListAdminCallsParams struct {
 
 	// Plugin Only calls that used this plugin.
 	Plugin *AdminPlugin `form:"plugin,omitempty" json:"plugin,omitempty"`
+}
+
+// CreateEgressProxyParams defines parameters for CreateEgressProxy.
+type CreateEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateEgressProxyParams defines parameters for UpdateEgressProxy.
+type UpdateEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RemoveEgressProxyParams defines parameters for RemoveEgressProxy.
+type RemoveEgressProxyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // ListModelsParams defines parameters for ListModels.
@@ -9600,6 +9884,12 @@ type IgnoreSupplierInboxItemParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreateTypedSupplierParams defines parameters for CreateTypedSupplier.
+type CreateTypedSupplierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListSuppliersParams defines parameters for ListSuppliers.
 type ListSuppliersParams struct {
 	Status *SupplierStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -9614,18 +9904,6 @@ type ListSuppliersParams struct {
 
 // CreateSupplierParams defines parameters for CreateSupplier.
 type CreateSupplierParams struct {
-	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
-	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
-}
-
-// CreateCloudSupplierParams defines parameters for CreateCloudSupplier.
-type CreateCloudSupplierParams struct {
-	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
-	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
-}
-
-// CreateDirectSupplierParams defines parameters for CreateDirectSupplier.
-type CreateDirectSupplierParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -9654,8 +9932,20 @@ type ReplaceSupplierCloudCredentialParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetSupplierCostRatioParams defines parameters for SetSupplierCostRatio.
+type SetSupplierCostRatioParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // BindSupplierKeyParams defines parameters for BindSupplierKey.
 type BindSupplierKeyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSupplierCredentialEgressParams defines parameters for SetSupplierCredentialEgress.
+type SetSupplierCredentialEgressParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -9888,6 +10178,15 @@ type ConfirmTotpSetupJSONRequestBody = TotpConfirmRequest
 // SaveAuthorJSONRequestBody defines body for SaveAuthor for application/json ContentType.
 type SaveAuthorJSONRequestBody = AuthorSave
 
+// CreateEgressProxyJSONRequestBody defines body for CreateEgressProxy for application/json ContentType.
+type CreateEgressProxyJSONRequestBody = EgressProxyCreate
+
+// UpdateEgressProxyJSONRequestBody defines body for UpdateEgressProxy for application/json ContentType.
+type UpdateEgressProxyJSONRequestBody = EgressProxyUpdate
+
+// RemoveEgressProxyJSONRequestBody defines body for RemoveEgressProxy for application/json ContentType.
+type RemoveEgressProxyJSONRequestBody = ReasonRequest
+
 // CreateModelJSONRequestBody defines body for CreateModel for application/json ContentType.
 type CreateModelJSONRequestBody = ModelCreate
 
@@ -10116,17 +10415,14 @@ type TestSupplierCredentialsJSONRequestBody = CredentialTestsRequest
 // IgnoreSupplierInboxItemJSONRequestBody defines body for IgnoreSupplierInboxItem for application/json ContentType.
 type IgnoreSupplierInboxItemJSONRequestBody = ReasonRequest
 
+// CreateTypedSupplierJSONRequestBody defines body for CreateTypedSupplier for application/json ContentType.
+type CreateTypedSupplierJSONRequestBody = TypedSupplierCreate
+
 // CreateSupplierJSONRequestBody defines body for CreateSupplier for application/json ContentType.
 type CreateSupplierJSONRequestBody = SupplierCreate
 
-// CreateCloudSupplierJSONRequestBody defines body for CreateCloudSupplier for application/json ContentType.
-type CreateCloudSupplierJSONRequestBody = CloudSupplierCreate
-
 // DetectSupplierJSONRequestBody defines body for DetectSupplier for application/json ContentType.
 type DetectSupplierJSONRequestBody = DetectionRequest
-
-// CreateDirectSupplierJSONRequestBody defines body for CreateDirectSupplier for application/json ContentType.
-type CreateDirectSupplierJSONRequestBody = DirectSupplierCreate
 
 // TestSupplierEndpointJSONRequestBody defines body for TestSupplierEndpoint for application/json ContentType.
 type TestSupplierEndpointJSONRequestBody = EndpointTestRequest
@@ -10140,8 +10436,14 @@ type ConfirmSupplierBasePricesJSONRequestBody = BasePriceConfirmation
 // ReplaceSupplierCloudCredentialJSONRequestBody defines body for ReplaceSupplierCloudCredential for application/json ContentType.
 type ReplaceSupplierCloudCredentialJSONRequestBody = CloudCredentialReplace
 
+// SetSupplierCostRatioJSONRequestBody defines body for SetSupplierCostRatio for application/json ContentType.
+type SetSupplierCostRatioJSONRequestBody = SupplierCostRatioUpdate
+
 // BindSupplierKeyJSONRequestBody defines body for BindSupplierKey for application/json ContentType.
 type BindSupplierKeyJSONRequestBody = BindKey
+
+// SetSupplierCredentialEgressJSONRequestBody defines body for SetSupplierCredentialEgress for application/json ContentType.
+type SetSupplierCredentialEgressJSONRequestBody = CredentialEgressUpdate
 
 // SetSupplierCredentialEnabledJSONRequestBody defines body for SetSupplierCredentialEnabled for application/json ContentType.
 type SetSupplierCredentialEnabledJSONRequestBody = CredentialEnabledUpdate

@@ -1,0 +1,1 @@
+{"object":"list","data":[{"id":"mistral-large-4","capabilities":{"completion_chat":true,"completion_fim":false,"function_calling":true,"fine_tuning":false,"vision":true,"classification":false},"object":"model","created":1756746619,"owned_by":"mistralai","max_context_length":262144,"aliases":[],"type":"base","archived":false}]}

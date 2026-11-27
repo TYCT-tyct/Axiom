@@ -250,6 +250,9 @@ func (a adminAPI) AddSupplierKeys(ctx context.Context, request adminapi.AddSuppl
 		return a.addDirectKeys(ctx, request, supplier)
 	}
 	b := request.Body
+	if b.Fields != nil {
+		return nil, invalidField("/fields", "refused for a relay: its keys have no settings")
+	}
 	group, texts, tails, err := pastedKeysOf(b)
 	if err != nil {
 		return nil, err
@@ -298,7 +301,7 @@ func (a adminAPI) addDirectKeys(ctx context.Context, request adminapi.AddSupplie
 		tails[i] = suppliers.Last4(k)
 	}
 	claim, err := idempotencyClaim(ctx, "addSupplierKeys", request.Params.IdempotencyKey,
-		[]any{request.SupplierId, "", tails, b.MaxConcurrency, b.RequestsPerMinute, b.Reason})
+		[]any{request.SupplierId, "", tails, fieldsOf(b.Fields), b.MaxConcurrency, b.RequestsPerMinute, b.Reason})
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +312,7 @@ func (a adminAPI) addDirectKeys(ctx context.Context, request adminapi.AddSupplie
 	var snap *catalog.Snapshot
 	body, replayed, err := probed(ctx, a, claim, func(ctx context.Context) (err error) {
 		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-			plan, err = a.suppliers.PlanDirectKeys(ctx, tx, supplier, *b.Keys, limits, b.Reason)
+			plan, err = a.suppliers.PlanDirectKeys(ctx, tx, supplier, *b.Keys, fieldsOf(b.Fields), limits, b.Reason)
 			return err
 		}); err != nil {
 			return directProblem(err)

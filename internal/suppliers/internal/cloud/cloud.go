@@ -27,9 +27,6 @@ import (
 // detection, and nothing to log in to.
 type Platform struct{}
 
-// Named implements adapter.Cloud: a platform lists the models a credential serves, or the catalog offers them.
-func (Platform) Named() bool { return false }
-
 // Buckets implements adapter.Adapter.
 func (Platform) Buckets() []adapter.BucketSpec { return nil }
 

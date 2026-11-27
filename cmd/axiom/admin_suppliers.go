@@ -107,10 +107,13 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	body := adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.CredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
-		RequestsPerMinute: c.RequestsPerMinute, Last4: text(c.Last4), Region: text(c.Region),
+		RequestsPerMinute: c.RequestsPerMinute, Last4: text(c.Last4), Region: text(c.Region), EgressId: text(c.EgressID),
 	}
 	if c.Supplier != (uuid.UUID{}) {
 		body.SupplierId = new(c.Supplier.String())
+	}
+	if len(c.Settings) > 0 {
+		body.Settings = new(map[string]string(c.Settings))
 	}
 	if c.Source != "" {
 		body.KeySource = new(adminapi.SupplierCredentialKeySource(c.Source))

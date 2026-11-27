@@ -15,10 +15,10 @@ import (
 const insertCloudCredential = `-- name: InsertCloudCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, source, region,
-    checked_at, check_outcome, check_status)
+    checked_at, check_outcome, check_status, settings, egress_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
     'active', $9, $10, $11, $12, $13,
-    'pasted', $14, $15, 'passed', $16)
+    'pasted', $14, $15, 'passed', $16, $17, $18)
 `
 
 type InsertCloudCredentialParams struct {
@@ -38,6 +38,8 @@ type InsertCloudCredentialParams struct {
 	Region            *string
 	CheckedAt         *time.Time
 	CheckStatus       *int32
+	Settings          []byte
+	EgressID          *string
 }
 
 // A region that passed its check, at its first check's answer.
@@ -59,6 +61,8 @@ func (q *Queries) InsertCloudCredential(ctx context.Context, db DBTX, arg Insert
 		arg.Region,
 		arg.CheckedAt,
 		arg.CheckStatus,
+		arg.Settings,
+		arg.EgressID,
 	)
 	return err
 }
@@ -173,9 +177,10 @@ func (q *Queries) LockCloudCredentials(ctx context.Context, db DBTX, supplierID 
 const resealCloudCredential = `-- name: ResealCloudCredential :exec
 UPDATE suppliers.credentials
 SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, status = 'active',
-    allowed_models = $5, call_names = $6, checked_at = $7,
-    check_outcome = 'passed', check_cause = NULL, check_status = $8
-WHERE supplier_id = $9 AND id = $10
+    allowed_models = $5, call_names = $6, settings = $7,
+    egress_id = $8, checked_at = $9, check_outcome = 'passed', check_cause = NULL,
+    check_status = $10
+WHERE supplier_id = $11 AND id = $12
 `
 
 type ResealCloudCredentialParams struct {
@@ -185,13 +190,16 @@ type ResealCloudCredentialParams struct {
 	KeyVersion    *int64
 	AllowedModels []string
 	CallNames     []byte
+	Settings      []byte
+	EgressID      *string
 	CheckedAt     *time.Time
 	CheckStatus   *int32
 	SupplierID    uuid.UUID
 	ID            uuid.UUID
 }
 
-// A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it.
+// A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it,
+// with the replacement's settings and the exit it was checked through, as a new row of it would be.
 func (q *Queries) ResealCloudCredential(ctx context.Context, db DBTX, arg ResealCloudCredentialParams) error {
 	_, err := db.Exec(ctx, resealCloudCredential,
 		arg.Ciphertext,
@@ -200,6 +208,8 @@ func (q *Queries) ResealCloudCredential(ctx context.Context, db DBTX, arg Reseal
 		arg.KeyVersion,
 		arg.AllowedModels,
 		arg.CallNames,
+		arg.Settings,
+		arg.EgressID,
 		arg.CheckedAt,
 		arg.CheckStatus,
 		arg.SupplierID,

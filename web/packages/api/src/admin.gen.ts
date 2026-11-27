@@ -2211,29 +2211,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/v1/suppliers/direct": {
+    "/api/admin/v1/supplier-types": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Connect a provider's own API with pasted keys
-         * @description Connects a direct API (`mode` `direct`, one line): a provider whose address and call format are built in (`openai`, `anthropic`, `google`, `moonshot`), or `compatible`, any other API speaking one of the call formats at the origin given. Each key is checked with one request the provider does not charge for (its model list) before it is kept; a key that passes is sealed and stored as its own credential with the limits given, and no key text is ever returned, only its last four characters. A direct API has no balance to read and no unit value to confirm: its costs are the catalog's official reference prices in the settlement currency (`source` `price_list`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
-         *
-         *     201 with the supplier when at least one key passed. When none did, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         * The channel types this node can connect
+         * @description Every channel type the node's registry carries, as its adapter describes it, ordered by group and name: what a request to connect one is checked against (docs/domains/suppliers-direct.md). Each price entry carries how many listed catalog models of the type's makers have a reference price in the entry's currency; a type all of whose entries have none has nothing to sell yet.
          */
-        post: operations["createDirectSupplier"];
+        get: operations["listSupplierTypes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/admin/v1/suppliers/cloud": {
+    "/api/admin/v1/supplier-types/{kind}/suppliers": {
         parameters: {
             query?: never;
             header?: never;
@@ -2243,12 +2241,32 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Connect a cloud platform's model service with its credential
-         * @description Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned; what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the resource is one credential, and the deployments named are its models. Costs are the catalog's official reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
+         * Connect a provider's own API or a cloud platform of the type with its keys or credential
+         * @description Connects a supplier of a `direct` or `cloud` channel type (`listSupplierTypes`). A direct API's keys are checked each with one request the provider does not charge for before it is kept, and each one that passes is its own credential; a cloud platform's credential is checked in each region named (or once, for one without regions) and each region that passes is its own credential. Nothing secret is ever returned, only last four characters. A type with price entries is connected at the entry named (`entry`, absent for its first), whose price list's currency is the settlement currency; a type without them takes `origin` and `settlement_currency`. The costs are the type's prices times the line's ratio (`price_list`). An unknown kind, or one of a relay, is 404.
          *
-         *     201 with the supplier when the credential passed in at least one region; a region that failed is not stored. When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         *     201 with the supplier when at least one key or region passed. When none did, nothing is stored and the answer is 200 with the checks and no `supplier`.
          */
-        post: operations["createCloudSupplier"];
+        post: operations["createTypedSupplier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/cost-ratio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the ratio a direct or cloud supplier's line costs its type's prices at
+         * @description For keys bought below the type's prices (a discount, committed use, credit given with a top-up): every endpoint of the line with a price is costed at the type's price times the ratio from then on, in the same change (docs/domains/suppliers-direct.md「成本与线路倍率」). Attempts already begun are costed by the plan they began with. Only for a platform supplier of `mode` `direct` or `cloud`: 409 for a relay, whose ratio its sync reads. The ratio is above 0 and at most 10, with at most 6 decimals (422 otherwise). The audit entry has the ratio before and after.
+         */
+        put: operations["setSupplierCostRatio"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2555,6 +2573,90 @@ export interface paths {
          * @description Clears the sealed key and makes the credential `erased`, at once and for good; the row stays, because calls made with it point at it. Calls in flight end with the key they hold. Axiom does not revoke the key at the supplier. A key the sync made for a relay's group is made again by the next sync unless the group is unselected, so this is for pasted keys and cloud regions. Sending it again returns the credential as it is.
          */
         post: operations["removeSupplierCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the egress proxy one credential's calls and checks go through
+         * @description `egress_id` names an egress proxy (`listEgressProxies`), and null or absent is direct. The credential's calls, its checks and its re-list go through it from each node's next reload; while the proxy is disabled they go through its fallback, and while that is disabled or absent the credential is not called and not checked, never sent direct instead. A proxy that is not there is 422; an `erased` credential is 409. Already as asked: nothing changes and nothing is audited.
+         */
+        put: operations["setSupplierCredentialEgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The egress proxies suppliers' credentials can go through
+         * @description Every proxy by id, without its password: only whether it has one (docs/domains/suppliers.md「出口代理」).
+         */
+        get: operations["listEgressProxies"];
+        put?: never;
+        /**
+         * Add an egress proxy
+         * @description An http or https proxy that opens tunnels with CONNECT, or a socks5 one, at an address of the operator's choosing, which may be a private one; the targets reached through it are still refused when they are private or internal. Its scheme, host and port do not change after: another address is another proxy. The password is sealed on arrival and never returned. A fallback is another proxy with no fallback of its own (422 otherwise). An id already taken is 409.
+         */
+        post: operations["createEgressProxy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies/{proxy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change an egress proxy's name, fallback, status or credentials
+         * @description Sets the name, the fallback (absent or null for none) and the status; `auth` replaces the username and the password, and absent keeps them. A disabled proxy hands its credentials to its fallback while that is active. A fallback is another proxy with no fallback of its own, and a proxy that is a fallback has none (422). The nodes take the change at their next reload; calls in flight finish on the connection they have.
+         */
+        put: operations["updateEgressProxy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/egress-proxies/{proxy_id}/removal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove an egress proxy
+         * @description Only a proxy that no credential uses and that is no other proxy's fallback: 409 otherwise. An erased credential does not keep it. Sending it again after it is gone is 404.
+         */
+        post: operations["removeEgressProxy"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6137,6 +6239,10 @@ export interface components {
             /** @description The last four characters of a pasted key; never more of it. */
             last4?: string;
             region?: components["schemas"]["CloudRegion"];
+            /** @description What is not secret about a direct or cloud credential, by the type's field names. */
+            settings?: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             created_at?: string;
             /** @description The calls holding the credential now, as the node that answered counts them. */
@@ -6144,6 +6250,8 @@ export interface components {
             /** @description The upstream account's requests in the rolling minute, as the node that answered counted them: the count `requests_per_minute` is compared with. */
             requests_last_minute?: number;
             last_check?: components["schemas"]["CredentialCheck"];
+            /** @description The egress proxy its calls and checks go through; absent is direct. */
+            egress_id?: components["schemas"]["EgressProxyId"];
         };
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
@@ -6677,17 +6785,7 @@ export interface components {
          */
         SupplierMode: "relay" | "direct" | "cloud";
         /**
-         * @description A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
-         * @enum {string}
-         */
-        DirectProvider: "openai" | "anthropic" | "google" | "moonshot" | "compatible";
-        /**
-         * @description `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
-         * @enum {string}
-         */
-        CloudProvider: "vertex" | "bedrock" | "azure";
-        /**
-         * @description The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The paths follow from it.
+         * @description A call family: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The one a `compatible` direct API speaks is its supplier's, and the paths follow from it.
          * @enum {string}
          */
         ApiFormat: "openai" | "anthropic" | "gemini";
@@ -6702,30 +6800,95 @@ export interface components {
             /** @description Azure OpenAI: the last four characters of the resource's key. */
             key_last4?: string;
         };
-        DirectSupplierCreate: {
-            provider: components["schemas"]["DirectProvider"];
+        SupplierTypeList: {
+            data: components["schemas"]["SupplierType"][];
+        };
+        /** @description A channel type as its adapter describes it. A relay's type has no fields: it is connected by detection and a login (`detectSupplier`, `createSupplier`). */
+        SupplierType: {
+            /** @description The adapter's name, the supplier's `kind`. */
+            kind: string;
+            mode: components["schemas"]["SupplierMode"];
+            /** @description The maker's slug, which also picks the icon; absent for a type of no one maker. */
+            vendor?: string;
+            /** @description The catalog authors whose models the type sells at their official prices; empty for any. */
+            serves?: string[];
+            /** @description The brand's own name, not translated. */
             name: string;
-            /** @description Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path. A built-in provider's origin is its own, so giving one is a 400. */
+            /** @enum {string} */
+            group: "official" | "domestic" | "cloud" | "relay";
+            /** @description The price lists the type is connected at, the default first; empty for a type whose address and settlement currency a person gives. */
+            entries: components["schemas"]["SupplierTypeEntry"][];
+            /** @description The call families the type speaks; for one without entries, the one a person chooses. */
+            families: components["schemas"]["ApiFormat"][];
+            /** @description The shapes the credential may take, the default first; empty for a relay. */
+            forms: components["schemas"]["SupplierTypeForm"][];
+            /** @description Asked whatever the form, in order. */
+            fields: components["schemas"]["SupplierTypeField"][];
+            /** @description A free, authenticated request lists the models a key serves. Without it the models come from the catalog, a key is checked once with the smallest generation, and the models are never re-listed. */
+            lists_models: boolean;
+            /** @description Each key's balance is read, and a key that cannot pay is not chosen. */
+            reads_balance: boolean;
+        };
+        SupplierTypeEntry: {
+            id: string;
+            origin: string;
+            /** @description The price list's currency: the settlement currency. */
+            currency: string;
+            /** @description Listed catalog models of the type's makers with a reference price in the currency; absent for a type that sells any maker's models. */
+            models?: number;
+        };
+        SupplierTypeForm: {
+            name: string;
+            fields: components["schemas"]["SupplierTypeField"][];
+        };
+        SupplierTypeField: {
+            /** @description One of a fixed vocabulary, which the page has words for. */
+            name: string;
+            /**
+             * @description `keys` (one a line, each its own credential) are the request's `keys`; `regions` and `deployments` its own members; the others are its `fields`. Only `text` is a setting, shown again; the rest are secret.
+             * @enum {string}
+             */
+            kind: "keys" | "secret" | "json" | "text" | "regions" | "deployments";
+            required: boolean;
+            pattern?: string;
+            max_length?: number;
+        };
+        TypedSupplierCreate: {
+            name: string;
+            /** @description The price entry to connect at; absent for the first. Only for a type with entries (400). */
+            entry?: string;
+            /** @description Required for a type without price entries, refused for the others (400). */
             origin?: string;
-            /** @description Only for `compatible`, where it is required; a built-in provider's format is its own (400). */
+            /** @description Only for a type whose family a person chooses (`compatible`), where it is required. */
             format?: components["schemas"]["ApiFormat"];
-            /** @description The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states. Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or CNY for `moonshot`). */
+            /** @description Only for a type without price entries, where it is required for a direct API and absent is USD for a cloud platform. A type with entries settles in its entry's currency (400 when given). */
             settlement_currency?: string;
-            /** @description The keys, one per item, sealed on arrival and never returned. */
-            keys: string[];
-            /** @description The calls each key has in flight at once. */
+            /** @description The credential's form; absent for the type's first. */
+            form?: string;
+            /** @description The form's and the type's fields other than keys, regions and deployments, by name: secrets, sealed on arrival and never returned, and settings, which the credential view shows. A field the type does not ask for is a 400. */
+            fields?: {
+                [key: string]: string;
+            };
+            /** @description For a type whose form has `keys`: the keys, one per item, sealed on arrival and never returned. */
+            keys?: string[];
+            /** @description For a type with `regions`, each checked and limited on its own. */
+            regions?: components["schemas"]["CloudRegion"][];
+            /** @description For a type with `deployments` (Azure OpenAI), which the platform does not list to its key. */
+            deployments?: components["schemas"]["CloudDeployment"][];
+            /** @description The calls each key or region has in flight at once. */
             max_concurrency: number;
-            /** @description Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none. */
+            /** @description Each key's or region's rolling-minute ceiling; absent for none. */
             requests_per_minute?: number;
+            /** @description The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1. */
+            cost_ratio?: components["schemas"]["Decimal"];
+            /** @description The egress proxy every key or region it stores is checked and called through (`listEgressProxies`); absent is direct. One that is not there is 422; one disabled with no active fallback is 409. */
+            egress_id?: components["schemas"]["EgressProxyId"];
             reason: components["schemas"]["Reason"];
         };
-        /** @description The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400. */
-        CloudCredentialInput: {
-            /** @description The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`. */
-            service_account_json?: string;
-            access_key_id?: string;
-            secret_access_key?: string;
-            api_key?: string;
+        SupplierCostRatioUpdate: {
+            /** @description Above 0 and at most 10, with at most 6 decimals. */
+            ratio: components["schemas"]["Decimal"];
+            reason: components["schemas"]["Reason"];
         };
         /** @description A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1. */
         CloudRegion: string;
@@ -6735,26 +6898,13 @@ export interface components {
             /** @description The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name. */
             model?: string;
         };
-        CloudSupplierCreate: {
-            provider: components["schemas"]["CloudProvider"];
-            name: string;
-            /** @description Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com. */
-            origin?: string;
-            credential: components["schemas"]["CloudCredentialInput"];
-            /** @description Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400). */
-            regions?: components["schemas"]["CloudRegion"][];
-            /** @description Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once. */
-            deployments?: components["schemas"]["CloudDeployment"][];
-            /** @description The currency the platform bills in, fixed once connected; absent is USD. */
-            settlement_currency?: string;
-            /** @description The calls each region has in flight at once. */
-            max_concurrency: number;
-            /** @description Each region's rolling-minute ceiling; absent for none. */
-            requests_per_minute?: number;
-            reason: components["schemas"]["Reason"];
-        };
         CloudCredentialReplace: {
-            credential: components["schemas"]["CloudCredentialInput"];
+            /** @description The new credential's form; absent for the type's first. */
+            form?: string;
+            /** @description The new credential's fields by name, as `TypedSupplierCreate.fields`. */
+            fields?: {
+                [key: string]: string;
+            };
             /** @description The regions to serve from now on; absent keeps the current ones. Not for `azure` (400). */
             regions?: components["schemas"]["CloudRegion"][];
             /** @description For a region added here; absent is 4. A region kept keeps its limits. */
@@ -6839,12 +6989,72 @@ export interface components {
         SupplierKeysAdd: {
             /** @description Required for a relay, refused for a direct API (400). */
             group_id?: components["schemas"]["Uuid"];
+            /** @description For a direct API: the settings of these keys by name, as the type's text fields (`TypedSupplierCreate.fields`); refused for a relay (400). */
+            fields?: {
+                [key: string]: string;
+            };
             /** @description The keys, one per item, sealed on arrival and never returned. */
             keys: string[];
             /** @description The calls each key has in flight at once. */
             max_concurrency: number;
             /** @description Each key's rolling-minute ceiling; absent for none. */
             requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description What credentials name a proxy by; `direct` is the exit without one and is never a proxy's id. */
+        EgressProxyId: string;
+        EgressProxy: {
+            id: components["schemas"]["EgressProxyId"];
+            name: string;
+            /** @enum {string} */
+            scheme: "http" | "https" | "socks5";
+            host: string;
+            port: number;
+            /** @description Absent for a proxy that asks for none. */
+            username?: string;
+            /** @description Whether a password is sealed; the password is never returned. */
+            has_password: boolean;
+            fallback_id?: components["schemas"]["EgressProxyId"];
+            /** @enum {string} */
+            status: "active" | "disabled";
+        };
+        EgressProxyList: {
+            data: components["schemas"]["EgressProxy"][];
+        };
+        EgressProxyAuth: {
+            username: string;
+            /** @description Sealed on arrival and never returned; absent for none. */
+            password?: string;
+        };
+        EgressProxyCreate: {
+            id: components["schemas"]["EgressProxyId"];
+            name: string;
+            /** @enum {string} */
+            scheme: "http" | "https" | "socks5";
+            /** @description A name or an IP address, an IPv6 one without brackets. */
+            host: string;
+            port: number;
+            auth?: components["schemas"]["EgressProxyAuth"];
+            fallback_id?: components["schemas"]["EgressProxyId"];
+            /**
+             * @description Absent is active.
+             * @enum {string}
+             */
+            status?: "active" | "disabled";
+            reason: components["schemas"]["Reason"];
+        };
+        EgressProxyUpdate: {
+            name: string;
+            /** @enum {string} */
+            status: "active" | "disabled";
+            /** @description Absent or null for none. */
+            fallback_id?: components["schemas"]["EgressProxyId"] | null;
+            auth?: components["schemas"]["EgressProxyAuth"];
+            reason: components["schemas"]["Reason"];
+        };
+        CredentialEgressUpdate: {
+            /** @description The proxy; absent or null is direct. */
+            egress_id?: components["schemas"]["EgressProxyId"] | null;
             reason: components["schemas"]["Reason"];
         };
         CredentialEnabledUpdate: {
@@ -11991,23 +12201,48 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
-    createDirectSupplier: {
+    listSupplierTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The types. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierTypeList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createTypedSupplier: {
         parameters: {
             query?: never;
             header: {
                 /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
-            path?: never;
+            path: {
+                kind: string;
+            };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DirectSupplierCreate"];
+                "application/json": components["schemas"]["TypedSupplierCreate"];
             };
         };
         responses: {
-            /** @description No key passed; nothing was stored. */
+            /** @description Nothing passed; nothing was stored. */
             200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -12017,7 +12252,7 @@ export interface operations {
                     "application/json": components["schemas"]["SupplierConnected"];
                 };
             };
-            /** @description Connected, with the check of each key. */
+            /** @description Connected, with the check of each key or region. */
             201: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -12030,50 +12265,44 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };
-    createCloudSupplier: {
+    setSupplierCostRatio: {
         parameters: {
             query?: never;
             header: {
                 /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
-            path?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CloudSupplierCreate"];
+                "application/json": components["schemas"]["SupplierCostRatioUpdate"];
             };
         };
         responses: {
-            /** @description The credential passed in no region; nothing was stored. */
+            /** @description The supplier as changed */
             200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SupplierConnected"];
-                };
-            };
-            /** @description Connected, with the check of each region. */
-            201: {
-                headers: {
-                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SupplierConnected"];
+                    "application/json": components["schemas"]["Supplier"];
                 };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
@@ -12606,6 +12835,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialEgress: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialEgressUpdate"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listEgressProxies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proxies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressProxyCreate"];
+            };
+        };
+        responses: {
+            /** @description The proxy, without its password. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                proxy_id: components["schemas"]["EgressProxyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressProxyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The proxy as changed, without its password. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    removeEgressProxy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                proxy_id: components["schemas"]["EgressProxyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The proxy as it was, without its password. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressProxy"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -84,29 +84,43 @@ func parseRegistry(source string) (entries []entry, imports map[string]entry, er
 		line := fset.Position(spec.Pos()).Line
 		imports[strings.Trim(spec.Path.Value, `"`)] = entry{firstLine: line, lastLine: fset.Position(spec.End()).Line}
 	}
-	list, err := adaptersList(file)
-	if err != nil {
-		return nil, nil, err
-	}
-	last := fset.Position(list.Lbrace).Line
-	for _, element := range list.Elts {
-		e, err := adapterEntry(fset, element)
+	for _, name := range []string{"adapters", "tables"} {
+		list, found, err := registryList(file, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		if e.firstLine <= last {
-			return nil, nil, fmt.Errorf("line %d: an adapter shares its line with another entry or the opening brace", e.firstLine)
+		if found {
+			if entries, err = listEntries(fset, list, entries); err != nil {
+				return nil, nil, err
+			}
 		}
-		entries, last = append(entries, e), e.lastLine
-	}
-	if end := fset.Position(list.Rbrace).Line; len(entries) > 0 && end <= last {
-		return nil, nil, fmt.Errorf("line %d: the closing brace shares a line with an entry", end)
 	}
 	return entries, imports, nil
 }
 
-// adaptersList finds the composite literal that `var adapters` is initialised with.
-func adaptersList(file *ast.File) (*ast.CompositeLit, error) {
+// listEntries appends the entries of one list, each on lines of its own.
+func listEntries(fset *token.FileSet, list *ast.CompositeLit, entries []entry) ([]entry, error) {
+	last := fset.Position(list.Lbrace).Line
+	first := len(entries)
+	for _, element := range list.Elts {
+		e, err := adapterEntry(fset, element)
+		if err != nil {
+			return nil, err
+		}
+		if e.firstLine <= last {
+			return nil, fmt.Errorf("line %d: an adapter shares its line with another entry or the opening brace", e.firstLine)
+		}
+		entries, last = append(entries, e), e.lastLine
+	}
+	if end := fset.Position(list.Rbrace).Line; len(entries) > first && end <= last {
+		return nil, fmt.Errorf("line %d: the closing brace shares a line with an entry", end)
+	}
+	return entries, nil
+}
+
+// registryList finds the composite literal that `var <name>` is initialised with: adapters, one package's adapter a
+// line, or tables, one package's table of adapters a line. Both are entries of pkg.New().
+func registryList(file *ast.File, name string) (*ast.CompositeLit, bool, error) {
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.VAR {
@@ -114,15 +128,18 @@ func adaptersList(file *ast.File) (*ast.CompositeLit, error) {
 		}
 		for _, spec := range gen.Specs {
 			v, ok := spec.(*ast.ValueSpec)
-			if ok && len(v.Names) == 1 && v.Names[0].Name == "adapters" && len(v.Values) == 1 {
+			if ok && len(v.Names) == 1 && v.Names[0].Name == name && len(v.Values) == 1 {
 				if list, ok := v.Values[0].(*ast.CompositeLit); ok {
-					return list, nil
+					return list, true, nil
 				}
-				return nil, errors.New("adapters is not initialised with a composite literal")
+				return nil, false, fmt.Errorf("%s is not initialised with a composite literal", name)
 			}
 		}
 	}
-	return nil, errors.New("the registry has no `var adapters = ...`")
+	if name == "adapters" {
+		return nil, false, errors.New("the registry has no `var adapters = ...`")
+	}
+	return nil, false, nil // a registry without tables
 }
 
 func adapterEntry(fset *token.FileSet, element ast.Expr) (entry, error) {

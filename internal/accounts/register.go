@@ -146,8 +146,8 @@ func (s *Service) registerInvite(ctx context.Context, d domain, snap *snapshot, 
 	return RegisterResult{User: UserID(user)}, nil
 }
 
-// registerOpen stores one pending registration and queues its verification mail. It does not keep the request's
-// password: the link's page asks for it after the address is proved. The request always succeeds for a well-formed
+// registerOpen stores one pending registration, with the inviter its invite code names, and queues its verification
+// mail. It does not keep the request's password: the link's page asks for it after the address is proved. The request always succeeds for a well-formed
 // address, whether or not it is registered already: the page and the API must not tell an anonymous caller which
 // addresses exist. A duplicate is found when the link is clicked and answered with ErrEmailTaken there.
 func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, registration RegistrationSiteRow, r RegisterRequest) (RegisterResult, error) {
@@ -177,23 +177,37 @@ func (s *Service) registerOpen(ctx context.Context, d domain, snap *snapshot, re
 	if language == "" {
 		language = "en"
 	}
-	var id uuid.UUID
 	err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(d.site)), func(tx pg.Tx) error {
-		var err error
-		id, err = s.queries.InsertRegistrationRequest(ctx, tx, InsertRegistrationRequestParams{
+		return s.storeRegistrationRequest(ctx, tx, r.InviteCode, InsertRegistrationRequestParams{
 			ID: uuid.NewV7(), SiteID: uuid.UUID(d.site), EmailHash: emailHash[:], Email: email,
 			TierID: registration.DefaultTierID, Domain: strings.ToLower(r.Host), Language: language,
 		})
-		if err != nil {
-			return err
-		}
-		_, err = s.registration.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: registrationArgs{ID: id}}})
-		return err
 	})
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("register: %w", err)
 	}
 	return RegisterResult{Pending: true}, nil
+}
+
+// storeRegistrationRequest writes the pending request and queues its mail. The inviter is the active user of the site
+// whose invite code it is; an unusable code is ignored rather than refused, so the answer does not tell an anonymous
+// caller which codes are valid.
+func (s *Service) storeRegistrationRequest(ctx context.Context, tx pg.Tx, code string, request InsertRegistrationRequestParams) error {
+	if code != "" {
+		inviters, err := s.queries.RegistrationInviter(ctx, tx, RegistrationInviterParams{SiteID: request.SiteID, Code: code})
+		if err != nil {
+			return err
+		}
+		if len(inviters) == 1 {
+			request.InviterUserID = &inviters[0]
+		}
+	}
+	id, err := s.queries.InsertRegistrationRequest(ctx, tx, request)
+	if err != nil {
+		return err
+	}
+	_, err = s.registration.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: registrationArgs{ID: id}}})
+	return err
 }
 
 // registrationSite reads the site's mode from the database, where a closed or disabled site is authoritative.
@@ -234,7 +248,8 @@ func (s *Service) domainLimit(ctx context.Context, site SiteID, emailDomain stri
 	return nil
 }
 
-// newUser is a user and the personal account that comes with them. inviter is nil for a user the command line makes.
+// newUser is a user and the personal account that comes with them. inviter is nil for a user the command line makes and for an
+// open registration without an invite code.
 type newUser struct {
 	id, account, site, tier, role uuid.UUID
 	email, passwordHash           string

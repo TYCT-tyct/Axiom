@@ -530,7 +530,7 @@ func TestAddDirectSupplierKeys(t *testing.T) {
 	t.Parallel()
 	f, p := newDirectFixture(t)
 	var made adminapi.SupplierConnected
-	decode(t, f.change(f.s, http.MethodPost, "/suppliers/direct", directBody(p.server.URL, "sk-good-key-0001"), newKey()), &made)
+	decode(t, f.change(f.s, http.MethodPost, "/supplier-types/compatible/suppliers", directBody(p.server.URL, "sk-good-key-0001"), newKey()), &made)
 	path := "/suppliers/" + made.Supplier.Id + "/keys"
 	asked := len(p.sent())
 	body := `{"keys":["sk-good-key-0002","sk-refused-0003","sk-good-key-0001","sk-good-key-0002"],"max_concurrency":2,"requests_per_minute":30,"reason":"more keys"}`

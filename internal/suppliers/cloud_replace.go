@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"uuid"
 
@@ -37,7 +38,7 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 		return nil, err
 	}
 	regions := r.Regions
-	if regions == nil && c.Regional() {
+	if regions == nil && c.Type().Has(adapter.FieldRegions) {
 		if regions, err = servedRegions(ctx, tx, supplier); err != nil {
 			return nil, err
 		}
@@ -46,16 +47,19 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 		return nil, fmt.Errorf("the supplier's settlement currency: %w", err)
 	}
 	var named []adapter.CloudModel
-	if c.Named() {
+	if c.Type().Has(adapter.FieldDeployments) {
 		if named, err = servedNames(ctx, tx, supplier); err != nil {
 			return nil, err
 		}
 	}
-	p, err := planCredential(c, s.Kind, s.Origin, r.Input, regions, named)
+	p, err := planCredential(c, s.Kind, s.Origin, r, regions, named)
 	if err != nil {
 		return nil, err
 	}
 	p.r, p.supplier = r, supplier
+	if err := a.lineExit(ctx, tx, p); err != nil {
+		return nil, err
+	}
 	return p, p.skipStored(ctx, tx)
 }
 
@@ -112,6 +116,30 @@ func servedRegions(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]string,
 	return regions, nil
 }
 
+// lineExit sets the exit a replacement is checked through and a region it adds is stored with: the one the supplier's
+// credentials share now, direct when they share none.
+func (a *Admin) lineExit(ctx context.Context, tx pg.Tx, p *CloudPlan) error {
+	creds, err := store.New().ListCredentialsOf(ctx, tx, p.supplier)
+	if err != nil {
+		return fmt.Errorf("read the credentials: %w", err)
+	}
+	shared, first := "", true
+	for _, c := range creds {
+		if c.Status == "erased" {
+			continue
+		}
+		if id := deref(c.EgressID); first {
+			shared, first = id, false
+		} else if id != shared {
+			shared = ""
+			break
+		}
+	}
+	p.r.EgressID = shared
+	p.exit, err = a.exitFor(ctx, tx, shared)
+	return err
+}
+
 // ReplaceCloud puts the new credential in place in the caller's transaction, under the supplier's lock: each region
 // that passed is the supplier's from then on, re-sealed in the row made for the credential or in a new one, at the
 // limits the region has now (a region not served now takes those given); every other region is erased. When no region
@@ -131,10 +159,11 @@ func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 		return Connected{Checks: p.Checks}, nil
 	}
 	q := store.New()
-	group, err := lineOf(ctx, tx, q, p.supplier)
+	group, ratio, err := lineOf(ctx, tx, q, p.supplier)
 	if err != nil {
 		return Connected{}, err
 	}
+	p.ratio = ratio
 	if err := p.refreshLine(ctx, tx, q, group, snap); err != nil {
 		return Connected{}, err
 	}
@@ -170,7 +199,7 @@ func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries,
 	if err := q.SetCloudAccount(ctx, tx, store.SetCloudAccountParams{CloudAccount: account, ID: p.supplier}); err != nil {
 		return fmt.Errorf("set the cloud account: %w", err)
 	}
-	if p.cloud.Named() {
+	if p.cloud.Type().Has(adapter.FieldDeployments) {
 		return nil // the models a person named are the line's already, mapped by the models they named
 	}
 	served, err := q.LineEndpoints(ctx, tx, group)
@@ -181,7 +210,7 @@ func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries,
 	for _, m := range served {
 		has[catalog.ModelID(m.ModelID)] = true
 	}
-	_, _, err = insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has)
+	_, _, err = insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has, p.ratio)
 	return err
 }
 
@@ -273,7 +302,8 @@ func (a *Admin) storeRegion(ctx context.Context, tx pg.Tx, q *store.Queries, gro
 	return nil
 }
 
-// resealRegion seals the credential again in the row made for it, p.Checks[i].Credential.
+// resealRegion seals the credential again in the row made for it, p.Checks[i].Credential, with what a new row of it
+// would have: its settings and the exit it was checked through (lineExit).
 func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p *CloudPlan, i int) error {
 	c := &p.Checks[i]
 	s, err := a.sealRegion(p, i, c.Credential)
@@ -283,21 +313,26 @@ func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p 
 	status := statusColumn(c.UpstreamStatus)
 	if err := q.ResealCloudCredential(ctx, tx, store.ResealCloudCredentialParams{
 		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
-		AllowedModels: s.allowed, CallNames: s.callNames, CheckedAt: &c.CheckedAt, CheckStatus: &status, SupplierID: p.supplier, ID: c.Credential,
+		AllowedModels: s.allowed, CallNames: s.callNames, Settings: settingsColumn(p.settings), EgressID: orNull(p.r.EgressID),
+		CheckedAt: &c.CheckedAt, CheckStatus: &status, SupplierID: p.supplier, ID: c.Credential,
 	}); err != nil {
 		return fmt.Errorf("re-seal the region %q: %w", c.Region, err)
 	}
 	return nil
 }
 
-// lineOf is a direct or cloud supplier's one line.
-func lineOf(ctx context.Context, tx pg.Tx, q *store.Queries, supplier uuid.UUID) (uuid.UUID, error) {
+// lineOf is a direct or cloud supplier's one line, and its ratio.
+func lineOf(ctx context.Context, tx pg.Tx, q *store.Queries, supplier uuid.UUID) (uuid.UUID, *big.Rat, error) {
 	groups, err := q.ListGroupsOf(ctx, tx, supplier)
 	if err != nil {
-		return uuid.UUID{}, fmt.Errorf("read the line: %w", err)
+		return uuid.UUID{}, nil, fmt.Errorf("read the line: %w", err)
 	}
 	if len(groups) != 1 {
-		return uuid.UUID{}, fmt.Errorf("%w: the supplier has %d lines", ErrNoGroup, len(groups))
+		return uuid.UUID{}, nil, fmt.Errorf("%w: the supplier has %d lines", ErrNoGroup, len(groups))
 	}
-	return groups[0].ID, nil
+	ratio, ok := new(big.Rat).SetString(groups[0].Ratio)
+	if !ok {
+		return uuid.UUID{}, nil, fmt.Errorf("the line's ratio %q is not a number", groups[0].Ratio)
+	}
+	return groups[0].ID, ratio, nil
 }

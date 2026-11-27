@@ -236,7 +236,7 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			continue
 		}
 		entry := r.entry(c.candidate, n)
-		entry.Price = c.price.PriceRef
+		entry.Price, entry.Bound = c.price.PriceRef, c.bound
 		entries = append(entries, entry)
 	}
 	return entries
@@ -311,36 +311,36 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	return g, c.Native.Has(g)
 }
 
-// check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
-// the account cannot see is not left out, it is not there: no reason is given, so no existence is revealed.
-func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason Reason, visible bool) {
+// check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0, and the
+// cost funding held its supplier's funds to (Entry.Bound). One the account cannot see is not left out, it is not there.
+func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason Reason, bound platform.Exact, visible bool) {
 	if !c.Owner.visibleTo(n.in.Admission) {
-		return 0, false
+		return 0, bound, false
 	}
 	if noShared && !c.Byok {
-		return ByokNoFallback, true
+		return ByokNoFallback, bound, true
 	}
 	if reason = c.unavailable(); reason != 0 {
-		return reason, true
+		return reason, bound, true
 	}
 	format, ok := c.callFormat(n)
 	if !ok {
-		return FormatNotServed, true
+		return FormatNotServed, bound, true
 	}
 	spec := c.Spec(format)
 	if reason = c.unfit(n, spec); reason != 0 {
-		return reason, true
+		return reason, bound, true
 	}
 	if reason = c.filtered(n, price, spec); reason != 0 {
-		return reason, true
+		return reason, bound, true
 	}
-	if reason = c.funding(n, format, spec); reason != 0 {
-		return reason, true
+	if reason, bound = c.funding(n, format, spec); reason != 0 {
+		return reason, bound, true
 	}
 	if c.full() {
-		return Full, true
+		return Full, bound, true
 	}
-	return 0, true
+	return 0, bound, true
 }
 
 // filtered is what a preset or the request's override leaves out before its cost is known: the visible set it allows,
@@ -364,12 +364,12 @@ func (c *candidate) filtered(n *need, price *candidatePrice, spec Spec) Reason {
 }
 
 // funding uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
-func (c *candidate) funding(n *need, format protocol.Format, spec Spec) Reason {
+func (c *candidate) funding(n *need, format protocol.Format, spec Spec) (Reason, platform.Exact) {
 	if c.Funds == nil {
-		return 0
+		return 0, platform.Exact{}
 	}
 	if !c.Funds.CanPay(platform.Exact{}) {
-		return SupplierBalance
+		return SupplierBalance, platform.Exact{}
 	}
 	out, _ := c.outputLimit(n.req, n.tokens, spec)
 	model := c.model
@@ -379,15 +379,15 @@ func (c *candidate) funding(n *need, format protocol.Format, spec Spec) Reason {
 	// An unbounded tool is a request error: admission's Quote must keep returning its actionable 400, rather than
 	// disguising it as a supplier outage. The same bounds make Quote refuse it before any upstream call.
 	if errors.Is(err, billing.ErrUnbounded) {
-		return 0
+		return 0, platform.Exact{}
 	}
 	if err != nil {
-		return UnquotableCost
+		return UnquotableCost, platform.Exact{}
 	}
 	if !c.Funds.CanPay(cost) {
-		return SupplierBalance
+		return SupplierBalance, cost
 	}
-	return 0
+	return 0, cost
 }
 
 // unavailable is the endpoint's own state: switched off, taken out, or its supplier unable to pay or reach.

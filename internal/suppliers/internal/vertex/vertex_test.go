@@ -54,7 +54,7 @@ func keyFile(t *testing.T) string {
 
 func readKey(t *testing.T) adapter.CloudCredential {
 	t.Helper()
-	c, err := New().ReadCredential(adapter.CloudInput{ServiceAccountJSON: keyFile(t)})
+	c, err := New().ReadCredential("service_account", map[string]string{"service_account_json": keyFile(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +62,8 @@ func readKey(t *testing.T) adapter.CloudCredential {
 }
 
 // TestReadCredential: the project, account and key are read, the key's last four characters shown, and the file's
-// other members, the token address among them, are not kept; a member of another platform, or a file without an RSA
-// key, is refused.
+// other members, the token address among them, are not kept; a file without an RSA key, or one that is not JSON, is
+// refused.
 func TestReadCredential(t *testing.T) {
 	t.Parallel()
 	c := readKey(t)
@@ -73,14 +73,13 @@ func TestReadCredential(t *testing.T) {
 	if sealed := c.Key.Reveal(); strings.Contains(sealed, "token_uri") || strings.Contains(sealed, "evil") {
 		t.Errorf("the sealed text keeps the file's token address: %s", sealed)
 	}
-	for _, in := range []adapter.CloudInput{
-		{ServiceAccountJSON: keyFile(t), APIKey: "extra"},
-		{ServiceAccountJSON: `{"project_id":"p","client_email":"a@b","private_key_id":"k","private_key":"not a key"}`},
-		{ServiceAccountJSON: `not json`},
+	for _, in := range []string{
+		`{"project_id":"p","client_email":"a@b","private_key_id":"k","private_key":"not a key"}`,
+		`not json`,
 	} {
-		var formErr *adapter.CredentialFormError
-		if _, err := New().ReadCredential(in); !errors.As(err, &formErr) {
-			t.Errorf("%+v: %v, want a CredentialFormError", in.APIKey, err)
+		var formErr *adapter.FieldError
+		if _, err := New().ReadCredential("service_account", map[string]string{"service_account_json": in}); !errors.As(err, &formErr) {
+			t.Errorf("%.20s: %v, want a FieldError", in, err)
 		}
 	}
 }
@@ -294,14 +293,14 @@ func TestCheckRegion(t *testing.T) {
 		{http.StatusForbidden, adapter.CloudCheck{Cause: adapter.CauseNotPermitted, Status: 403}},
 	} {
 		d := regionDoer{tokens: svc.server.Client(), status: tc.status, t: t}
-		got := (&Adapter{tokens: newTokens(svc.server.URL)}).CheckRegion(t.Context(), d, origin, "us-east5", key, at)
+		got := (&Adapter{tokens: newTokens(svc.server.URL)}).CheckRegion(t.Context(), d, origin, "us-east5", key, nil, at)
 		if got.Outcome != tc.want.Outcome || got.Cause != tc.want.Cause || got.Status != tc.want.Status || got.Models != nil {
 			t.Errorf("a %d: %+v", tc.status, got)
 		}
 	}
 	refusing := newTokenService(t)
 	refusing.refuses = true
-	got := (&Adapter{tokens: newTokens(refusing.server.URL)}).CheckRegion(t.Context(), refusing.server.Client(), origin, "us-east5", key, at)
+	got := (&Adapter{tokens: newTokens(refusing.server.URL)}).CheckRegion(t.Context(), refusing.server.Client(), origin, "us-east5", key, nil, at)
 	if got.Outcome != adapter.KeyFailed || got.Cause != adapter.CauseRejected || got.Status != 400 {
 		t.Errorf("a refused key: %+v", got)
 	}

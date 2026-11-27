@@ -29,6 +29,7 @@ type try struct {
 	started    time.Time
 	firstToken time.Time
 	errorKind  string
+	egress     string // the receipt's (suppliers.AttemptReceipt.Egress), once its supplier request ended
 }
 
 // cancelled is the error kind of an attempt the client's leaving ended: what the read saw after that is not the
@@ -507,7 +508,7 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 		rec := observability.AttemptRecord{
 			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttemptSeq
 			Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
-			SourceClass: string(class), Egress: directEgress, Outcome: outcomeOf(a), ErrorKind: t.errorKind,
+			SourceClass: string(class), Egress: t.egress, Outcome: outcomeOf(a), ErrorKind: t.errorKind,
 			StartedAt: t.started, FinishedAt: a.FinishedAt,
 		}
 		if !t.firstToken.IsZero() {
@@ -555,7 +556,3 @@ func finishOf(a billing.AttemptResult) string {
 	}
 	return "" // none reported: the upstream said nothing, or the call ended before an answer
 }
-
-// directEgress is the one way a node reaches its suppliers: from its own address (internal/platform/egress), which is
-// what the log's egress column names.
-const directEgress = "direct"
