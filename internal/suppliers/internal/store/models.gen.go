@@ -3,3 +3,18 @@
 //   sqlc v1.31.1
 
 package store
+
+type SuppliersEgressProxy struct {
+	ID         string
+	Name       string
+	Scheme     string
+	Host       string
+	Port       int32
+	Username   *string
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedDek []byte
+	KeyVersion *int64
+	FallbackID *string
+	Status     string
+}

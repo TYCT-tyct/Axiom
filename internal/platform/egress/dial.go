@@ -16,6 +16,8 @@ type dialer struct {
 	lookup  func(context.Context, string, string) ([]netip.Addr, error)
 	connect func(context.Context, string, string) (net.Conn, error)
 	policy  egresstest.Policy
+	// through opens a connection to a target that passed the policy by way of a proxy (Client.Via); nil dials it.
+	through func(ctx context.Context, network, target string) (net.Conn, error)
 }
 
 func (d *dialer) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -30,11 +32,17 @@ func (d *dialer) dialContext(ctx context.Context, network, address string) (net.
 		if !allowedAddress(at.Addr(), d.policy) {
 			return nil, fmt.Errorf("egress %s: %w", host, ErrAddressDenied)
 		}
+		if d.through != nil {
+			return d.through(ctx, network, at.String())
+		}
 		return d.connectOne(ctx, network, at.String(), 1)
 	}
 	ips, err := d.resolve(ctx, host)
 	if err != nil {
 		return nil, err
+	}
+	if d.through != nil { // the proxy resolves the name where it stands (Client.Via)
+		return d.through(ctx, network, address)
 	}
 	var lastErr error
 	for i, ip := range ips {

@@ -209,6 +209,18 @@ export default {
     test: "检测",
     limits: "修改限制",
     replace: "更换凭证",
+    egress: "修改出口",
+  },
+  egress: {
+    label: "出口",
+    direct: "直连",
+    hint: "请求和检测从哪里出去。官方接口不接受国内来源，或要固定出口 IP 时，选一个代理。",
+    option: "{{name}}（{{id}}）",
+    disabled: "{{name}}（{{id}}，已停用）",
+    title: "修改出口",
+    body: "这把 Key 的请求、检测和重读都从选的出口出去。代理停用时走它的备用代理；备用也用不了时这把 Key 暂停，不会改成直连。",
+    action: "保存",
+    done: "出口已改成 {{exit}}",
   },
   enable: {
     offTitle: "停用这个账号",

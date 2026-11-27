@@ -35,7 +35,8 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `suppliers` | `UNIQUE (origin, upstream_account)`；`mode`（relay、direct、cloud）和 `api_format` 创建后不变；`cloud_account` 只有云平台有；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
-| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名；`settings` 是按类型描述核对的设置；`balance_*` 是钱包 key 的余额 |
+| `egress_proxies` | 密码信封同空同有；`fallback_id` 指向另一行 |
+| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`egress_id` 空为直连；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名；`settings` 是按类型描述核对的设置；`balance_*` 是钱包 key 的余额 |
 | `intake_rules`、`inbox_items` | PK `supplier_id`；`UNIQUE (supplier_id, kind, subject)` |
 | `supplier_models` | PK `(supplier_group_id, upstream_name)`；`model_id` 空即待映射 |
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |
@@ -52,8 +53,8 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 
 - **行级安全**：`suppliers` 按本行归属与范围比较，平台供应商只有平台范围可见；子表策略是"所属供应商对本事务可见"，插入也挡住挂到看不见的供应商下。同步、对账、限速和采集的表是平台范围。
 - **复合外键**：同时存 `supplier_id` 与 `supplier_group_id` 的表外键指向 `supplier_groups (id, supplier_id)`；`model_id` 是目录 ID，没有外键。
-- **授权**：应用角色只对 `supplier_logins`（移除时）、`usage_records`、`inbox_items`（情况结束）有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`、`upstream_key_ref`。没有后台任务角色，应用角色暂能改 `attempt_costs` 与 `charge_records` 的对账列。
-- **密钥**：没有明文列；数据库只查信封四列齐全和长度，写入边界只收 `secret.Sealed`。触发器 `fence_envelope_key_version` 拒绝退役的主密钥版本（[platform 的「凭证加密」](../platform/README.md#凭证加密)）。`serve` 缺 `AXIOM_MASTER_KEY_FILE` 不启动。
+- **授权**：应用角色只对 `supplier_logins`（移除时）、`usage_records`、`inbox_items`（情况结束）、`egress_proxies` 有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`、`upstream_key_ref`。没有后台任务角色，应用角色暂能改 `attempt_costs` 与 `charge_records` 的对账列。
+- **密钥**：没有明文列；数据库只查信封四列齐全和长度，写入边界只收 `secret.Sealed`。触发器 `fence_envelope_key_version` 拒绝退役的主密钥版本（[platform 的「凭证加密」](../platform/README.md#凭证加密)）。
 
 ## 调用面
 
@@ -88,20 +89,19 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 `Failure.Cause` 的 13 种原因以同名类型别名导出；`Failure.Executed` 只需与 `NotExecuted` 比较。
 
-- **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行：`Codename` 是分组的公开代号（不暴露名称、地址或内部 ID），`Generation` 是快照的单调版本，`Schedule` 已按分组倍率缩放，`Funds` 是原生余额（钱包 key 取最富的）与自动暂停（路由用 `billing.ReservedCost` 调 `Funds.CanPay`），`Credentials` 是未过期、未冷却的凭证数。规格由 routing 向目录取。
+- **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行：`Codename` 是分组的公开代号，`Generation` 是快照的单调版本，`Schedule` 已按分组倍率缩放，`Funds` 是原生余额（钱包 key 取最富的）与自动暂停（路由用 `billing.ReservedCost` 调 `Funds.CanPay`），`Credentials` 是未过期、未冷却的凭证数。规格由 routing 向目录取。
 - **回执**带凭证、端点、成本计划版本、单位价值行 id 和对账键；gateway 用 `AttemptReceipt.WithExchange` 传回冻结的汇率。`Credits` = 原生金额 × 单位价值 × 汇率，精确相乘、转成十亿分之一时向上取整一次；缺汇率或溢出返回未知，原生 `CostFlag` 不变。`attempt_costs` 存换算依据 `Conversion`，只有 converted 和 overflow 写汇率 ID。
 - **写入**：`RecordAttempts` 在 billing 的结算事务里用一条 `unnest` 写全部尝试，`EndRequests` 同样一条语句，重复都保留第一次。平台自己的尝试传零值租户，写成 NULL；失联请求必须有租户。
-- **路径**：来自 `attempt.go` 的 `wire` 表（Chat、Responses、Messages、Completions、Embeddings、Rerank 的 `/v1/…`，只有 Messages 加 Anthropic 版本头）和 `compactPaths`（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）；直连经 `adapter.Wire` 换前缀、带凭证的设置，凭证另起名字时发它的名字。云平台由适配器按区域、模型名和设置签出（`adapter.Signer`），签不出算凭证的失败，2xx 由它转成格式的帧。
+- **路径**：`attempt.go` 的 `wire` 表（各格式的 `/v1/…`，只有 Messages 加 Anthropic 版本头）和 `compactPaths`（[路径与格式](../../docs/domains/gateway.md#路径与格式)）；直连经 `adapter.Wire` 换前缀、带凭证的设置和名字。云平台由 `adapter.Signer` 按区域、模型名和设置签出，签不出算凭证的失败，2xx 转成格式的帧。
+- **出口**：凭证的调用、检测、重读都走 `exits.client` 的客户端；代理用不了的凭证跳过、建不出的整家排除，不改直连；经代理的传输失败是 `ScopeEgress`。
 - **`EnabledCurrencies`**：active、low_balance 供应商的结算币种，缺汇率时告警。
 - **`TestRequest.AvoidCredential`** 在有另一把可用 key 时避开它；`TestResult.CredentialID` 只给 ID。
 
 ## 并发与速率
 
 - **窗口**：每个上游账号（中转站是供应商，直连和云平台是凭证）固定 61 个一秒桶，按首次准入起的单调秒索引，每个桶带自己的秒标记、过期读作 0。`Acquire` 先比较交换占并发位，再在账号锁里读时钟、汇总 [now-60, now] 并加一；失败就还回并发位换一把 key。所以任意滚动 60 秒不超过所选凭证的上限，时钟回拨不重开旧桶，成功计入的请求不退，一秒的计数饱和在 100,000。
-- **容量视图**：`Capacity` 用与 `Acquire` 相同的 `leastBusy` 判断，只读；占位以 `Acquire` 为准。
 - **静态份额**：`Config.Nodes` 接入 `platform.nodes` 的存活成员，`SyncShares` 每秒重算。按节点 ID 排序，额度 C 分成 `C/N`，前 `C%N` 个各加一；有限 RPM 分得 0 即不可选。份额变化时先按新旧列表逐项取小，本节点在途和 RPM 用量降到目标才确认；新成员要等原有成员都确认包含它才有份额。交接比较带启动身份的完整成员列表。
 - **失联与退出**：注册表按 30 秒判失联；准入期限是自己心跳剩余寿命减 5 秒、至多 25 秒，过期即停止准入、以加入者重新进入。离开节点的份额再保留 61 秒约束有限 RPM（`platform.credential_share_departures`）。
-- **生效**：上限存在凭证行上，下一次 `Reload` 生效，降低上限不取消调用。
 
 ## 用真实生成测试端点
 
@@ -109,7 +109,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 - **读到流结束**：调用方的取消被挡在外面，只留 45 秒上限。
 - **判定**（`TestResult.Outcome()`）见[什么算一次失败](../../docs/domains/quality.md#什么算一次失败)：2xx 且读到正常结束事件才通过，未到结束就断是 `stream_broken`。
-- **成本**：`RecordTest` 在调用方的事务里写成本行（`test` 标记，租户为空）和审计 `endpoint.test`；管理接口的幂等事务有 1 分钟上限，提交前失败全部回滚。估价是确定的上界：输入按字节数 + 16，输出按上限，取可落入档位里的最高价，不用上游报告的用量；未执行的估价为 0。成本计划缺一侧的价时 `ErrTestCost`（422），不付钱。
+- **成本**：`RecordTest` 在调用方的事务里写成本行（`test` 标记，租户为空）和审计 `endpoint.test`；估价是确定的上界：输入按字节数 + 16，输出按上限，取可落入档位里的最高价，不用上游报告的用量；未执行的估价为 0。成本计划缺一侧的价时 `ErrTestCost`（422），不付钱。
 
 ## 对账
 
@@ -168,4 +168,5 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`、`EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
 | `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
+| `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
 | `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

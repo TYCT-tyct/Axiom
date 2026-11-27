@@ -214,6 +214,18 @@ export default {
     test: "Check",
     limits: "Change the limits",
     replace: "Replace the credential",
+    egress: "Change the exit",
+  },
+  egress: {
+    label: "Exit",
+    direct: "Direct",
+    hint: "Where its calls and checks leave from. Pick a proxy when the official API refuses traffic from where you are, or to keep a fixed exit IP.",
+    option: "{{name}} ({{id}})",
+    disabled: "{{name}} ({{id}}, disabled)",
+    title: "Change the exit",
+    body: "This key's calls, checks and re-lists leave from the exit chosen. While the proxy is disabled they go through its fallback; while that cannot be used either the key rests, and is never sent direct instead.",
+    action: "Save",
+    done: "The exit is now {{exit}}",
   },
   enable: {
     offTitle: "Stop this account",

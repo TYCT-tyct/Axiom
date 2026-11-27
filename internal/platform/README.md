@@ -23,7 +23,7 @@
 
 - **配置**：非法值和没人读的 `AXIOM_*` 在抢占监听之前一次报出，空值等于未设定；错误只含变量名和期望形状。
 - **密钥**：明文只在 `secret.Secret` 里，一切格式化输出 `[REDACTED]`，只有 `Reveal()` 取出；持有密钥材料的类型都把它放在闭包后面。私密文件的类型和权限从打开后的描述符读（`privfile.Open`），拒绝符号链接和组/其他人权限。
-- **出站**：只连已校验的公网 IP，调用方换不掉 Transport、Resolver、Dialer；请求必须有期限；不跟随重定向，拒绝 `101`；URL 不带用户信息，错误里只有主机名。
+- **出站**：只连已校验的公网目标（代理地址不查），调用方换不掉 Transport、Resolver、Dialer；请求必须有期限；不跟随重定向，拒绝 `101`；URL 不带用户信息，错误里只有主机名。
 - **JSON**：只经 `jsonx`（depguard 禁止别处用 `encoding/json`）：拒绝非法 UTF-8 和重复键，嵌套至多 256 层，未知成员跳过（`UnmarshalKnown` 拒绝）。
 - **数据库**：模块只能经 `pg.DB.Tx`/`ReadTx`/`TenantTx` 访问，`pg.Tx` 交不出连接；depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql`。范围和角色只在事务内有效，只由 `pg` 设定（`just scope` 拦下别处的 `set_config`、范围参数名和 `SET/RESET ROLE`）。没有范围什么都查不到；范围是平台 ∪ 站点集合 ∪ 账户集合；只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围（forbidigo）。`ReadTx` 是只读的 REPEATABLE READ。
 - **启动检查**（`serve`）：登录角色能成为的角色里没有超级用户、BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB、表的属主、任务角色和服务器文件/程序角色；模块 schema 里每张表（版本表除外）ENABLE 且 FORCE 行级安全并有策略；定义者函数都属 `axiom_lookup`、`search_path` 固定、只有 `axiom_app` 能执行；缺迁移、摘要不符或有本程序没有的旧迁移就不启动。
@@ -40,8 +40,8 @@
 
 ## 出站 HTTP
 
-- `egress.New(egress.Direct)` 是并发安全的客户端，只支持直连；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
-- DNS 结果全部合格才拨号（任一不合格整组拒绝），按 IP 拨，Host 和 SNI 保留原主机；拒绝私网、回环、链路本地、特殊用途段、非 `2000::/3` 的 IPv6、NAT64 知名与本地前缀、Azure 的 `168.63.129.16`，以及 URL 里的映射 IPv6、非常规 IPv4 写法和 zone。
+- `egress.New(egress.Direct)` 是并发安全的客户端，`Via` 经 http、https、socks5 代理；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
+- DNS 结果全部合格才拨号，直连按 IP 拨，Host 和 SNI 保留原主机；拒绝私网、回环、链路本地、特殊用途段、非 `2000::/3` 的 IPv6、NAT64 知名与本地前缀、Azure 的 `168.63.129.16`，以及 URL 里的映射 IPv6、非常规 IPv4 写法和 zone。
 - 连接合计 10 秒（候选 IP 平分），TLS 握手 10 秒，空闲 90 秒，响应头至多 1 MiB；其余只受调用方期限约束。
 - 部署前提：出站网络没有转向内网的自选 NAT64 前缀。
 - 测试：`egresstest.Policy` 放行回环；`Route(host, at)` 把固定公网域名转到本机假服务，Host 和证书不变，转去的地址照样过策略。生产策略不转发。
@@ -57,7 +57,7 @@
 | MCP `AXIOM_MCP_ADDR` | 只在 `ops` 角色、只绑回环，见[运营的「MCP 映射」](../../docs/domains/operations.md#mcp-映射) |
 | 探针 `AXIOM_PROBES_ADDR` | `/livez`、`/readyz`、`/metrics`；读写各限 2 秒 |
 
-- `AXIOM_NODE_ROLES`（`core`、`ingress`、`ops`，默认 `core`；`core` 与 `ingress` 互斥）决定开哪些监听、读哪些变量，角色不读的变量设了算错（拿错环境就在启动时看见）。`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信地址。
+- `AXIOM_NODE_ROLES`（`core`、`ingress`、`ops`，默认 `core`；`core` 与 `ingress` 互斥）决定开哪些监听、读哪些变量，角色不读的变量设了算错。`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信地址。
 - 启动：检查配置 → 抢占监听（被占即失败）→ 数据库检查等，合计至多 `AXIOM_STARTUP_TIMEOUT`，失败关闭已抢的监听；检查通过前 `/readyz` 不应答。
 - 退出：第一个信号后 `/readyz` 和探针外监听的新请求答 503（`Retry-After: 1`），在途请求至多等 `AXIOM_SHUTDOWN_TIMEOUT`；第二个信号立即退出。
 - 探针外的监听都经 `httpserver.Public`：自生成 UUIDv7 请求 ID（`X-Request-ID`）；访问日志记路由模式不记路径；请求体须 2 分钟内发完；panic 未响应时答 500，已响应时断连接；处理器错误只答 500。

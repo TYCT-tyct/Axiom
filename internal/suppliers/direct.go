@@ -16,6 +16,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -69,6 +70,8 @@ type DirectRequest struct {
 	MaxConcurrency                    int32
 	RequestsPerMinute                 *int32
 	Reason                            string
+	// EgressID is the proxy the keys are checked and called through; empty for direct.
+	EgressID string
 }
 
 // pastedKey is what a plan holds of one pasted key beside its check: the text, which is only sealed, the ref it is
@@ -90,6 +93,7 @@ type DirectPlan struct {
 	direct   adapter.Direct
 	settings adapter.Settings
 	ratio    *big.Rat // the line's, for a new supplier
+	exit     *egress.Client
 	Checks   []KeyCheck
 	keys     []pastedKey // one for each of Checks
 }
@@ -122,6 +126,9 @@ func (a *Admin) PlanDirect(ctx context.Context, tx pg.Tx, r DirectRequest) (*Dir
 	if err != nil {
 		return nil, err
 	}
+	if p.exit, err = a.exitFor(ctx, tx, r.EgressID); err != nil {
+		return nil, err
+	}
 	return p, p.skipStored(ctx, tx)
 }
 
@@ -149,7 +156,7 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &DirectPlan{r: r, direct: d, settings: settings, ratio: ratio}
+	p := &DirectPlan{r: r, direct: d, settings: settings, ratio: ratio, exit: a.egress}
 	if err := p.resolve(t); err != nil {
 		return nil, err
 	}
@@ -251,7 +258,7 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 			return err
 		}
 	}
-	c, err := client.New(p.origin, a.egress, client.NewLimiter(nil, a.now), a.now)
+	c, err := client.New(p.origin, p.exit, client.NewLimiter(nil, a.now), a.now)
 	if err != nil {
 		return err
 	}
@@ -392,7 +399,7 @@ func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries
 			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: k.ref,
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &keyVersion,
 			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: allowed, CallNames: calls, Hint: &c.Last4,
-			Settings: settingsColumn(p.settings),
+			Settings: settingsColumn(p.settings), EgressID: orNull(p.r.EgressID),
 		}
 		if k.balance != nil {
 			row.BalanceNative, row.BalanceObservedAt = new(exactText(k.balance.Amount)), &c.CheckedAt
@@ -425,7 +432,7 @@ func directAudit(p *DirectPlan, models, priced int) map[string]any {
 	}
 	detail := map[string]any{
 		"kind": p.r.Kind, "origin": p.origin, "settlement_currency": p.r.Currency.String(), "max_concurrency": p.r.MaxConcurrency,
-		"keys": outcomes, "models": models, "priced_endpoints": priced, "ratio": ratioText(p.ratio),
+		"keys": outcomes, "models": models, "priced_endpoints": priced, "ratio": ratioText(p.ratio), "egress": exitName(p.r.EgressID),
 	}
 	if p.r.Family != "" {
 		detail["api_format"] = p.r.Family

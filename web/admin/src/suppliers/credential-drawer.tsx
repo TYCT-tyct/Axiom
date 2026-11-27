@@ -13,6 +13,7 @@ import {
   TextLink,
   useFormat,
 } from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
@@ -21,12 +22,13 @@ import { Code } from "../parts";
 import { checkText, EnableDialog, matesOf, RemoveCredentialDialog, TestDialog } from "./credential-dialogs";
 import { CredentialState } from "./credentials";
 import { CredentialLimitsDialog } from "./dialogs";
+import { CredentialEgressDialog, egressProxiesQuery, exitName } from "./egress";
 import { ReplaceCloudDialog } from "./supplier-dialogs";
 import { credentialName, modeOf } from "./upstream";
 
 type Credential = AdminSchemas["SupplierCredential"];
 type Supplier = AdminSchemas["Supplier"];
-type Open = "enable" | "test" | "remove" | "limits" | "replace";
+type Open = "enable" | "test" | "remove" | "limits" | "replace" | "egress";
 
 // A credential's drawer (adP_upk): the 接请求 switch with where requests go when it is off, how much of its ceilings it
 // holds, what it is (a relay's key, a pasted key on a direct API, a cloud region), and its changes. A key the supplier
@@ -105,6 +107,8 @@ function Opened({
       return supplier ? <CredentialLimitsDialog supplier={supplier} credential={credential} onClose={onClose} /> : null;
     case "replace":
       return supplier ? <ReplaceCloudDialog supplier={supplier} onClose={onClose} /> : null;
+    case "egress":
+      return supplier ? <CredentialEgressDialog supplier={supplier} credential={credential} onClose={onClose} /> : null;
     default:
       return null;
   }
@@ -140,6 +144,11 @@ function Actions({
       {cloud ? (
         <ActionButton variant="gho" onClick={() => onOpen("replace")}>
           {t("upstream.credential.replace")}
+        </ActionButton>
+      ) : null}
+      {supplier ? (
+        <ActionButton variant="gho" onClick={() => onOpen("egress")}>
+          {t("upstream.credential.egress")}
         </ActionButton>
       ) : null}
       {credential.status !== "disabled" ? (
@@ -193,6 +202,7 @@ function Facts({
 }) {
   const { t } = useTranslation();
   const format = useFormat();
+  const proxies = useQuery(egressProxiesQuery).data?.data ?? [];
   const own = ownFacts(t, supplier, credential, mates);
   return (
     <DrawerFacts
@@ -211,6 +221,7 @@ function Facts({
         ],
         [t("upstream.credential.line"), line],
         ...own,
+        [t("upstream.egress.label"), exitName(t, proxies, credential.egress_id)],
         [t("upstream.keys.col.status"), <CredentialState key="s" credential={credential} />],
         ...(credential.key_source
           ? [

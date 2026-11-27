@@ -15,10 +15,10 @@ import (
 const insertCloudCredential = `-- name: InsertCloudCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, source, region,
-    checked_at, check_outcome, check_status, settings)
+    checked_at, check_outcome, check_status, settings, egress_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
     'active', $9, $10, $11, $12, $13,
-    'pasted', $14, $15, 'passed', $16, $17)
+    'pasted', $14, $15, 'passed', $16, $17, $18)
 `
 
 type InsertCloudCredentialParams struct {
@@ -39,6 +39,7 @@ type InsertCloudCredentialParams struct {
 	CheckedAt         *time.Time
 	CheckStatus       *int32
 	Settings          []byte
+	EgressID          *string
 }
 
 // A region that passed its check, at its first check's answer.
@@ -61,6 +62,7 @@ func (q *Queries) InsertCloudCredential(ctx context.Context, db DBTX, arg Insert
 		arg.CheckedAt,
 		arg.CheckStatus,
 		arg.Settings,
+		arg.EgressID,
 	)
 	return err
 }

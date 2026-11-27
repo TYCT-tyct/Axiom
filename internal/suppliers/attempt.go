@@ -325,7 +325,7 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 		f   *Failure
 	)
 	if cloud {
-		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
+		req, f = signer.Sign(ctx, a.cred.exit, adapter.SignedCall{
 			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
 			Header: call.Header, Key: a.cred.key, Settings: a.cred.settings, At: a.s.now(),
 		})
@@ -337,9 +337,9 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	resp, err := a.cred.exit.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
 	if err != nil {
-		return nil, transportFailure(wrote.Load())
+		return nil, transportFailure(wrote.Load(), a.cred.proxied)
 	}
 	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -415,10 +415,14 @@ func (a *Attempt) noteResponse(status int, h http.Header) {
 }
 
 // transportFailure is a failure with no usable response. Before the request was written nothing reached the supplier,
-// and the fault is in the route to it; after, it may have run.
-func transportFailure(wrote bool) *Failure {
-	if !wrote {
+// and the fault is in the route to it; after, it may have run, and the fault is the endpoint's, or the route's when it
+// went through a proxy, which stands between the two and can drop either side.
+func transportFailure(wrote, proxied bool) *Failure {
+	switch {
+	case !wrote:
 		return &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeEgress, Cause: adapter.Transport{}}
+	case proxied:
+		return &Failure{Scope: adapter.ScopeEgress, Cause: adapter.Transport{}}
 	}
 	return &Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Transport{}}
 }

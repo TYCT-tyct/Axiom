@@ -115,6 +115,18 @@ type ServerInterface interface {
 	// GetAdminCallTrace Operator-only trace, including costs, route and attempts in sequence order.
 	// (GET /api/admin/v1/calls/{call_id}/trace)
 	GetAdminCallTrace(w http.ResponseWriter, r *http.Request, callId string)
+	// ListEgressProxies The egress proxies suppliers' credentials can go through
+	// (GET /api/admin/v1/egress-proxies)
+	ListEgressProxies(w http.ResponseWriter, r *http.Request)
+	// CreateEgressProxy Add an egress proxy
+	// (POST /api/admin/v1/egress-proxies)
+	CreateEgressProxy(w http.ResponseWriter, r *http.Request, params CreateEgressProxyParams)
+	// UpdateEgressProxy Change an egress proxy's name, fallback, status or credentials
+	// (PUT /api/admin/v1/egress-proxies/{proxy_id})
+	UpdateEgressProxy(w http.ResponseWriter, r *http.Request, proxyId EgressProxyId, params UpdateEgressProxyParams)
+	// RemoveEgressProxy Remove an egress proxy
+	// (POST /api/admin/v1/egress-proxies/{proxy_id}/removal)
+	RemoveEgressProxy(w http.ResponseWriter, r *http.Request, proxyId EgressProxyId, params RemoveEgressProxyParams)
 	// ListModels Models
 	// (GET /api/admin/v1/models)
 	ListModels(w http.ResponseWriter, r *http.Request, params ListModelsParams)
@@ -556,6 +568,9 @@ type ServerInterface interface {
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid, params BindSupplierKeyParams)
+	// SetSupplierCredentialEgress Set the egress proxy one credential's calls and checks go through
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress)
+	SetSupplierCredentialEgress(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialEgressParams)
 	// SetSupplierCredentialEnabled Stop or resume picking one credential
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled)
 	SetSupplierCredentialEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialEnabledParams)
@@ -2100,6 +2115,173 @@ func (siw *ServerInterfaceWrapper) GetAdminCallTrace(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetAdminCallTrace(w, r, callId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEgressProxies operation middleware
+func (siw *ServerInterfaceWrapper) ListEgressProxies(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEgressProxies(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateEgressProxy operation middleware
+func (siw *ServerInterfaceWrapper) CreateEgressProxy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateEgressProxyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateEgressProxy(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateEgressProxy operation middleware
+func (siw *ServerInterfaceWrapper) UpdateEgressProxy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "proxy_id" -------------
+	var proxyId EgressProxyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "proxy_id", r.PathValue("proxy_id"), &proxyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "proxy_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateEgressProxyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateEgressProxy(w, r, proxyId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveEgressProxy operation middleware
+func (siw *ServerInterfaceWrapper) RemoveEgressProxy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "proxy_id" -------------
+	var proxyId EgressProxyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "proxy_id", r.PathValue("proxy_id"), &proxyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "proxy_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RemoveEgressProxyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveEgressProxy(w, r, proxyId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8588,6 +8770,69 @@ func (siw *ServerInterfaceWrapper) BindSupplierKey(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// SetSupplierCredentialEgress operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierCredentialEgress(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "credential_id" -------------
+	var credentialId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credential_id", r.PathValue("credential_id"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credential_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierCredentialEgressParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierCredentialEgress(w, r, supplierId, credentialId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetSupplierCredentialEnabled operation middleware
 func (siw *ServerInterfaceWrapper) SetSupplierCredentialEnabled(w http.ResponseWriter, r *http.Request) {
 
@@ -10296,6 +10541,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests", wrapper.TestSupplierCredential)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled", wrapper.SetSupplierCredentialEnabled)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal", wrapper.RemoveSupplierCredential)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress", wrapper.SetSupplierCredentialEgress)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/egress-proxies", wrapper.ListEgressProxies)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/egress-proxies", wrapper.CreateEgressProxy)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/egress-proxies/{proxy_id}", wrapper.UpdateEgressProxy)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/egress-proxies/{proxy_id}/removal", wrapper.RemoveEgressProxy)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/supplier-credentials", wrapper.ListSupplierCredentials)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-credentials/tests", wrapper.TestSupplierCredentials)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-credentials/invalid-removals", wrapper.RemoveInvalidSupplierCredentials)
@@ -13800,6 +14050,434 @@ type GetAdminCallTracedefaultJSONResponse struct {
 }
 
 func (response GetAdminCallTracedefaultJSONResponse) VisitGetAdminCallTraceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEgressProxiesRequestObject struct {
+}
+
+type ListEgressProxiesResponseObject interface {
+	VisitListEgressProxiesResponse(w http.ResponseWriter) error
+}
+
+type ListEgressProxies200JSONResponse EgressProxyList
+
+func (response ListEgressProxies200JSONResponse) VisitListEgressProxiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEgressProxies401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListEgressProxies401JSONResponse) VisitListEgressProxiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEgressProxies403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListEgressProxies403JSONResponse) VisitListEgressProxiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEgressProxiesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListEgressProxiesdefaultJSONResponse) VisitListEgressProxiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxyRequestObject struct {
+	Params CreateEgressProxyParams
+	Body   *CreateEgressProxyJSONRequestBody
+}
+
+type CreateEgressProxyResponseObject interface {
+	VisitCreateEgressProxyResponse(w http.ResponseWriter) error
+}
+
+type CreateEgressProxy201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateEgressProxy201JSONResponse struct {
+	Body    EgressProxy
+	Headers CreateEgressProxy201ResponseHeaders
+}
+
+func (response CreateEgressProxy201JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxy400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateEgressProxy400JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxy401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CreateEgressProxy401JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateEgressProxy403JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxy409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateEgressProxy409JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxy422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response CreateEgressProxy422JSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEgressProxydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateEgressProxydefaultJSONResponse) VisitCreateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxyRequestObject struct {
+	ProxyId EgressProxyId `json:"proxy_id"`
+	Params  UpdateEgressProxyParams
+	Body    *UpdateEgressProxyJSONRequestBody
+}
+
+type UpdateEgressProxyResponseObject interface {
+	VisitUpdateEgressProxyResponse(w http.ResponseWriter) error
+}
+
+type UpdateEgressProxy200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateEgressProxy200JSONResponse struct {
+	Body    EgressProxy
+	Headers UpdateEgressProxy200ResponseHeaders
+}
+
+func (response UpdateEgressProxy200JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxy400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateEgressProxy400JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxy401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateEgressProxy401JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateEgressProxy403JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateEgressProxy404JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxy422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response UpdateEgressProxy422JSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEgressProxydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateEgressProxydefaultJSONResponse) VisitUpdateEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxyRequestObject struct {
+	ProxyId EgressProxyId `json:"proxy_id"`
+	Params  RemoveEgressProxyParams
+	Body    *RemoveEgressProxyJSONRequestBody
+}
+
+type RemoveEgressProxyResponseObject interface {
+	VisitRemoveEgressProxyResponse(w http.ResponseWriter) error
+}
+
+type RemoveEgressProxy200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type RemoveEgressProxy200JSONResponse struct {
+	Body    EgressProxy
+	Headers RemoveEgressProxy200ResponseHeaders
+}
+
+func (response RemoveEgressProxy200JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxy400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RemoveEgressProxy400JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxy401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RemoveEgressProxy401JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RemoveEgressProxy403JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RemoveEgressProxy404JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxy409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RemoveEgressProxy409JSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveEgressProxydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RemoveEgressProxydefaultJSONResponse) VisitRemoveEgressProxyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -29293,6 +29971,142 @@ func (response BindSupplierKeydefaultJSONResponse) VisitBindSupplierKeyResponse(
 	return err
 }
 
+type SetSupplierCredentialEgressRequestObject struct {
+	SupplierId   Uuid `json:"supplier_id"`
+	CredentialId Uuid `json:"credential_id"`
+	Params       SetSupplierCredentialEgressParams
+	Body         *SetSupplierCredentialEgressJSONRequestBody
+}
+
+type SetSupplierCredentialEgressResponseObject interface {
+	VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierCredentialEgress200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierCredentialEgress200JSONResponse struct {
+	Body    SupplierCredential
+	Headers SetSupplierCredentialEgress200ResponseHeaders
+}
+
+func (response SetSupplierCredentialEgress200JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierCredentialEgress400JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierCredentialEgress401JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierCredentialEgress403JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierCredentialEgress404JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierCredentialEgress409JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgress422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetSupplierCredentialEgress422JSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEgressdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierCredentialEgressdefaultJSONResponse) VisitSetSupplierCredentialEgressResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetSupplierCredentialEnabledRequestObject struct {
 	SupplierId   Uuid `json:"supplier_id"`
 	CredentialId Uuid `json:"credential_id"`
@@ -32496,6 +33310,18 @@ type StrictServerInterface interface {
 	// GetAdminCallTrace Operator-only trace, including costs, route and attempts in sequence order.
 	// (GET /api/admin/v1/calls/{call_id}/trace)
 	GetAdminCallTrace(ctx context.Context, request GetAdminCallTraceRequestObject) (GetAdminCallTraceResponseObject, error)
+	// ListEgressProxies The egress proxies suppliers' credentials can go through
+	// (GET /api/admin/v1/egress-proxies)
+	ListEgressProxies(ctx context.Context, request ListEgressProxiesRequestObject) (ListEgressProxiesResponseObject, error)
+	// CreateEgressProxy Add an egress proxy
+	// (POST /api/admin/v1/egress-proxies)
+	CreateEgressProxy(ctx context.Context, request CreateEgressProxyRequestObject) (CreateEgressProxyResponseObject, error)
+	// UpdateEgressProxy Change an egress proxy's name, fallback, status or credentials
+	// (PUT /api/admin/v1/egress-proxies/{proxy_id})
+	UpdateEgressProxy(ctx context.Context, request UpdateEgressProxyRequestObject) (UpdateEgressProxyResponseObject, error)
+	// RemoveEgressProxy Remove an egress proxy
+	// (POST /api/admin/v1/egress-proxies/{proxy_id}/removal)
+	RemoveEgressProxy(ctx context.Context, request RemoveEgressProxyRequestObject) (RemoveEgressProxyResponseObject, error)
 	// ListModels Models
 	// (GET /api/admin/v1/models)
 	ListModels(ctx context.Context, request ListModelsRequestObject) (ListModelsResponseObject, error)
@@ -32937,6 +33763,9 @@ type StrictServerInterface interface {
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(ctx context.Context, request BindSupplierKeyRequestObject) (BindSupplierKeyResponseObject, error)
+	// SetSupplierCredentialEgress Set the egress proxy one credential's calls and checks go through
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress)
+	SetSupplierCredentialEgress(ctx context.Context, request SetSupplierCredentialEgressRequestObject) (SetSupplierCredentialEgressResponseObject, error)
 	// SetSupplierCredentialEnabled Stop or resume picking one credential
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled)
 	SetSupplierCredentialEnabled(ctx context.Context, request SetSupplierCredentialEnabledRequestObject) (SetSupplierCredentialEnabledResponseObject, error)
@@ -33989,6 +34818,131 @@ func (sh *strictHandler) GetAdminCallTrace(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetAdminCallTraceResponseObject); ok {
 		if err := validResponse.VisitGetAdminCallTraceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEgressProxies operation middleware
+func (sh *strictHandler) ListEgressProxies(w http.ResponseWriter, r *http.Request) {
+	var request ListEgressProxiesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEgressProxies(ctx, request.(ListEgressProxiesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEgressProxies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEgressProxiesResponseObject); ok {
+		if err := validResponse.VisitListEgressProxiesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateEgressProxy operation middleware
+func (sh *strictHandler) CreateEgressProxy(w http.ResponseWriter, r *http.Request, params CreateEgressProxyParams) {
+	var request CreateEgressProxyRequestObject
+
+	request.Params = params
+
+	var body CreateEgressProxyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateEgressProxy(ctx, request.(CreateEgressProxyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateEgressProxy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateEgressProxyResponseObject); ok {
+		if err := validResponse.VisitCreateEgressProxyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateEgressProxy operation middleware
+func (sh *strictHandler) UpdateEgressProxy(w http.ResponseWriter, r *http.Request, proxyId EgressProxyId, params UpdateEgressProxyParams) {
+	var request UpdateEgressProxyRequestObject
+
+	request.ProxyId = proxyId
+	request.Params = params
+
+	var body UpdateEgressProxyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEgressProxy(ctx, request.(UpdateEgressProxyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEgressProxy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateEgressProxyResponseObject); ok {
+		if err := validResponse.VisitUpdateEgressProxyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveEgressProxy operation middleware
+func (sh *strictHandler) RemoveEgressProxy(w http.ResponseWriter, r *http.Request, proxyId EgressProxyId, params RemoveEgressProxyParams) {
+	var request RemoveEgressProxyRequestObject
+
+	request.ProxyId = proxyId
+	request.Params = params
+
+	var body RemoveEgressProxyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveEgressProxy(ctx, request.(RemoveEgressProxyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveEgressProxy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveEgressProxyResponseObject); ok {
+		if err := validResponse.VisitRemoveEgressProxyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -38403,6 +39357,41 @@ func (sh *strictHandler) BindSupplierKey(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BindSupplierKeyResponseObject); ok {
 		if err := validResponse.VisitBindSupplierKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierCredentialEgress operation middleware
+func (sh *strictHandler) SetSupplierCredentialEgress(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialEgressParams) {
+	var request SetSupplierCredentialEgressRequestObject
+
+	request.SupplierId = supplierId
+	request.CredentialId = credentialId
+	request.Params = params
+
+	var body SetSupplierCredentialEgressJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierCredentialEgress(ctx, request.(SetSupplierCredentialEgressRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierCredentialEgress")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierCredentialEgressResponseObject); ok {
+		if err := validResponse.VisitSetSupplierCredentialEgressResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
