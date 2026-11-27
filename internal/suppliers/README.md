@@ -148,7 +148,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 ## 管理接口
 
-`Admin`（`admin*.go`）在调用方的平台范围事务里写，处理器只做转换；行为见[供应商的「管理操作」](../../docs/domains/suppliers.md#管理操作)。
+`Admin`（`admin*.go`）在调用方的平台范围事务里写，处理器只做转换。
 
 | 操作 | 拒绝 |
 |---|---|
@@ -162,6 +162,6 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `MapModel`、`MapPending` | `ErrAliasExists`、`ErrAliasRevision`、`ErrNotPending`、`ErrModelTaken`、`ErrNoGroup`、`ErrStatusLocked` |
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`、`EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
-| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
+| `ClaimGroup`、`MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked`、`ErrGroupBusy` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
 | `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

@@ -125,6 +125,15 @@ func (a adminAPI) ConnectSupplierGroup(ctx context.Context, request adminapi.Con
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
 	defer cancel()
+	hold, err := a.suppliers.ClaimGroup(ctx, a.reach(ctx), group)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := hold.Release(context.WithoutCancel(ctx)); err != nil {
+			a.logger.WarnContext(ctx, "a group's connection claim was not released; its connection frees it", "err", err)
+		}
+	}()
 	var key suppliers.GroupKey
 	body, replayed, err := probed(ctx, a, claim, func(ctx context.Context) (err error) {
 		key, err = a.groupKey(ctx, supplier, group, b.KeySource, text)
