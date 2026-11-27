@@ -126,13 +126,35 @@ func (r PaymentsRefund) automatic() bool {
 
 func refundTerminal(state string) bool { return state == "succeeded" || state == "failed" }
 
+// refundedBefore is what the order's other succeeded refunds returned through its channel; money returned offline never
+// reached the channel's running total. At most one refund of an order is in flight, so the sum cannot change while
+// this one is sent.
+func (p *Payments) refundedBefore(ctx context.Context, order OrderID, refund uuid.UUID) (int64, error) {
+	var sum int64
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
+		rows, err := queries.ListRefunds(ctx, tx, []uuid.UUID{uuid.UUID(order)})
+		for _, row := range rows {
+			if row.PaymentsRefund.Via == "channel" && row.PaymentsRefund.State == "succeeded" && row.PaymentsRefund.ID != refund {
+				sum += row.PaymentsRefund.Amount
+			}
+		}
+		return err
+	})
+	return sum, err
+}
+
 func (p *Payments) callRefund(ctx context.Context, ch Channel, r PaymentsRefund, o Order, first, canQuery, canResend bool) (RefundState, error) {
 	if err := ctx.Err(); err != nil {
 		return RefundState{}, err
 	}
+	refunded, err := p.refundedBefore(ctx, o.ID, r.ID)
+	if err != nil {
+		return RefundState{}, err
+	}
 	call := RefundCall{
 		Refund: RefundID(r.ID), Order: o.ID, TradeNo: o.TradeNo, ProviderRef: r.ProviderRef,
-		Amount: Money{Currency: o.Total.Currency, Minor: r.Amount}, Reason: r.Reason,
+		Amount:   Money{Currency: o.Total.Currency, Minor: r.Amount},
+		Refunded: Money{Currency: o.Total.Currency, Minor: refunded}, Reason: r.Reason,
 	}
 	if r.SentAt.Valid {
 		call.SentAt = r.SentAt.Time

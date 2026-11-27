@@ -49,7 +49,7 @@ func TestFreeModelPublicationStaysZero(t *testing.T) {
 		{"a zero fixed rule", `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`, false},
 	} {
 		rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(tc.schedule)}, ID: uuid.NewV7(), Rev: 1}
-		p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, m, nil, usd, costs, fallbacks{})
+		p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, nil, m, nil, usd, costs, fallbacks{})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -71,7 +71,7 @@ func TestFileSearchPriceNeedsTheModelToSellIt(t *testing.T) {
 	t.Parallel()
 	schedule := `{"v":1,"currency":"USD","rates":{"input":"0.000001","file_search":"0.0025"}}`
 	rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)}, ID: uuid.NewV7(), Rev: 1}
-	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, catalog.Model{Slug: "acme/alpha"}, nil, usd, nil, fallbacks{})
+	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, nil, catalog.Model{Slug: "acme/alpha"}, nil, usd, nil, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestFileParsePriceReachesAModelWithoutASpecItem(t *testing.T) {
 	}
 	costs := []PriceCost{{Endpoint: uuid.NewV7(), Model: m.ID, Schedule: cost, UnitValue: "1", UnitValueID: uuid.NewV7(), Currency: usd, CurrencyCode: "USD"}}
 	rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)}, ID: uuid.NewV7(), Rev: 1}
-	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, m, nil, usd, costs, fallbacks{})
+	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, nil, m, nil, usd, costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}

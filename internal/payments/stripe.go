@@ -59,8 +59,8 @@ func (Stripe) Open(c MerchantConfig) (Channel, error) {
 	if err := jsonx.UnmarshalKnown(c.Settings, &s); err != nil {
 		return nil, errors.New("stripe: invalid settings JSON")
 	}
-	if c.Client == nil || c.Currency == (platform.Currency{}) {
-		return nil, errors.New("stripe: require client and currency")
+	if err := stripeAccount(c); err != nil {
+		return nil, err
 	}
 	key := c.Secrets["secret_key"].Reveal()
 	webhookSecret := c.Secrets["webhook_secret"].Reveal()
@@ -149,6 +149,15 @@ func (c *stripeChannel) Create(ctx context.Context, r CreateRequest) (Checkout, 
 	if !stripeUpstream(upstream) {
 		return Checkout{}, &Rejected{Code: "method", Message: "unsupported Stripe payment method"}
 	}
+	amount, ok := stripeAmount(r.Total)
+	if !ok {
+		return Checkout{}, &Rejected{Code: "amount", Message: "the total is too large for Stripe"}
+	}
+	methods := []*string{stripe.String(upstream)}
+	if upstream == "link" {
+		// Checkout offers Link only beside card when the methods are listed (docs.stripe.com/payments/link/checkout-link).
+		methods = append(methods, stripe.String("card"))
+	}
 	if err := httpsURL(r.ReturnURL); err != nil {
 		return Checkout{}, &Rejected{Code: "return_url", Message: "the return address is not https"}
 	}
@@ -160,12 +169,12 @@ func (c *stripeChannel) Create(ctx context.Context, r CreateRequest) (Checkout, 
 		ClientReferenceID:  stripe.String(r.Order.TypeID()),
 		Metadata:           md,
 		PaymentIntentData:  &stripe.CheckoutSessionCreatePaymentIntentDataParams{Metadata: md},
-		PaymentMethodTypes: []*string{stripe.String(upstream)},
+		PaymentMethodTypes: methods,
 		LineItems: []*stripe.CheckoutSessionCreateLineItemParams{{
 			Quantity: new(int64(1)),
 			PriceData: &stripe.CheckoutSessionCreateLineItemPriceDataParams{
 				Currency:    stripe.String(strings.ToLower(c.currency.String())),
-				UnitAmount:  new(r.Total.Minor),
+				UnitAmount:  new(amount),
 				ProductData: &stripe.CheckoutSessionCreateLineItemPriceDataProductDataParams{Name: stripe.String(stripeSubject(r.Subject))},
 			},
 		}},
@@ -257,13 +266,17 @@ func (c *stripeChannel) Refund(ctx context.Context, r RefundCall) (RefundState, 
 	if r.Amount.Minor <= 0 || r.Amount.Currency != c.currency {
 		return RefundState{}, &Rejected{Code: "amount", Message: "the refund is not in this account's currency"}
 	}
+	amount, ok := stripeAmount(r.Amount)
+	if !ok {
+		return RefundState{}, &Rejected{Code: "amount", Message: "the refund is too large for Stripe"}
+	}
 	pi, err := c.paymentIntent(ctx, r.TradeNo)
 	if err != nil {
 		return RefundState{}, err
 	}
 	params := &stripe.RefundCreateParams{
 		PaymentIntent: stripe.String(pi),
-		Amount:        new(r.Amount.Minor),
+		Amount:        new(amount),
 		Metadata: map[string]string{
 			"refund": r.Refund.TypeID(),
 			"order":  r.Order.TypeID(),
@@ -354,6 +367,9 @@ func (*stripeChannel) Ack(ok bool) (int, []byte) {
 	return http.StatusInternalServerError, []byte("{\"retry\":true}")
 }
 
+// testConfig lets the admin test a saved merchant with the same read-only balance query that saving runs.
+func (c *stripeChannel) testConfig(ctx context.Context) error { return c.probe(ctx) }
+
 func (c *stripeChannel) probe(ctx context.Context) error {
 	ctx, cancel := stripeDeadline(ctx)
 	defer cancel()
@@ -417,17 +433,6 @@ func stripeFailure(err error) error {
 	return errors.New("stripe: request failed")
 }
 
-func stripeMoney(fallback platform.Currency, minor int64, currency stripe.Currency) Money {
-	if minor <= 0 {
-		return Money{Currency: fallback, Minor: -1}
-	}
-	parsed, err := platform.ParseCurrency(strings.ToUpper(string(currency)))
-	if err != nil || parsed != fallback {
-		return Money{Currency: fallback, Minor: -1}
-	}
-	return Money{Currency: parsed, Minor: minor}
-}
-
 func stripePaymentIntent(s *stripe.CheckoutSession) string {
 	if s.PaymentIntent == nil {
 		return ""
@@ -465,7 +470,8 @@ func httpsURL(raw string) error {
 }
 
 func stripeRefundMatches(r *stripe.Refund, call RefundCall) bool {
-	return r.Amount == call.Amount.Minor && string(r.Currency) == strings.ToLower(call.Amount.Currency.String())
+	amount, ok := stripeAmount(call.Amount)
+	return ok && r.Amount == amount && string(r.Currency) == strings.ToLower(call.Amount.Currency.String())
 }
 
 func stripeRefund(r *stripe.Refund) (RefundState, error) {

@@ -275,11 +275,11 @@ func TestDefaultAudiencePreservesLegacyCandidate(t *testing.T) {
 	rules := []Rule{{ID: uuid.NewV7(), RuleInput: rule(Selector{Kind: "all"}, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)})}}
 	costs := []PriceCost{priceCost(t, model.ID, "0.0000005")}
 	snap := &catalog.Snapshot{}
-	legacy, err := proposePrice(defaultPricePolicy(), rules, model, snap, usd, costs, fallbacks{})
+	legacy, err := proposePrice(defaultPricePolicy(), rules, nil, model, snap, usd, costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := proposeAudiencePrice(Selector{Kind: "all"}, defaultPricePolicy(), rules, model, snap, usd, costs, fallbacks{})
+	all, err := proposeAudiencePrice(Selector{Kind: "all"}, defaultPricePolicy(), rules, nil, model, snap, usd, costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,5 +298,111 @@ func TestAudienceAvailabilityRequiresASelectablePrice(t *testing.T) {
 	})}
 	if table.Available() {
 		t.Fatal("a safe layer hidden behind a blocked, more specific target made the node ready")
+	}
+}
+
+// TestDefaultMultiplierScalesThePriceForAll: a tier's default multiplier is what everyone pays times it, also for a
+// model a more specific rule prices for everyone, and the preview of the tier shows what serving charges it.
+func TestDefaultMultiplierScalesThePriceForAll(t *testing.T) {
+	t.Parallel()
+	f := newPrices(t)
+	tier := accounts.TierID(uuid.UUID{15: 1})
+	multiplier := "1.2"
+	scaled := rule(Selector{Kind: "all"}, Method{Kind: "default_multiplier", Multiplier: &multiplier})
+	scaled.Audience = Selector{Kind: "tier", ID: tierID}
+	for _, in := range []RuleInput{scaled, rule(Selector{Kind: "model", ID: f.model.String()}, faced("2"))} {
+		if _, err := f.create(in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.refresh()
+	var preview map[catalog.ModelID]Publication
+	if err := f.tx(func(tx pg.Tx) error {
+		rules, err := Rules(t.Context(), tx, f.site)
+		if err != nil {
+			return err
+		}
+		rules = slices.DeleteFunc(rules, func(r Rule) bool { return !r.Audience.Prices(accounts.AccountID{}, tier) })
+		preview, err = PreviewPrices(t.Context(), tx, f.site, usd, f.catalog.snapshot(), rules, []catalog.ModelID{f.model}, f.costs)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previewed, err := catalog.ParseSchedule(preview[f.model].Schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  catalog.Schedule
+		want string
+	}{
+		{"everyone", f.published().For(Audience{}).Schedule, "0.000002"},
+		{"the tier", f.published().For(Audience{Tier: tier}).Schedule, "0.0000024"},
+		{"the tier's preview", previewed, "0.0000024"},
+	} {
+		if rate, ok := c.got.BaseRate(catalog.ItemInput); !ok || rate.String() != c.want {
+			t.Errorf("%s pays %v a token of input, want %s", c.name, rate, c.want)
+		}
+	}
+}
+
+// TestTierPaysThePublishedPriceTimesItsMultiplier pins the invariant of a default multiplier: every item of the tier's
+// price is the price for all accounts as published, the site floor and default prices already in it, times the
+// multiplier. A price for all that waits for confirmation moves the tier only once it is published, and then in the
+// same transaction as the confirmation, with no refresh between.
+func TestTierPaysThePublishedPriceTimesItsMultiplier(t *testing.T) {
+	t.Parallel()
+	f := newPrices(t)
+	f.multiplier("0.4") // under the endpoint's cost of input: the floor sets the price for all
+	tier := accounts.TierID(uuid.UUID{15: 1})
+	multiplier := "1.2"
+	scaled := rule(Selector{Kind: "all"}, Method{Kind: "default_multiplier", Multiplier: &multiplier})
+	scaled.Audience = Selector{Kind: "tier", ID: tierID}
+	if _, err := f.create(scaled); err != nil {
+		t.Fatal(err)
+	}
+	f.refresh()
+	f.checkScaled(tier, multiplier, "0.0000005")
+	f.multiplier("2") // four times the published price: it waits for confirmation
+	f.refresh()
+	f.checkScaled(tier, multiplier, "0.0000005")
+	var pending Publication
+	if err := f.tx(func(tx pg.Tx) error {
+		_, rows, err := PriceState(t.Context(), tx, f.site)
+		for _, p := range rows {
+			if p.Audience.Kind == "all" || p.Audience.Kind == "" {
+				pending = p
+			}
+		}
+		return err
+	}); err != nil || pending.Status != "pending" {
+		t.Fatalf("the price for all is %q, %v; want it pending", pending.Status, err)
+	}
+	if err := f.publish(pending, true, false); err != nil {
+		t.Fatal(err)
+	}
+	f.checkScaled(tier, multiplier, "0.000002")
+}
+
+// checkScaled fails unless the price for all has the input rate given and every item of the tier's price is that
+// published price times the multiplier.
+func (f *priceFixture) checkScaled(tier accounts.TierID, multiplier, input string) {
+	f.t.Helper()
+	sold := f.published()
+	all, own := sold.For(Audience{}).Schedule, sold.For(Audience{Tier: tier}).Schedule
+	if rate, ok := all.BaseRate(catalog.ItemInput); !ok || rate.String() != input {
+		f.t.Fatalf("all accounts pay %v a token of input, want %s", rate, input)
+	}
+	want, err := all.Scaled(multiplier, usd)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	for it := range catalog.NumItems {
+		wantRate, priced := want.BaseRate(it)
+		got, ok := own.BaseRate(it)
+		if priced != ok || priced && got.Cmp(wantRate) != 0 {
+			f.t.Errorf("the tier pays %v for %s, want %v (all accounts × %s)", got, it, wantRate, multiplier)
+		}
 	}
 }

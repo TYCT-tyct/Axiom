@@ -237,6 +237,27 @@ func TestAuthRejectionStopsEverything(t *testing.T) {
 	}
 }
 
+// TestMissingScopeNamesTheScope: a login that lacks a permission stops polling like a refused one, but its reason names
+// the permission to grant, not a refused login, so the alert is not the one for an expired login.
+func TestMissingScopeNamesTheScope(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("read: %w", adapter.ScopeDenied{Scope: "usage:read"}), "the login lacks the permission usage:read"},
+		{fmt.Errorf("read: %w", adapter.ErrAuthRejected), "the supplier rejected the account credentials"},
+	} {
+		m := healthy()
+		m.account = func() (adapter.Account, error) { return adapter.Account{}, c.err }
+		e, st, _ := engine(m)
+		round(t, e)
+		if st.state.Status != NeedsAttention || st.state.Reason != c.want || m.calls[TaskCatalog] != 0 {
+			t.Errorf("%v: status %v, reason %q, calls %v; want needs attention for %q", c.err, st.state.Status, st.state.Reason, m.calls, c.want)
+		}
+	}
+}
+
 // TestUnrecognisedAnswerHaltsOnlyItsTask: after an upgrade at the supplier one task stops, writes nothing and says so;
 // the others keep going.
 func TestUnrecognisedAnswerHaltsOnlyItsTask(t *testing.T) {

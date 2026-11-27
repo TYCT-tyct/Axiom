@@ -156,6 +156,12 @@ payments-test:
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 10m ./cmd/axiom -run 'TestTopUp|TestPaymentMethods|TestReplay|TestOrder|TestIPLimitsOnOrders|TestReturn|TestARefusal|TestRefusal|TestContractRules'
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/accounts -run 'TestOrigin|TestAuthorizedScope'
 
+# One real order → pay → notify → credit → refund cycle against Stripe test mode and the Alipay sandbox
+# (docs/domains/payments.md「沙箱实测」). It is not part of `check`: a person pays in the browser. Credentials come from
+# AXIOM_SANDBOX_* variables; a provider without them is skipped with the names it needs, and live keys are refused.
+payments-sandbox provider="":
+    go run ./internal/platform/pgtest/cmd/withcluster go test -tags sandbox -count=1 -timeout 45m -run '^TestSandbox$/{{ provider }}' -v ./internal/payments
+
 # Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
 # instead, which compares allocations without -race. A pull request runs neither.
 bench-once: web-embed
@@ -207,6 +213,13 @@ port-stress containers="20":
 # an image and starts a container, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> diff
 diff: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
+
+# Run the supplier adapters of new-api and sub2api against the official images, set up through their own HTTP APIs and
+# relaying to a fake upstream, and check what they read: the offer, the keys, and every charge against the system's own
+# log. AXIOM_RECORD_TESTDATA=1 also rewrites the recorded samples in the adapters' testdata/ from the answers. It pulls
+# images and starts containers, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> relays
+relays:
+    go test -tags contract -p 1 -count=1 -timeout 20m -v -run '^TestLive' ./internal/suppliers/internal/newapi ./internal/suppliers/internal/sub2api
 
 # Show what writing deploy/catalog/dialects.json into the models of the database AXIOM_DATABASE_URL names would change, and
 # change nothing (docs/ops/release.md). Run it before catalog-dialect-apply.

@@ -1,5 +1,16 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import { ActionButton, Cluster, DataState, EmptyState, Mono, SettingRow, Stack, Text, useFormat } from "@axiom/ui";
+import {
+  ActionButton,
+  Cluster,
+  DataState,
+  EmptyState,
+  Mono,
+  SettingRow,
+  Stack,
+  StatusDot,
+  Text,
+  useFormat,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -286,9 +297,26 @@ function TestDialog({ merchant, onClose }: { merchant: Merchant; onClose: () => 
           }),
         )
       }
-      done={(result) => <p>{t(`settings.payments.status.${result.status ?? "failed"}`)}</p>}
+      done={(result) => <MerchantTestResult status={result.status ?? "failed"} />}
       onClose={onClose}
     />
+  );
+}
+
+const testTone = { accepted: "ok", rejected: "bad", failed: "bad", disabled: "warn", unsupported: "warn" } as const;
+
+// MerchantTestResult leads with the verdict, so a failed test reads as one before its explanation is read.
+function MerchantTestResult({ status }: { status: keyof typeof testTone }) {
+  const { t } = useTranslation();
+  return (
+    <Stack gap={4}>
+      <Text as="div" medium>
+        <StatusDot tone={testTone[status]}>{t(`settings.payments.outcome.${status}`)}</StatusDot>
+      </Text>
+      <Text as="p" size="sm" tone="muted">
+        {t(`settings.payments.status.${status}`)}
+      </Text>
+    </Stack>
   );
 }
 

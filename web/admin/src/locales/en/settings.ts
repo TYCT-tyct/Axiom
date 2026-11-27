@@ -243,7 +243,7 @@ export default {
     emptyBody: "Add the first account to start accepting payments.",
     enabled: "Enabled",
     disabled: "Disabled",
-    test: "Test",
+    test: "Test this merchant",
     editMerchant: "Edit",
     disable: "Disable",
     methods: "Payment methods",
@@ -258,12 +258,21 @@ export default {
     no: "no",
     revision: "Revision",
     testTitle: "Test {{name}}",
-    testIntro: "Asks the channel whether the saved configuration still works. No order is created.",
+    testIntro:
+      "Makes one read-only query to the channel with the saved configuration. No order is created and no money moves.",
     runTest: "Run the test",
+    outcome: {
+      accepted: "Passed",
+      rejected: "Failed",
+      failed: "Failed",
+      disabled: "Not tested",
+      unsupported: "Not tested",
+    },
     status: {
       accepted: "The channel accepted the configuration.",
       rejected: "The channel refused the configuration.",
-      failed: "The configuration could not be tested; check the server and credentials.",
+      failed:
+        "The channel did not confirm the configuration: check the gateway address, merchant ID and keys. The server log has the reason.",
       disabled: "The account is disabled; enable it first.",
       unsupported: "This channel cannot test its configuration.",
     },

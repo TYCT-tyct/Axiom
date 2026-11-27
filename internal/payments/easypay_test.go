@@ -294,3 +294,18 @@ func easyPayJSON(t *testing.T, value any) []byte {
 	}
 	return raw
 }
+
+// TestEasyPayGenericChargesCNY: 彩虹易支付's money is yuan, so a generic merchant in any other currency would be
+// charged the same number of yuan and credited in its own currency.
+func TestEasyPayGenericChargesCNY(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		ok   bool
+	}{{"CNY", true}, {"USD", false}, {"JPY", false}} {
+		cfg := easyPayConfig(t, "https://pay.example.com")
+		cfg.Currency = currency(t, tc.code)
+		if _, err := (EasyPay{}).Open(cfg); (err == nil) != tc.ok {
+			t.Fatalf("%s merchant: %v, want accepted %t", tc.code, err, tc.ok)
+		}
+	}
+}

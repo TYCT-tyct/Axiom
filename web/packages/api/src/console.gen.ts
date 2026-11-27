@@ -2210,7 +2210,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota" | "presets_suspended";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota" | "presets_suspended" | "code_reused" | "email_unavailable";
         /**
          * @description An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it.
          * @example 5000000000
@@ -2371,6 +2371,13 @@ export interface components {
             permissions: string[];
             /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
             consent?: components["schemas"]["SessionConsent"];
+            /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console once every factor passed; absent on a `pending_mfa` session, on the admin and on an older node. */
+            calls_paused?: boolean;
+            /**
+             * Format: date-time
+             * @description When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on a `pending_mfa` session, on the admin and on an older node.
+             */
+            latest_announcement_at?: string;
         };
         SessionList: {
             /** @description Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable. */
@@ -2600,6 +2607,8 @@ export interface components {
             login_origin?: string;
             /** @description Whether the site offers passkeys. False on an older node that does not know the field. */
             passkeys?: boolean;
+            /** @description Whether this node sends mail. Without it a password reset, a password change and an email change are refused, since each must mail the user (docs/security.md「账户安全」), so the sign-in page offers no reset link and the security page says why. Absent on an older node. */
+            email_delivery?: boolean;
             /** @description The third-party providers the site configured, for the sign-in page's buttons. */
             oauth_providers?: components["schemas"]["OAuthProvider"][];
         };
