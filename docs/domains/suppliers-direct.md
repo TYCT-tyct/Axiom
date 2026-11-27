@@ -54,7 +54,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 | 贴进来的 key 和云凭证只写不读（契约里 `writeOnly`），接口只回末四位和不是秘密的部分（项目、服务账号、资源地址）；幂等指纹不含原文 | 与 BYOK、商户密钥同一规则：明文只在 `credentials` 的密文里，不进响应、日志、审计和幂等记录 |
 | 云平台一个区域一条凭证，并发和每分钟上限按区域设；换凭证时所有区域一起换 | 复用挑凭证：一个区域满了自然换到下一个，不另造区域调度 |
 | Azure 的部署由人填，检测只证明地址和 key 对得上 | 现行的数据面版本都不向资源 key 列部署（列部署在 Azure 资源管理器，要 Entra ID 令牌），能列的旧版本已停用；部署名错了，质量检测在接流量前就会发现。不选「对第一个部署发一次最小调用」：要花钱，o 系列不认 `max_tokens`、非 Chat 部署会误判 key 不能用 |
-| 发往 Vertex AI 和 Bedrock 的 `anthropic-beta` 只留各自接受的功能（表在各适配器里），一个不剩就不带该头或 `anthropic_beta` | 两个平台遇到不认识的功能整个请求都失败，Claude Code 会带它们不支持的；与 sub2api 同做法 |
+| 发往 Vertex AI 和 Bedrock 的 `anthropic-beta` 只留各自接受的功能（表在各适配器里），一个不剩就不带该头或 `anthropic_beta` | 两个平台遇到不认识的功能整个请求都失败，Claude Code 会带它们不支持的。名单按各平台文档（AWS 的 Claude Messages 与工具文档、Anthropic 的 Google 托管版功能清单）列出，不照抄 sub2api：它漏了 Bedrock 的交错思考和 Vertex 的电脑操作 |
 | 同时写同一凭证用事务级咨询锁排队，不加跨供应商的唯一索引 | 凭证行里没有接入方式（BYOK 也是 `direct`，直连行 `source` 为空），按供应商建的唯一索引只能加新列；而重复的判定本来就跨所有凭证（含 CPA 列出的 key），锁让后到的得到 `duplicate` 而不是写入报错 |
 
 ## 待定问题
