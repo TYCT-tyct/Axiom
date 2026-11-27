@@ -5992,7 +5992,7 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes. */
+        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. A new-api before 1.0 or a one-api has no personal access tokens: it takes the system access token generated in the account's settings as `access_token`, with `user_id`, the account's numeric id. `login_fields` lists what the kind takes. */
         SupplierLogin: {
             email?: string;
             password?: string;
@@ -6001,9 +6001,11 @@ export interface components {
             refresh_token?: string;
             /** Format: date-time */
             access_token_expires_at?: string;
+            /** @description With a system access token as `access_token`, the numeric id of the account it belongs to. */
+            user_id?: string;
         };
         /** @enum {string} */
-        LoginField: "email" | "password" | "access_token" | "refresh_token" | "access_token_expires_at";
+        LoginField: "email" | "password" | "access_token" | "refresh_token" | "access_token_expires_at" | "user_id";
         DetectionRequest: {
             origin: string;
         };

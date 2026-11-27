@@ -30,10 +30,11 @@ type priceEntry struct {
 	CreateCache     *number  `json:"create_cache_ratio"`
 	ImageRatio      *number  `json:"image_ratio"`
 	Endpoints       []string `json:"supported_endpoint_types"`
+	EnableGroups    []string `json:"enable_groups,omitempty"`
 }
 
-// autoRatio is the ratio new-api writes for its "auto" group.
-const autoRatio number = "auto"
+// autoRatios are the ratios new-api writes for its "auto" group: "auto" from 1.0, "自动" before.
+var autoRatios = map[number]bool{"auto": true, "自动": true}
 
 // offerProgress is the position in the offer listing: the groups, their ratios and the prices read when the pass began,
 // the group it reached, and the groups built so far. The pass reads the prices once, so its models are priced alike; a
@@ -51,6 +52,7 @@ type offerProgress struct {
 // builtGroup is a group whose models the pass read; the prices turn it into an offer group when the pass ends.
 type builtGroup struct {
 	Name, Desc, Ratio string
+	RatioHidden       bool `json:",omitempty"`
 	Models            []string
 }
 
@@ -65,9 +67,12 @@ func decodeOffer(raw adapter.Listing) offerProgress {
 	return p
 }
 
+// groupEntry is a group as /api/user/self/groups states it. Hidden marks a ratio the system does not show (one-api's),
+// which is written as 1.
 type groupEntry struct {
-	Ratio number `json:"ratio"`
-	Desc  string `json:"desc"`
+	Ratio  number `json:"ratio"`
+	Desc   string `json:"desc"`
+	Hidden bool   `json:"ratio_hidden,omitempty"`
 }
 
 // Offer implements adapter.Manager: the account's groups with their ratios, the models each serves, and for each model
@@ -101,11 +106,11 @@ func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerPr
 
 func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
 	if p.Next == len(p.Names) {
-		groups, err := p.offer()
+		groups, err := p.offer(m.sys == newAPI013)
 		return adapter.Page[adapter.Group]{Items: groups, Done: true}, false, err
 	}
 	name := p.Names[p.Next]
-	if p.Groups[name].Ratio == autoRatio { // picks among groups per request and has no ratio of its own
+	if autoRatios[p.Groups[name].Ratio] { // picks among groups per request and has no ratio of its own
 		p.Next++
 		return page, true, nil
 	}
@@ -115,7 +120,7 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	var models struct {
 		Data []string `json:"data"`
 	}
-	if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &models); err != nil {
+	if err := m.api.get(ctx, m.modelsPath(name), global, &models); err != nil {
 		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
 			return adapter.Page[adapter.Group]{Next: adapter.ListingOf(*p), Until: blocked.Until}, false, nil
 		}
@@ -124,7 +129,8 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	if models.Data == nil {
 		return page, false, errMissing("list of models")
 	}
-	p.Built = append(p.Built, builtGroup{Name: name, Desc: p.Groups[name].Desc, Ratio: string(p.Groups[name].Ratio), Models: models.Data})
+	g := p.Groups[name]
+	p.Built = append(p.Built, builtGroup{Name: name, Desc: g.Desc, Ratio: string(g.Ratio), RatioHidden: g.Hidden, Models: models.Data})
 	p.Next++
 	return page, true, nil
 }
@@ -143,6 +149,20 @@ func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) 
 	return offerProgress{V: 1, Groups: groups, Names: slices.Sorted(maps.Keys(groups)), Prices: prices}, nil
 }
 
+// modelsPath is where the models of a group are listed. new-api before 1.0 lists the models of all the account's
+// groups together, whatever group is asked for (controller/user.go GetUserModels); one-api lists those of the
+// account's one group.
+func (m *manager) modelsPath(group string) string {
+	switch m.sys {
+	case newAPI013:
+		return "/api/user/models"
+	case oneAPI:
+		return "/api/user/available_models"
+	case newAPI: // the group's own list
+	}
+	return "/api/user/models?group=" + url.QueryEscape(group)
+}
+
 // prices reads the price list; none when the site hides it. A site whose pricing module is off answers a request that
 // carries a login with 403 from a check that only its root passes (new-api middleware/header_nav.go:107-111), or, in
 // releases before that check, with a 403 without a code. Either says the prices are not shown, not that the login is
@@ -150,6 +170,9 @@ func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) 
 // cost, which keeps them out of routing until a person confirms a base price, as for sub2api. A 403 with one of the
 // codes of a refused login is still that.
 func (m *manager) prices(ctx context.Context) ([]priceEntry, error) {
+	if m.sys == oneAPI { // has no price list
+		return nil, nil
+	}
 	resp, err := m.api.send(ctx, http.MethodGet, "/api/pricing", global, nil)
 	if err != nil {
 		return nil, err
@@ -170,7 +193,8 @@ func (m *manager) prices(ctx context.Context) ([]priceEntry, error) {
 	return pricing.Data, nil
 }
 
-func (p offerProgress) offer() ([]adapter.Group, error) {
+// offer builds the groups; union says that each model list read is the union of the account's groups.
+func (p offerProgress) offer(union bool) ([]adapter.Group, error) {
 	prices := make(map[string]priceEntry, len(p.Prices))
 	for _, e := range p.Prices {
 		prices[e.Model] = e
@@ -181,7 +205,7 @@ func (p offerProgress) offer() ([]adapter.Group, error) {
 		if !ok {
 			return nil, errMissing("ratio of group " + strconv.Quote(b.Name))
 		}
-		g, err := buildGroup(b.Name, b.Desc, number(b.Ratio), ratio, b.Models, prices)
+		g, err := buildGroup(b, ratio, union, prices)
 		if err != nil {
 			return nil, err
 		}
@@ -191,6 +215,9 @@ func (p offerProgress) offer() ([]adapter.Group, error) {
 }
 
 func (m *manager) groupsNow(ctx context.Context) (map[string]groupEntry, error) {
+	if m.sys == oneAPI {
+		return m.oneAPIGroups(ctx)
+	}
 	var groups struct {
 		Data map[string]groupEntry `json:"data"`
 	}
@@ -203,12 +230,18 @@ func (m *manager) groupsNow(ctx context.Context) (map[string]groupEntry, error) 
 	return groups.Data, nil
 }
 
-func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []string, prices map[string]priceEntry) (adapter.Group, error) {
-	slices.Sort(models)
-	g := adapter.Group{Ref: name, Name: name, Ratio: adapter.Amount(ratioText)}
+// buildGroup is the offer group of b. When the model list is the union of the account's groups, a priced model is
+// kept only in the groups its price names (enable_groups, which new-api builds from its channels, "all" for every
+// one); a model without a price cannot be placed, so it stays in each group without a cost.
+func buildGroup(b builtGroup, ratio *big.Rat, union bool, prices map[string]priceEntry) (adapter.Group, error) {
+	slices.Sort(b.Models)
+	g := adapter.Group{Ref: b.Name, Name: b.Name, Ratio: adapter.Amount(b.Ratio)}
 	endpoints := map[string]bool{}
-	for _, upstream := range slices.Compact(models) {
+	for _, upstream := range slices.Compact(b.Models) {
 		entry, priced := prices[upstream]
+		if union && priced && !slices.Contains(entry.EnableGroups, b.Name) && !slices.Contains(entry.EnableGroups, "all") {
+			continue
+		}
 		model := adapter.Model{UpstreamName: upstream, Formats: formatsOf(entry.Endpoints)}
 		if priced {
 			model.Cost, model.Derivation = schedule(entry, ratio)
@@ -219,11 +252,15 @@ func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []st
 		}
 		g.Models = append(g.Models, model)
 	}
-	facts, err := jsonx.MarshalCanonical(map[string]any{"desc": desc, "endpoint_types": slices.Sorted(maps.Keys(endpoints))})
-	if err != nil {
-		return adapter.Group{}, fmt.Errorf("new-api: encode the facts of group %q: %w", name, err)
+	facts := map[string]any{"desc": b.Desc, "endpoint_types": slices.Sorted(maps.Keys(endpoints))}
+	if b.RatioHidden {
+		facts["ratio_shown"] = false
 	}
-	g.Facts = facts
+	encoded, err := jsonx.MarshalCanonical(facts)
+	if err != nil {
+		return adapter.Group{}, fmt.Errorf("new-api: encode the facts of group %q: %w", b.Name, err)
+	}
+	g.Facts = encoded
 	return g, nil
 }
 

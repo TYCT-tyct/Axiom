@@ -233,6 +233,9 @@ func credentialsOf(l adminapi.SupplierLogin) suppliers.Credentials {
 	if l.AccessTokenExpiresAt != nil {
 		c.AccessTokenExpiresAt = l.AccessTokenExpiresAt.UTC()
 	}
+	if l.UserId != nil {
+		c.UserID = *l.UserId
+	}
 	return c
 }
 

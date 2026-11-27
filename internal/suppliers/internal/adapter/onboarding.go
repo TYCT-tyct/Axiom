@@ -14,13 +14,15 @@ const (
 	FieldAccessToken          LoginField = "access_token"
 	FieldRefreshToken         LoginField = "refresh_token"
 	FieldAccessTokenExpiresAt LoginField = "access_token_expires_at"
+	FieldUserID               LoginField = "user_id"
 )
 
 // Credentials is what a person gives to connect a supplier: whichever of the members the system's login takes. They
-// are secrets; nothing here is logged or returned.
+// are secrets; nothing here is logged or returned. UserID is the numeric id of the account a system access token
+// belongs to, for systems that ask for it beside the token.
 type Credentials struct {
-	Email, Password, AccessToken, RefreshToken string
-	AccessTokenExpiresAt                       time.Time
+	Email, Password, AccessToken, RefreshToken, UserID string
+	AccessTokenExpiresAt                               time.Time
 }
 
 // Present lists the members that are set.
@@ -35,6 +37,7 @@ func (c Credentials) Present() []LoginField {
 		{FieldAccessToken, c.AccessToken != ""},
 		{FieldRefreshToken, c.RefreshToken != ""},
 		{FieldAccessTokenExpiresAt, !c.AccessTokenExpiresAt.IsZero()},
+		{FieldUserID, c.UserID != ""},
 	} {
 		if f.set {
 			fields = append(fields, f.field)

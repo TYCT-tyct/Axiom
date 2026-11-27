@@ -1,0 +1,7 @@
+# 58-create-key-oneapi0610
+POST /api/token/
+> Authorization: <ALICE_ACCESS_TOKEN>
+< status: 200  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"id":3,"user_id":2,"key":"<RECORDED_KEY_BARE>","status":1,"name":"axiom-live-recorded","created_time":1795749137,"accessed_time":1795749137,"expired_time":-1,"remain_quota":0,"unlimited_quota":true,"used_quota":0,"models":null,"subnet":""},"message":"","success":true}
