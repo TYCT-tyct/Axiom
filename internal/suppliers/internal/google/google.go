@@ -108,10 +108,17 @@ func compatible(ctx context.Context, c adapter.SignedCall, path string) (*http.R
 // (protocol.ChatFromGemini), with Gemini's usage and the tier the x-gemini-service-tier header names (Google《Priority
 // inference》: a request over its priority limits is served, and billed, at the standard tier). A whole generateContent
 // answer is one GenerateContentResponse, the shape of each streamed event, so it is read as a stream of that one event.
-// The OpenAI-compatible layer answers in Chat's framing already. Which call a response answers is read from its
+// The OpenAI-compatible layer answers in Chat's framing already, and its Chat answer is given the header's tier where
+// its body names none, so a downgrade bills the same on either path. Which call a response answers is read from its
 // request's path, as bedrock's Answer does.
 func (quirks) Answer(resp *http.Response) *http.Response {
-	if resp.Request == nil || !strings.Contains(resp.Request.URL.Path, ":") {
+	if resp.Request == nil {
+		return resp
+	}
+	if !strings.Contains(resp.Request.URL.Path, ":") {
+		if t := protocol.ChatTier(resp.Header.Get("X-Gemini-Service-Tier")); t != "" && strings.HasSuffix(resp.Request.URL.Path, "/chat/completions") {
+			resp.Body = withTier(resp.Body, t, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"))
+		}
 		return resp
 	}
 	body := resp.Body

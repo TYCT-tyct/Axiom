@@ -14,8 +14,17 @@ import (
 // change the answer is dropped, one Gemini can say is said, and one that would change it and that Gemini cannot say is
 // *NotSupported, so the call goes to another endpoint; a malformed body wraps ErrInvalid.
 func ChatToGemini(body []byte, model string) ([]byte, error) {
+	if !geminiNative(model) {
+		return nil, &NotSupported{Reason: "the model is not one whose native calls are made here"}
+	}
 	c, err := decodeCanon(body)
 	if err != nil {
+		return nil, err
+	}
+	if err := partsRead(body); err != nil {
+		return nil, err
+	}
+	if err := c.messagesRead(); err != nil {
 		return nil, err
 	}
 	if err := c.checkShape(); err != nil {
@@ -38,6 +47,85 @@ func ChatToGemini(body []byte, model string) ([]byte, error) {
 		g.GenerationConfig = nil
 	}
 	return jsonValue(g), nil
+}
+
+// geminiNative reports whether model's Chat calls may be native: Gemini 2 and 3. A later family can answer
+// CONTINUATION, a reply that goes on only when the client sends its token back (Google《Long decode》, read
+// 2026-11-27), which Gemini 4 does past one request's cap; such a model, and any model not known here, is called
+// through Google's OpenAI-compatible layer, which runs the continuation itself.
+func geminiNative(model string) bool {
+	model = strings.TrimPrefix(model, "models/")
+	return strings.HasPrefix(model, "gemini-2.") || strings.HasPrefix(model, "gemini-3")
+}
+
+// partMembers are the members of a content part, and of its image and file, that the conversion reads (canonPart): a
+// part with any other is not said exactly. A cache hint changes what a reply costs, not what it says.
+var partMembers = map[string]map[string]bool{
+	"":          {"type": true, "text": true, "refusal": true, "image_url": true, "file": true, "cache_control": true},
+	"image_url": {"url": true, "detail": true},
+	"file":      {"file_data": true, "file_id": true, "filename": true},
+}
+
+// partsRead reports a content part of body that holds a member the conversion does not read, which the shared decoder
+// skips: dropping it could change the answer.
+func partsRead(body []byte) error {
+	var req struct {
+		Messages []struct {
+			Content jsonx.Raw `json:"content"`
+		} `json:"messages"`
+	}
+	if err := jsonx.Unmarshal(body, &req); err != nil {
+		return invaliderr(err)
+	}
+	for _, m := range req.Messages {
+		var parts []map[string]jsonx.Raw
+		if m.Content.Kind() != '[' || jsonx.Unmarshal(m.Content, &parts) != nil {
+			continue // a string, null, or a shape the decoder already refused
+		}
+		for _, part := range parts {
+			if err := partRead(part); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// partRead reports a member of part, or of its image or file, that the conversion does not read.
+func partRead(part map[string]jsonx.Raw) error {
+	if err := membersRead(part, partMembers[""]); err != nil {
+		return err
+	}
+	for _, inner := range []string{"image_url", "file"} {
+		var members map[string]jsonx.Raw
+		if v, ok := part[inner]; !ok || v.Kind() != '{' || jsonx.Unmarshal(v, &members) != nil {
+			continue
+		}
+		if err := membersRead(members, partMembers[inner]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// messagesRead reports a message member the conversion does not read, such as an assistant turn's audio, which a
+// Gemini turn cannot hold.
+func (c *canon) messagesRead() error {
+	for _, m := range c.Messages {
+		for name := range m.Unknown {
+			return &NotSupported{Reason: "a message's " + notConverted(name)}
+		}
+	}
+	return nil
+}
+
+func membersRead(members map[string]jsonx.Raw, read map[string]bool) error {
+	for name := range members {
+		if !read[name] {
+			return &NotSupported{Reason: "a content part's " + notConverted(name)}
+		}
+	}
+	return nil
 }
 
 // geminiOutRequest is the generateContent body with the members only a request to Google holds: a Gemini client's
@@ -339,11 +427,7 @@ func (c *canon) geminiChoice(g *geminiRequest, strict bool) error {
 func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) error {
 	chat := map[string]jsonx.Raw{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
 	maps.Copy(chat, c.Unknown)
-	n := c.maxOutput()
-	if n > geminiOutputCap(model, c.Stream != nil && *c.Stream) {
-		return &NotSupported{Reason: "an output past one request's cap needs Gemini's long decode, which is not run here"}
-	}
-	if n > 0 {
+	if n := c.maxOutput(); n > 0 {
 		chat["max_tokens"] = jsonValue(n)
 	}
 	moveSettings(chat, config)
@@ -359,17 +443,6 @@ func (c *canon) geminiGeneration(config map[string]jsonx.Raw, model string) erro
 		return err
 	}
 	return c.geminiThinking(config, model)
-}
-
-// geminiOutputCap is the most output one generateContent request gives (Google《Long decode》, read 2026-11-27): 64K,
-// and 32K for Gemini 4 Carbon and Argon answering whole. Past it Gemini continues by a token the client sends back
-// (CONTINUATION), or refuses the request, so a larger cap goes to Google's OpenAI-compatible layer, which stops at it.
-func geminiOutputCap(model string, stream bool) int64 {
-	model = strings.TrimPrefix(model, "models/")
-	if !stream && (strings.HasPrefix(model, "gemini-4-carbon") || strings.HasPrefix(model, "gemini-4-argon")) {
-		return 32768
-	}
-	return 65536
 }
 
 // moveSettings moves the settings both sides share from chat into Gemini's config; a lone stop is Gemini's list of one.

@@ -72,24 +72,28 @@ data: [DONE]
 // (testdata/stream.sse, in the shape of Google's documented GenerateContentResponse, not recorded against a live key),
 // is billed exactly as the same reply was through the OpenAI-compatible layer, the cached and thinking tokens and the
 // tier Google served it at included: the reply's own, or the x-gemini-service-tier header's for a priority request
-// Google served at the standard tier. A whole answer is read by the relay, not while Answer runs.
+// Google served at the standard tier, which neither body names. A whole answer is read by the relay, not while Answer
+// runs.
 func TestChatGoesNative(t *testing.T) {
 	t.Parallel()
 	native := string(read(t, "stream.sse"))
 	for _, tier := range []struct {
 		name, compat, native, header string
-		asked                        catalog.ServiceTier
+		asked, served                catalog.ServiceTier
 	}{
-		{"standard", compatStream, native, "", catalog.ServiceTierStandard},
+		{"standard", compatStream, native, "", catalog.ServiceTierStandard, catalog.ServiceTierStandard},
 		{
 			"priority",
 			strings.Replace(compatStream, `"usage":`, `"service_tier":"priority","usage":`, 1),
 			strings.Replace(native, `"thoughtsTokenCount": 27`, `"thoughtsTokenCount": 27,"serviceTier": "priority"`, 1),
-			"", catalog.ServiceTierStandard,
+			"", catalog.ServiceTierStandard, catalog.ServiceTierPriority,
 		},
-		{"downgraded", strings.Replace(compatStream, `"usage":`, `"service_tier":"default","usage":`, 1), native, "standard", catalog.ServiceTierPriority},
+		{"downgraded", compatStream, native, "standard", catalog.ServiceTierPriority, catalog.ServiceTierStandard},
 	} {
-		want, wantTier := billed(t, io.NopCloser(strings.NewReader(tier.compat)), tier.asked)
+		want, wantTier := callCompatible(t, tier.compat, tier.header, tier.asked)
+		if wantTier != tier.served {
+			t.Errorf("%s: the compatible layer's reply billed at %d, want %d", tier.name, wantTier, tier.served)
+		}
 		events := strings.Split(strings.TrimSpace(tier.native), "\n\n")
 		whole := "{\n  " + strings.TrimPrefix(events[len(events)-1], "data: {") + "\n" // indented, as Google writes it
 		for name, tc := range map[string]struct {
@@ -129,15 +133,20 @@ func TestChatFallsBackToTheCompatibleLayer(t *testing.T) {
 			"gemini-2.5-flash",
 			`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","detail":"high"}}]}]`,
 		},
-		"audio":                            {"gemini-2.5-flash", `"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]`},
-		"a cached content":                 {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"cached_content":"cachedContents/0000aaaa1111bbbb2222cccc3333dddd4444eeee"}}`},
-		"a thinking config":                {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"thinking_config":{"thinking_budget":2048,"include_thoughts":true}}}`},
-		"mixed strictness":                 {"gemini-2.5-flash", hi + "," + tool},
-		"one call at a time":               {"gemini-2.5-flash", hi + `,"tools":[{"type":"function","function":{"name":"f"}}],"parallel_tool_calls":false`},
-		"a level the model lacks":          {"gemini-3.1-pro-preview", hi + `,"reasoning_effort":"minimal"`},
-		"thinking on at a default of off":  {"gemini-2.5-flash-lite", hi + `,"reasoning":{"enabled":true,"exclude":true}`},
-		"a model not in the table":         {"gemini-2.5-flash-preview-09-2025", hi + `,"reasoning_effort":"low"`},
-		"an output past one request's cap": {"gemini-4-neon", hi + `,"max_tokens":70000,"stream":true`},
+		"audio":                                {"gemini-2.5-flash", `"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]`},
+		"a cached content":                     {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"cached_content":"cachedContents/0000aaaa1111bbbb2222cccc3333dddd4444eeee"}}`},
+		"a thinking config":                    {"gemini-2.5-flash", hi + `,"extra_body":{"google":{"thinking_config":{"thinking_budget":2048,"include_thoughts":true}}}`},
+		"mixed strictness":                     {"gemini-2.5-flash", hi + "," + tool},
+		"one call at a time":                   {"gemini-2.5-flash", hi + `,"tools":[{"type":"function","function":{"name":"f"}}],"parallel_tool_calls":false`},
+		"a level the model lacks":              {"gemini-3.1-pro-preview", hi + `,"reasoning_effort":"minimal"`},
+		"thinking on at a default of off":      {"gemini-2.5-flash-lite", hi + `,"reasoning":{"enabled":true,"exclude":true}`},
+		"a model not in the table":             {"gemini-2.5-flash-preview-09-2025", hi + `,"reasoning_effort":"low"`},
+		"a model that can answer CONTINUATION": {"gemini-4-neon", hi},
+		"an assistant turn's audio": {
+			"gemini-2.5-flash",
+			`"messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","audio":{"id":"audio_1"}},{"role":"user","content":"Again"}]`,
+		},
+		"a part member not read": {"gemini-2.5-flash", `"messages":[{"role":"user","content":[{"type":"text","text":"Hi","annotations":[{"x":1}]}]}]`},
 	} {
 		signer := google.New().Calls().(adapter.Signer)
 		req, f := signer.Sign(t.Context(), nil, adapter.SignedCall{
@@ -154,6 +163,47 @@ func TestChatFallsBackToTheCompatibleLayer(t *testing.T) {
 		resp := signer.Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(compatStream))})
 		if got, _ := billed(t, resp.Body, catalog.ServiceTierStandard); !cmp.Equal(got, want) {
 			t.Errorf("%s: billed %v, want %v", name, got, want)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// callCompatible gives what an answer of the compatible layer to Chat, streamed, with the x-gemini-service-tier header
+// given, is billed for a request of the tier asked: the items and the tier.
+func callCompatible(t *testing.T, answer, header string, asked catalog.ServiceTier) (map[catalog.Item]int64, catalog.ServiceTier) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1beta/openai/chat/completions", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{"Content-Type": {"text/event-stream"}}
+	if header != "" {
+		h.Set("X-Gemini-Service-Tier", header)
+	}
+	resp := google.New().Calls().(adapter.Signer).Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: h, Body: io.NopCloser(strings.NewReader(answer))})
+	defer resp.Body.Close() //nolint:errcheck // a test body over a string
+	return billed(t, resp.Body, asked)
+}
+
+// A whole answer of the compatible layer is given the header's tier only where it names none.
+func TestAWholeCompatibleAnswerTakesTheHeadersTier(t *testing.T) {
+	t.Parallel()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1beta/openai/chat/completions", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		`{"id":"r1","object":"chat.completion"}`:                             `{"service_tier":"default","id":"r1","object":"chat.completion"}`,
+		` {"service_tier":"priority","object":"chat.completion"}`:            ` {"service_tier":"priority","object":"chat.completion"}`,
+		`{"id":"r1","choices":[{"message":{"content":"\"service_tier\""}}]}`: `{"service_tier":"default","id":"r1","choices":[{"message":{"content":"\"service_tier\""}}]}`,
+	} {
+		h := http.Header{"Content-Type": {"application/json"}, "X-Gemini-Service-Tier": {"standard"}}
+		resp := google.New().Calls().(adapter.Signer).Answer(&http.Response{StatusCode: http.StatusOK, Request: req, Header: h, Body: io.NopCloser(strings.NewReader(body))})
+		got, err := io.ReadAll(resp.Body)
+		if err != nil || string(got) != want {
+			t.Errorf("%s became %s (%v), want %s", body, got, err, want)
 		}
 		if err := resp.Body.Close(); err != nil {
 			t.Error(err)

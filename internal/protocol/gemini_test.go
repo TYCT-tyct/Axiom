@@ -125,6 +125,7 @@ func TestChatToGeminiUndoesGeminiToChat(t *testing.T) {
 func TestChatToGemini(t *testing.T) {
 	t.Parallel()
 	const hi = `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]`
+	const native = "gemini-2.5-flash"
 	ask := func(members string) string {
 		return `{"model":"m","messages":[{"role":"user","content":"Hi"}]` + members + `}`
 	}
@@ -146,23 +147,23 @@ func TestChatToGemini(t *testing.T) {
 			`{"contents":[{"role":"user","parts":[{"text":"Go"}]},{"role":"model","parts":[{"functionCall":{"id":"c1","name":"f","args":{}},"thoughtSignature":"skip_thought_signature_validator"}]},` +
 				`{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"f","response":{"result":"plain"}}}]}],"generationConfig":{"maxOutputTokens":50,"thinkingConfig":{"thinkingLevel":"low"}}}`,
 		},
-		{"the standard tier", "m", ask(`,"service_tier":"default"`), hi + `}`},
-		{"the project's tier", "m", ask(`,"service_tier":"auto"`), hi + `}`},
-		{"the priority tier", "m", ask(`,"service_tier":"priority"`), hi + `,"serviceTier":"priority"}`},
-		{"the flex tier", "m", ask(`,"service_tier":"flex"`), hi + `,"serviceTier":"flex"}`},
-		{"the scale tier", "m", ask(`,"service_tier":"scale"`), ""},
-		{"parallel calls allowed", "m", ask(tool + `,"parallel_tool_calls":true`), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}]}`},
-		{"one call at a time", "m", ask(tool + `,"parallel_tool_calls":false`), ""},
+		{"the standard tier", native, ask(`,"service_tier":"default"`), hi + `}`},
+		{"the project's tier", native, ask(`,"service_tier":"auto"`), hi + `}`},
+		{"the priority tier", native, ask(`,"service_tier":"priority"`), hi + `,"serviceTier":"priority"}`},
+		{"the flex tier", native, ask(`,"service_tier":"flex"`), hi + `,"serviceTier":"flex"}`},
+		{"the scale tier", native, ask(`,"service_tier":"scale"`), ""},
+		{"parallel calls allowed", native, ask(tool + `,"parallel_tool_calls":true`), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}]}`},
+		{"one call at a time", native, ask(tool + `,"parallel_tool_calls":false`), ""},
 		{
-			"no call, one at a time", "m", ask(tool + `,"tool_choice":"none","parallel_tool_calls":false`),
+			"no call, one at a time", native, ask(tool + `,"tool_choice":"none","parallel_tool_calls":false`),
 			hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"NONE"}}}`,
 		},
-		{"strict functions", "m", ask(strict), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED"}}}`},
+		{"strict functions", native, ask(strict), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED"}}}`},
 		{
-			"a strict function required", "m", ask(strict + `,"tool_choice":"required"`),
+			"a strict function required", native, ask(strict + `,"tool_choice":"required"`),
 			hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"ANY"}}}`,
 		},
-		{"mixed strictness", "m", ask(`,"tools":[{"type":"function","function":{"name":"f","strict":true}},{"type":"function","function":{"name":"g"}}]`), ""},
+		{"mixed strictness", native, ask(`,"tools":[{"type":"function","function":{"name":"f","strict":true}},{"type":"function","function":{"name":"g"}}]`), ""},
 		{"2.5 low effort", "gemini-2.5-flash", ask(`,"reasoning_effort":"low"`), thinking(`{"includeThoughts":true,"thinkingBudget":1024}`)},
 		{"2.5 medium effort", "gemini-2.5-pro", ask(`,"reasoning":{"effort":"medium","exclude":true}`), thinking(`{"thinkingBudget":8192}`)},
 		{"2.5 thinking off", "gemini-2.5-flash", ask(`,"reasoning_effort":"none"`), thinking(`{"thinkingBudget":0}`)},
@@ -174,22 +175,20 @@ func TestChatToGemini(t *testing.T) {
 		{"3 minimal level", "gemini-3-flash-preview", ask(`,"reasoning_effort":"minimal"`), thinking(`{"includeThoughts":true,"thinkingLevel":"minimal"}`)},
 		{"3.1 Pro has no minimal level", "gemini-3.1-pro-preview", ask(`,"reasoning_effort":"minimal"`), ""},
 		{"3 thinking off", "gemini-3-pro-preview", ask(`,"reasoning_effort":"none"`), ""},
-		{"4 has no minimal level", "gemini-4-argon", ask(`,"reasoning_effort":"minimal"`), ""},
-		{"4 Neon xhigh", "gemini-4-neon", ask(`,"reasoning_effort":"xhigh"`), thinking(`{"includeThoughts":true,"thinkingLevel":"xhigh"}`)},
-		{"4 Carbon xhigh", "gemini-4-carbon", ask(`,"reasoning_effort":"xhigh"`), ""},
-		{"4 budget", "gemini-4-hydrogen", ask(`,"reasoning":{"max_tokens":2000}`), ""},
-		{"a model not in the table", "m", ask(`,"reasoning_effort":"low"`), ""},
-		{"an output past the cap", "gemini-4-neon", ask(`,"max_tokens":70000,"stream":true`), ""},
-		{"Carbon answering whole past 32K", "gemini-4-carbon", ask(`,"max_tokens":40000`), ""},
-		{"Carbon streaming past 32K", "gemini-4-carbon", ask(`,"max_tokens":40000,"stream":true`), hi + `,"generationConfig":{"maxOutputTokens":40000}}`},
-		{"an inline image", "m", image(`"auto"`), `{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}]}`},
-		{"an image's detail", "m", image(`"low"`), ""},
-		{"a late system message", "m", `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"system","content":"late"}]}`, ""},
-		{"an image by address", "m", `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i.png"}}]}]}`, ""},
-		{"audio", "m", `{"model":"m","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`, ""},
-		{"a cached content", "m", ask(`,"extra_body":{"google":{"cached_content":"cachedContents/abc"}}`), ""},
-		{"logprobs", "m", ask(`,"logprobs":true`), ""},
-		{"a custom tool", "m", ask(`,"tools":[{"type":"custom","custom":{"name":"x"}}]`), ""},
+		{"a model not in the thinking table", "gemini-3-unlisted", ask(`,"reasoning_effort":"low"`), ""},
+		{"a model that can answer CONTINUATION", "gemini-4-neon", ask(""), ""},
+		{"a model of another family", "gemma-3-27b-it", ask(""), ""},
+		{"an assistant turn's audio", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","audio":{"id":"audio_1"}},{"role":"user","content":"Again"}]}`, ""},
+		{"a part member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"Hi","annotations":[{"x":1}]}]}]}`, ""},
+		{"an image member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","crop":"top"}}]}]}`, ""},
+		{"an inline image", native, image(`"auto"`), `{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}]}`},
+		{"an image's detail", native, image(`"low"`), ""},
+		{"a late system message", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"system","content":"late"}]}`, ""},
+		{"an image by address", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i.png"}}]}]}`, ""},
+		{"audio", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`, ""},
+		{"a cached content", native, ask(`,"extra_body":{"google":{"cached_content":"cachedContents/abc"}}`), ""},
+		{"logprobs", native, ask(`,"logprobs":true`), ""},
+		{"a custom tool", native, ask(`,"tools":[{"type":"custom","custom":{"name":"x"}}]`), ""},
 	} {
 		got, err := protocol.ChatToGemini([]byte(c.body), c.model)
 		if c.want == "" {
@@ -313,12 +312,12 @@ func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 		},
 		{"a downgrade the header names, cut before any count", half("") + half(""), "standard", readCut, false, false, nil, priority, std},
 		{
-			"the header's downgrade with the counts", half(","+usage) + half(`,"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}`) +
-				`data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}` + "\n\n", "standard",
-			readEnds, false, true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 5},
-			priority, std,
+			"a closing STOP without usage, the header's downgrade", half(","+usage) + half(`,"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}`) +
+				half(``) + `data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}` + "\n\n", "standard",
+			readEnds, false, false, input10, priority, std,
 		},
+		{"usage after the closing STOP", half("") + `data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}` + "\n\n" +
+			`data: {"candidates":[],` + usage + `}` + "\n\n", "", readEnds, false, true, input10out3, std, std},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

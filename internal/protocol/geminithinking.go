@@ -19,22 +19,17 @@ type geminiThinker struct {
 // 2026-11-27): the levels each takes, and the 2.5 models' budget ranges and defaults. A model not listed, or a setting
 // its row cannot say, is sent through Google's OpenAI-compatible layer, which maps it itself.
 var geminiThinkers = map[string]geminiThinker{
-	"gemini-2.5-pro":               {minBudget: 128, maxBudget: 32768, thinksByDefault: true},
-	"gemini-2.5-flash":             {minBudget: 1, maxBudget: 24576, off: true, thinksByDefault: true},
-	"gemini-2.5-flash-lite":        {minBudget: 512, maxBudget: 24576, off: true},
-	"gemini-4-carbon":              {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
-	"gemini-4-argon":               {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
-	"gemini-4-neon":                {levels: []string{"low", "medium", "high", "xhigh"}, thinksByDefault: true},
-	"gemini-4-hydrogen":            {levels: []string{"low", "medium", "high", "xhigh"}, thinksByDefault: true},
-	"gemini-3.8-flash":             {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3.6-flash":             {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3.5-flash-lite":        {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3.1-pro-preview":       {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3.1-flash-lite":        {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3.1-flash-lite-image":  {levels: []string{"minimal", "high"}, thinksByDefault: true},
-	"gemini-3-flash-preview":       {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
-	"gemini-3-pro-preview":         {levels: []string{"low", "high"}, thinksByDefault: true},
-	"gemini-robotics-er-2-preview": {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-2.5-pro":              {minBudget: 128, maxBudget: 32768, thinksByDefault: true},
+	"gemini-2.5-flash":            {minBudget: 1, maxBudget: 24576, off: true, thinksByDefault: true},
+	"gemini-2.5-flash-lite":       {minBudget: 512, maxBudget: 24576, off: true},
+	"gemini-3.8-flash":            {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.6-flash":            {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.5-flash-lite":       {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-pro-preview":      {levels: []string{"low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-flash-lite":       {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3.1-flash-lite-image": {levels: []string{"minimal", "high"}, thinksByDefault: true},
+	"gemini-3-flash-preview":      {levels: []string{"minimal", "low", "medium", "high"}, thinksByDefault: true},
+	"gemini-3-pro-preview":        {levels: []string{"low", "high"}, thinksByDefault: true},
 }
 
 // geminiEffortBudgets are the 2.5 models' budgets for a reasoning effort, Google's OpenAI-compatible layer's own

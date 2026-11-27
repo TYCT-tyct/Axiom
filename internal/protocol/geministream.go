@@ -60,6 +60,7 @@ type chatFromGemini struct {
 	finish   string
 	usage    *geminiUsage
 	report   bool // usage has a snapshot the relay was not given yet, or tier has not been given
+	final    bool // usage came with or after the event that ended the reply, so its output is the reply's
 	role     bool // a delta named the role
 	finished bool
 }
@@ -121,8 +122,9 @@ func (s *chatFromGemini) event(data []byte) error {
 		// A prompt Gemini blocked has no candidate (Google《Generating content》PromptFeedback): the content policy
 		// refused the request, which Chat says as an error of that class, not as an empty answer to retry elsewhere.
 		if r.PromptFeedback != nil && r.PromptFeedback.BlockReason != "" {
-			s.fail(jsonValue("content_policy_violation"), "content_policy_violation", "Gemini blocked the prompt: "+r.PromptFeedback.BlockReason, true)
+			s.fail(jsonValue("content_policy_violation"), "content_policy_violation", "Gemini blocked the prompt: "+r.PromptFeedback.BlockReason, r.UsageMetadata != nil)
 		}
+		s.counted(r.UsageMetadata != nil)
 		return nil
 	}
 	cand := r.Candidates[0]
@@ -131,14 +133,21 @@ func (s *chatFromGemini) event(data []byte) error {
 			return err
 		}
 	}
-	s.finishWith(cand.FinishReason)
+	s.finishWith(cand.FinishReason, r.UsageMetadata != nil)
+	s.counted(r.UsageMetadata != nil)
 	return nil
 }
 
-// finishWith records Gemini's finish reason as Chat's, or ends the stream for one Chat has no word for. CONTINUATION is a
-// reply that reached one request's output cap with more to say (Google《Long decode》): it ends at the cap, as length
-// does, since the conversion does not continue it (geminiOutputCap sends the requests that could elsewhere).
-func (s *chatFromGemini) finishWith(gemini string) {
+// counted records that the usage is the reply's whole when an event at or after the one that ended it reported usage.
+func (s *chatFromGemini) counted(reported bool) {
+	s.final = s.final || reported && s.finish != ""
+}
+
+// finishWith records Gemini's finish reason as Chat's, or ends the stream for one Chat has no word for; counted is
+// whether the event that gave it reported usage. CONTINUATION is a reply that reached one request's output cap with
+// more to say (Google《Long decode》), which only models that are not called natively give (geminiNative): it ends at
+// the cap, as length does, rather than as a failure.
+func (s *chatFromGemini) finishWith(gemini string, counted bool) {
 	if gemini == "" {
 		return
 	}
@@ -147,7 +156,7 @@ func (s *chatFromGemini) finishWith(gemini string) {
 	case gemini == "CONTINUATION":
 		s.finish = "length"
 	case !ok:
-		s.fail(jsonValue(502), "upstream_error", "Gemini stopped the reply: "+gemini, true)
+		s.fail(jsonValue(502), "upstream_error", "Gemini stopped the reply: "+gemini, counted)
 	case reason == "stop" && s.calls > 0:
 		s.finish = "tool_calls"
 	default:
@@ -241,6 +250,13 @@ func (s *chatFromGemini) chunk(choice requestObject, usage jsonx.Raw) {
 // reports as unknown.
 var chatTiers = map[string]string{"unspecified": "default", "standard": "default"}
 
+// ChatTier is a service tier as Gemini names it, in its usage or its x-gemini-service-tier response header, under
+// Chat's name for it; empty for none.
+func ChatTier(gemini string) string {
+	t := strings.ToLower(gemini)
+	return cmp.Or(chatTiers[t], t)
+}
+
 // withUsage puts usage in chunk c, with the tier Gemini served the reply at: the reply's own, else the header's.
 func (s *chatFromGemini) withUsage(c requestObject, usage jsonx.Raw) {
 	if usage == nil {
@@ -251,12 +267,14 @@ func (s *chatFromGemini) withUsage(c requestObject, usage jsonx.Raw) {
 	if s.usage != nil && s.usage.ServiceTier != "" {
 		t = s.usage.ServiceTier
 	}
-	if t = strings.ToLower(t); t != "" {
-		c["service_tier"] = jsonValue(cmp.Or(chatTiers[t], t))
+	if t != "" {
+		c["service_tier"] = jsonValue(ChatTier(t))
 	}
 }
 
-// end closes a stream Gemini finished: the finish reason, the usage and the end marker.
+// end closes a stream Gemini finished: the finish reason, the usage and the end marker. The usage is all of Gemini's
+// only when it came with the event that ended the reply or after it; else the output counted before it is not the
+// output delivered, and only the input side is reported.
 func (s *chatFromGemini) end() {
 	switch {
 	case s.finished:
@@ -269,8 +287,11 @@ func (s *chatFromGemini) end() {
 	}
 	s.finished = true
 	s.choice(requestObject{}, jsonValue(s.finish))
-	if s.usage != nil {
+	switch {
+	case s.usage != nil && s.final:
 		s.chunk(nil, jsonValue(s.usage.chat()))
+	case s.usage != nil:
+		s.chunk(nil, s.input())
 	}
 	s.out = append(s.out, "data: [DONE]\n\n"...)
 }
