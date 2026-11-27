@@ -18,7 +18,6 @@ import (
 	"axiom/internal/suppliers/internal/compatible"
 	"axiom/internal/suppliers/internal/cpa"
 	"axiom/internal/suppliers/internal/declared"
-	"axiom/internal/suppliers/internal/google"
 	"axiom/internal/suppliers/internal/newapi"
 	"axiom/internal/suppliers/internal/sub2api"
 	"axiom/internal/suppliers/internal/vendors"
@@ -31,7 +30,6 @@ var adapters = []adapter.Adapter{
 	bedrock.New(),
 	compatible.New(),
 	cpa.New(),
-	google.New(),
 	newapi.New(),
 	sub2api.New(),
 	vertex.New(),

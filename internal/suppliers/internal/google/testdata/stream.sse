@@ -1,4 +1,0 @@
-data: {"candidates": [{"content": {"parts": [{"text": "AI learns patterns"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 10,"totalTokenCount": 10,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 10}]},"modelVersion": "gemini-2.5-flash","responseId": "mBk1aZ2nB4-2vdIP9f2X0Ac"}
-
-data: {"candidates": [{"content": {"parts": [{"text": " from data to make predictions."}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 10,"candidatesTokenCount": 9,"totalTokenCount": 46,"cachedContentTokenCount": 4,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 10}],"cacheTokensDetails": [{"modality": "TEXT","tokenCount": 4}],"thoughtsTokenCount": 27},"modelVersion": "gemini-2.5-flash","responseId": "mBk1aZ2nB4-2vdIP9f2X0Ac"}
-
