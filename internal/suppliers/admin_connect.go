@@ -110,6 +110,8 @@ func (a *Admin) Detect(ctx context.Context, raw string) (Detection, error) {
 		switch {
 		case errors.Is(err, adapter.ErrNotRecognised):
 			answered = true
+		case errors.Is(err, adapter.ErrUnsupported):
+			return Detection{}, err
 		case err != nil: // this adapter could not tell; another may
 		default:
 			return Detection{

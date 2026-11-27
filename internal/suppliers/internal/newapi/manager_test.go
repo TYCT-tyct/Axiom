@@ -34,7 +34,10 @@ func TestDetectTellsTheSystemAndItsGeneration(t *testing.T) {
 		wantErr error
 	}{
 		{"1.0", status, key, adapter.Detection{Generation: "1.0", Version: "v1.0.0-rc.44"}, nil},
-		{"0.13 has no such route", status, answer(404, `{"success":false}`), adapter.Detection{Generation: "0.13", Version: "v1.0.0-rc.44"}, nil},
+		// Releases the adapter cannot connect yet are refused when detected, naming the release.
+		{"0.13 has no such route", status, answer(404, `{"success":false}`), adapter.Detection{}, adapter.ErrUnsupported},
+		{"new-api v0.13.2", sample(t, "01-detect-status-0132"), sample(t, "02-detect-encryption-key-0132"), adapter.Detection{}, adapter.ErrUnsupported},
+		{"one-api v0.6.10", sample(t, "01-detect-status-oneapi0610"), sample(t, "02-detect-encryption-key-oneapi0610"), adapter.Detection{}, adapter.ErrUnsupported},
 		{"not new-api: no request id", adapter.Response{Status: 200, Body: []byte(`{"success":true,"data":{}}`)}, key, adapter.Detection{}, adapter.ErrNotRecognised},
 		{"not new-api: a web page", adapter.Response{Status: 200, Body: []byte("<html></html>")}, key, adapter.Detection{}, adapter.ErrNotRecognised},
 		{
@@ -49,6 +52,16 @@ func TestDetectTellsTheSystemAndItsGeneration(t *testing.T) {
 		got, err := New().Detect(t.Context(), f)
 		if !errors.Is(err, c.wantErr) || cmp.Diff(c.want, got) != "" {
 			t.Errorf("%s: %+v, %v; want %+v, %v", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+	for name, want := range map[string]string{
+		"0132":       "new-api v0.13.2 is not supported yet: Axiom connects new-api 1.0 and later",
+		"oneapi0610": "one-api v0.6.10 is not supported yet: Axiom connects new-api 1.0 and later",
+	} {
+		f := newFake()
+		f.routes["GET /api/status"], f.routes["GET /api/user/login/encryption-key"] = sample(t, "01-detect-status-"+name), sample(t, "02-detect-encryption-key-"+name)
+		if _, err := New().Detect(t.Context(), f); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
 		}
 	}
 }

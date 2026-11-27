@@ -1934,7 +1934,7 @@ export interface paths {
         put?: never;
         /**
          * Find out what system a site runs
-         * @description Probes the address through the outbound client, which refuses private and internal addresses, and says which adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no `kind`.
+         * @description Probes the address through the outbound client, which refuses private and internal addresses, and says which adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no `kind`. A site an adapter recognises in a release it cannot connect yet (new-api before 1.0, one-api) is 422, and the message names the system and its release.
          *
          *     Limits: 10 a minute per session, because each probe is a request to a third party.
          */

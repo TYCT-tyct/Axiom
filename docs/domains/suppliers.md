@@ -36,7 +36,7 @@
 
 现有的内置适配器：
 
-- **普通用户身份**：new-api 1.0（个人访问令牌；0.13 只识别、不接入）、sub2api（邮箱密码或令牌，加刷新令牌）。
+- **普通用户身份**：new-api 1.0（个人访问令牌；更早的版本和 one-api 识别时拒绝）、sub2api（邮箱密码或令牌，加刷新令牌）。
 - **管理员身份，用于自建号池**：sub2api 管理接口、CPA（CLIProxyAPI，Go 适配器加常驻采集器），见「号池」和「CPA」。
 - **官方 API（直连接口）**：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口，各一个适配器，共用 `direct` 包；OpenAI 的也服务账户自带的 key。三种主流协议的调用面同时是转换和检测的基准。云平台 Vertex AI、Bedrock、Azure OpenAI 共用 `cloud` 包。
 
@@ -213,7 +213,7 @@
 
 ### new-api
 
-- **识别**：`/api/status` 有应答且带 `X-Oneapi-Request-Id`；有 `/api/user/login/encryption-key` 是 1.0，否则 0.13（不接入，`Open` 报凭证被拒）。
+- **识别**：`/api/status` 有应答且带 `X-Oneapi-Request-Id`；有 `/api/user/login/encryption-key` 是 1.0；其余（1.0 之前的 new-api、one-api，看 `data.setup` 分辨）识别时就 422「这个版本暂不支持」，写明版本，不给登录项。
 - **登录**：个人访问令牌加过期时间，需要 `profile:read`（账号、分组、模型）、`wallet:read`（订阅）、`usage:read`（扣费记录）、`api_key:read`、`api_key:write`，读原文还要 `api_key:reveal`。管理接口的 401/403 按固定的 `code` 清单报凭证被拒，错误里没有对方的文字；缺权限同样停掉轮询，但原因写明缺哪个权限，告警是「同步需处理」而不是登录失效。key 的 ID 只许数字。
 - **读取**：余额是整数 `quota`，单位提示是 `quota_per_unit`；有生效订阅即资金来源不支持。倍率写 `auto` 的分组不收，倍率缺失或不是数字是认不出。key 状态 1 到 4 对应正常、停用、过期、额度用尽，模型限制读 `model_limits_enabled`、`model_limits`，到期读 `expired_time`（-1 不到期），权限字段缺失时全拒。
 - **成本计划**（币种 `XXX`，单位是每 token 多少 quota）：输入 = `model_ratio × 分组倍率`，输出 = 输入 × `completion_ratio`，缓存读 × `cache_ratio`（缺省 1），缓存写 × `create_cache_ratio`（缺省 1.25），一小时缓存写 = 缓存写 × 1.6；精确分数计算，向上取整到 15 位小数，不低于对方的价。按次计费、`tiered_expr`、倍率缺失或超上限的没有成本计划；`image_ratio` 显式且不为 1 的不声明图片能力；推理按输出价。

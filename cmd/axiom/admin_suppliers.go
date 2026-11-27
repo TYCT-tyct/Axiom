@@ -254,6 +254,9 @@ func (a adminAPI) DetectSupplier(ctx context.Context, request adminapi.DetectSup
 		return nil, err
 	}
 	found, err := a.suppliers.Detect(ctx, request.Body.Origin)
+	if errors.Is(err, suppliers.ErrUnsupportedVersion) {
+		return nil, unprocessable(err.Error()) // names the system and its release, a plain version string or none
+	}
 	if err != nil {
 		return nil, err
 	}

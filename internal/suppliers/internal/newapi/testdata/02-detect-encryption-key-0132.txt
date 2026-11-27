@@ -1,0 +1,6 @@
+# 02-detect-encryption-key-0132
+GET /api/user/login/encryption-key
+< status: 404  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"error":{"message":"Invalid URL (GET /api/user/login/encryption-key)","type":"invalid_request_error","param":"","code":""}}

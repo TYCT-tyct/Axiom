@@ -339,4 +339,14 @@ func TestDetectRefusals(t *testing.T) {
 	refuses(t, "a site that does not answer", err, ErrUnreachable)
 	_, err = a.admin.Detect(t.Context(), "https://10.0.0.1")
 	refuses(t, "a private address", err, ErrAddressRefused)
+	// A release the adapter recognises but cannot connect is refused there and then, naming it, rather than offered a
+	// login it cannot complete.
+	old := func() (adapter.Detection, error) {
+		return adapter.Detection{}, &adapter.Unsupported{System: "new-api", Version: "v0.13.2", Supported: "new-api 1.0 and later"}
+	}
+	_, err = newAdmins(t, onboardable{kind: "a", detects: old}, onboardable{kind: "b", detects: recognising}).admin.Detect(t.Context(), "https://127.0.0.1:9")
+	refuses(t, "a release not supported yet", err, ErrUnsupportedVersion)
+	if err == nil || !strings.Contains(err.Error(), "v0.13.2 is not supported yet") {
+		t.Errorf("a release not supported yet: %v, want the release named", err)
+	}
 }
