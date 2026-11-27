@@ -128,12 +128,8 @@ func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) 
 			return ErrAlertConfiguration
 		}
 	}
-	if c.LowBalanceThresholds == nil {
-		held, err := readAlertConfiguration(ctx, tx, false)
-		if err != nil {
-			return err
-		}
-		c.LowBalanceThresholds = held.LowBalanceThresholds
+	if err := keepLowBalanceThresholds(ctx, tx, &c); err != nil {
+		return err
 	}
 	// Detection is stored apart from the rules so a node that predates it cannot drop it while replacing the body.
 	stored := struct {

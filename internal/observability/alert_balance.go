@@ -35,6 +35,16 @@ func validateLowBalanceThresholds(lines []LowBalanceThreshold) error {
 	return nil
 }
 
+// keepLowBalanceThresholds gives a replacement that does not send the lines the saved ones.
+func keepLowBalanceThresholds(ctx context.Context, tx pg.Tx, c *AlertConfiguration) error {
+	if c.LowBalanceThresholds != nil {
+		return nil
+	}
+	held, err := readAlertConfiguration(ctx, tx, false)
+	c.LowBalanceThresholds = held.LowBalanceThresholds
+	return err
+}
+
 // LowBalanceLines is each supplier's alert line as saved, for suppliers' balance alerts (cmd/axiom wires it).
 func LowBalanceLines(ctx context.Context, tx pg.Tx) (map[uuid.UUID]string, error) {
 	c, err := readAlertConfiguration(ctx, tx, false)

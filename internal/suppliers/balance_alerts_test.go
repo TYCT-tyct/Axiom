@@ -49,7 +49,7 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 	wallet, key, _ := addWallet(w, "20")
 	relayKey, walletAlert := w.supplier.String(), wallet.String()+"/"+key.String()
 	lines := map[uuid.UUID]string{w.supplier: "50"}
-	read := func(context.Context, pg.Tx) (map[uuid.UUID]string, error) { return lines, nil }
+	read := LowBalanceLines(func(context.Context, pg.Tx) (map[uuid.UUID]string, error) { return lines, nil })
 	exec := func(query string, args ...any) {
 		t.Helper()
 		w.tx(func(ctx context.Context, tx pg.Tx) error { _, err := tx.Exec(ctx, query, args...); return err })

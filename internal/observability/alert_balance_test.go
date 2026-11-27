@@ -46,8 +46,12 @@ func TestLowBalanceThresholds(t *testing.T) {
 		t.Fatalf("lines after a replacement without them: %v, want %v", got, want)
 	}
 	for _, bad := range [][]LowBalanceThreshold{
-		{{relay, "-1"}}, {{relay, "1e3"}}, {{relay, ""}}, {{relay, "0.0000000000000001"}},
-		{{uuid.Nil(), "1"}}, {{relay, "1"}, {relay, "2"}},
+		{{relay, "-1"}},
+		{{relay, "1e3"}},
+		{{relay, ""}},
+		{{relay, "0.0000000000000001"}},
+		{{uuid.Nil(), "1"}},
+		{{relay, "1"}, {relay, "2"}},
 	} {
 		if err := set(&bad); !errors.Is(err, ErrAlertConfiguration) {
 			t.Errorf("lines %v: %v, want refused", bad, err)
