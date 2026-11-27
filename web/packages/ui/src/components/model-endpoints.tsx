@@ -86,7 +86,7 @@ function EndpointRow({
 }
 
 function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; showPrices: boolean }) {
-  const { t } = useTranslation("common");
+  const { t, i18n } = useTranslation("common");
   const format = useFormat();
   return (
     <Td>
@@ -104,6 +104,10 @@ function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; 
               <span className={s.mono}>{endpoint.quantization}</span>
             </Badge>
           ) : null}
+          {endpoint.source_class ? <Badge>{className(endpoint.source_class, i18n.language)}</Badge> : null}
+          {endpoint.quality_score !== undefined ? (
+            <Badge>{t("publicModels.score", { score: format.decimal(String(endpoint.quality_score)) })}</Badge>
+          ) : null}
         </span>
         {/* Each fallback disappears at the width where its column appears: context at md, max output at lg, abilities at
           2xl. Streaming has no column, so it stays here at every width. */}
@@ -119,6 +123,7 @@ function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; 
             {endpoint.streams === undefined ? "—" : t(endpoint.streams ? "publicModels.yes" : "publicModels.no")}
           </span>
         </p>
+        <Measured endpoint={endpoint} />
         <div className={s.fallback}>
           <span>{t("publicModels.ability")}</span>
           <EndpointAbilities endpoint={endpoint} fallback />
@@ -141,6 +146,29 @@ function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; 
         ) : null}
       </div>
     </Td>
+  );
+}
+
+// A source class is named in the page's language, falling back to its English name.
+const className = (c: { name: string; name_zh: string }, language: string) =>
+  (language.startsWith("zh") && c.name_zh) || c.name;
+
+// Measured is what real calls showed of the endpoint: uptime over three windows, and the median first token and speed
+// over thirty minutes. A value not known yet is a dash, never a zero.
+function Measured({ endpoint }: { endpoint: PublicEndpoint }) {
+  const { t } = useTranslation("common");
+  const format = useFormat();
+  const percent = (value?: number) => (value === undefined ? "—" : `${format.decimal(String(value))}%`);
+  const median = (stats: PublicEndpoint["latency_last_30m"], unit: "milliseconds" | "tokensPerSecond") =>
+    stats ? t(`publicModels.${unit}`, { value: format.decimal(String(stats.p50)) }) : "—";
+  return (
+    <p className={s.attributes}>
+      <span>
+        {`${t("publicModels.uptime")} ${[endpoint.uptime_last_5m, endpoint.uptime_last_30m, endpoint.uptime_last_1d].map(percent).join(" / ")}`}
+      </span>
+      <span>{`${t("publicModels.latency")} ${median(endpoint.latency_last_30m, "milliseconds")}`}</span>
+      <span>{`${t("publicModels.throughput")} ${median(endpoint.throughput_last_30m, "tokensPerSecond")}`}</span>
+    </p>
   );
 }
 

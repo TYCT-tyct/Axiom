@@ -48,7 +48,17 @@ export type PublicEndpoint = {
   quantization?: string;
   verified?: boolean;
   pricing?: PublicModelPricing;
+  // What was measured of it: each is absent while it is not known.
+  source_class?: { slug: string; name: string; name_zh: string };
+  quality_score?: number;
+  uptime_last_5m?: number;
+  uptime_last_30m?: number;
+  uptime_last_1d?: number;
+  latency_last_30m?: EndpointPercentiles;
+  throughput_last_30m?: EndpointPercentiles;
 };
+
+type EndpointPercentiles = { p50: number; p75: number; p90: number; p99: number };
 
 function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
   return <PricingPrice pricing={model.pricing} item={item} />;

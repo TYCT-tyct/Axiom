@@ -40,6 +40,7 @@ func SetSuspension(ctx context.Context, tx pg.Tx, actor audit.Actor, suspend boo
 
 ## 不变量
 
+- **`Endpoint.Recent` 只给公开发现**：quality 的近期可用率、首字与速度随快照复制进来，供模型页和 OpenRouter 端点接口显示；过滤和排序都不读它，排序用的是 `LatencyPercentiles`、`ThroughputPercentiles` 等字段。
 - **`Plan` 只读内存**：在准入事务里调用，不查库、不访问缓存、不改共享状态；重试预算只「看」，gateway 发出重试时才 `TakeRetry`。预设内容取快照，预设 ID、可用模型、账户、站点、工作区、币种和等级取 `Admission`。快照没有这个预设或 `Preset.visibleTo` 不放行时返回 `ErrPresetUnavailable`，从不改用别的预设；快照超过 `MaxStale` 返回 `ErrStale`，`Fresh` 报告同一条件。
 - **路线**：最多 `MaxEntries`（3）个不同的端点，在预留前定死，之后只会缩短。`MaxAttempts` 是硬上限（含同条目换凭证），取预设的、否则路由器的，从不因路线更长而提高；`Input.FileRef` 时为 1。`StartBy` 取预设的窗口、否则 `Config.AttemptWindow`。`Input.Auto`、`Input.Free` 不用 `Models`，在全部模型或快照的 `free` 列表里取候选并跨模型整体排序；`free` 为空时是永久的 `NoEndpoint`（`NoCandidates`）。
 - **条目**带端点、供应商、`Target`（上游名字、规格写法、`Plan` 按 `callFormat` 选的调用格式、`MaxOutput`）、模型、价格版本、输出上限、`Segmentable`、`Limits`（报价用的 `billing.Model`，与过滤用的同一份；`Limits.ID` 必须是条目的 `Model`）和同次构建的 `platform.ExchangeRate` 副本。gateway 用 `DemandOf` 把请求摘要转成报价的 `Demand`，路由比较价格上限用的也是它。

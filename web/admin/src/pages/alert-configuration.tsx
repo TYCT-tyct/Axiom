@@ -8,9 +8,11 @@ import {
   moneyInput,
   PageHead,
   parseMoney,
+  Select,
   SettingRow,
   Stack,
   Tag,
+  Text,
   TextArea,
   useFormat,
 } from "@axiom/ui";
@@ -40,7 +42,37 @@ type Spend = AdminSchemas["SpendDetection"];
 type ConfigInput = Omit<AdminSchemas["AlertConfigurationRequest"], "reason">;
 type Channel = AdminSchemas["AlertChannel"];
 type Rule = AdminSchemas["AlertRule"];
-type Edit = { kind: "configuration" } | { kind: "test" | "secret"; id: string };
+type Edit = { kind: "configuration" | "add" } | { kind: "test"; id: string } | { kind: "secret"; channel: Channel };
+
+// The channel kinds, each named by the one destination member it sets (api/admin.yaml AlertChannel), and the secret it
+// takes: a webhook's signing secret rotates with an hour's overlap, a bot's replaces the old one at once.
+const kinds = {
+  email: { field: "email", secret: undefined },
+  webhook: { field: "webhook_url", secret: "rotate" },
+  feishu: { field: "feishu_url", secret: "botSecret" },
+  wecom: { field: "wecom_url", secret: undefined },
+  telegram: { field: "telegram_chat_id", secret: "botToken" },
+} as const satisfies Record<string, { field: keyof Channel; secret?: "rotate" | "botSecret" | "botToken" }>;
+type Kind = keyof typeof kinds;
+
+// putConfiguration replaces the rules and channels, every form of this page sending the whole configuration it read.
+const putConfiguration = (body: ConfigInput, { key, reason }: { key: string; reason: string }) =>
+  unwrapChange(
+    adminApi.PUT("/api/admin/v1/alerts/configuration", {
+      params: { header: { "Idempotency-Key": key } },
+      body: { ...body, reason },
+      bodySerializer: formatJSON,
+    }),
+  );
+
+// kindOf is the channel's kind and destination: the first destination member it sets.
+function kindOf(channel: Channel): [Kind, string] | undefined {
+  for (const [kind, { field }] of Object.entries(kinds) as [Kind, (typeof kinds)[Kind]][]) {
+    const value = channel[field];
+    if (typeof value === "string" && value) return [kind, value];
+  }
+  return undefined;
+}
 
 // The spend detection's numbers with the bounds of api/admin.yaml (SpendDetection) in the API's own unit and the unit the
 // design writes them in; the floor is billionths of a credit, an int64 kept as written.
@@ -147,13 +179,7 @@ function useSpendDrafts(view: Config) {
       setAlertConfiguration: (values, { reason, key }) => {
         const body = { rev: view.rev ?? 1, rules: view.rules ?? [], channels: view.channels ?? [] } as ConfigInput;
         if (spend) body.spend_detection = spendOf(spend, values);
-        return unwrapChange(
-          adminApi.PUT("/api/admin/v1/alerts/configuration", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-            bodySerializer: formatJSON,
-          }),
-        );
+        return putConfiguration(body, { key, reason });
       },
     },
   });
@@ -188,9 +214,7 @@ function Configuration({ view }: { view: Config }) {
         >
           <Rules rules={view.rules ?? []} />
         </SettingsCard>
-        <SettingsCard scope="platform" title={t("alertConfig.channels")}>
-          <Channels channels={view.channels ?? []} edit={setEdit} />
-        </SettingsCard>
+        <ChannelsCard view={view} edit={setEdit} />
         {spend ? (
           <SettingsCard scope="platform" title={t("alertConfig.spend")}>
             <SwitchSetting drafts={drafts} setting="alerts.spendOn" />
@@ -211,7 +235,8 @@ function Configuration({ view }: { view: Config }) {
       </PageBody>
       {edit?.kind === "configuration" ? <Replace live={view} onClose={close} /> : null}
       {edit?.kind === "test" ? <TestChannel id={edit.id} onClose={close} /> : null}
-      {edit?.kind === "secret" ? <Rotate id={edit.id} live={view} onClose={close} /> : null}
+      {edit?.kind === "add" ? <AddChannel live={view} onClose={close} /> : null}
+      {edit?.kind === "secret" ? <Rotate channel={edit.channel} live={view} onClose={close} /> : null}
     </>
   );
 }
@@ -245,29 +270,58 @@ function Rules({ rules }: { rules: Rule[] }) {
   );
 }
 
+function ChannelsCard({ view, edit }: { view: Config; edit: (value: Edit) => void }) {
+  const { t } = useTranslation();
+  return (
+    <SettingsCard
+      scope="platform"
+      title={t("alertConfig.channels")}
+      actions={
+        <ActionButton size="sm" icon="plus" onClick={() => edit({ kind: "add" })}>
+          {t("alertConfig.add")}
+        </ActionButton>
+      }
+    >
+      <Channels channels={view.channels ?? []} edit={edit} />
+      {view.admin_origin ? (
+        <Text size="sm" tone="faint">
+          {t("alertConfig.links", { origin: view.admin_origin })}
+        </Text>
+      ) : null}
+    </SettingsCard>
+  );
+}
+
 function Channels({ channels, edit }: { channels: Channel[]; edit: (value: Edit) => void }) {
   const { t } = useTranslation();
   if (!channels.length) return <EmptyState compact title={t("alertConfig.noChannels")} />;
   return (
     <>
-      {channels.map((channel) =>
-        channel.id ? (
+      {channels.map((channel) => {
+        if (!channel.id) return null;
+        const [kind, destination] = kindOf(channel) ?? [undefined, "—"];
+        const secret = kind ? kinds[kind].secret : undefined;
+        return (
           <SettingRow
             key={channel.id}
             title={channel.id}
-            detail={<Code>{channel.email ?? channel.webhook_url ?? "—"}</Code>}
+            detail={
+              <>
+                {kind ? <Tag>{t(`alertConfig.kind.${kind}`)}</Tag> : null} <Code>{destination}</Code>
+              </>
+            }
           >
             <ActionButton size="sm" onClick={() => edit({ kind: "test", id: channel.id ?? "" })}>
               {t("alertConfig.testChannel")}
             </ActionButton>
-            {channel.webhook_url ? (
-              <ActionButton size="sm" onClick={() => edit({ kind: "secret", id: channel.id ?? "" })}>
-                {t("alertConfig.rotate")}
+            {secret ? (
+              <ActionButton size="sm" onClick={() => edit({ kind: "secret", channel })}>
+                {t(`alertConfig.${secret}`)}
               </ActionButton>
             ) : null}
           </SettingRow>
-        ) : null,
-      )}
+        );
+      })}
     </>
   );
 }
@@ -289,6 +343,52 @@ function readConfiguration(live: Config, values: Record<string, string>): Config
   } catch {
     return undefined;
   }
+}
+
+// AddChannel appends one channel to the configuration as it was read; the API checks the destination's form and host.
+function AddChannel({ live, onClose }: { live: Config; onClose: () => void }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const [view, reload] = useSnapshot(live);
+  const [kind, setKind] = useState<Kind>("feishu");
+  const channels = view.channels ?? [];
+  return (
+    <ChangeDialog
+      operation="alert-channel-add"
+      title={t("alertConfig.add")}
+      action={t("alertConfig.add")}
+      intro={<p>{t("alertConfig.addIntro")}</p>}
+      fields={(error) => (
+        <Stack>
+          <Field label={t("alertConfig.channelId")} name="id" maxLength={64} error={errors.field(error, "channels")} />
+          <Select
+            label={t("alertConfig.channelKind")}
+            name="kind"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as Kind)}
+            options={(Object.keys(kinds) as Kind[]).map((value) => ({ value, label: t(`alertConfig.kind.${value}`) }))}
+          />
+          <Field label={t(`alertConfig.destination.${kind}`)} name="destination" spellCheck={false} />
+        </Stack>
+      )}
+      read={({ id = "", destination = "" }) => {
+        const name = id.trim();
+        if (!name || !destination.trim() || channels.some((c) => c.id === name)) {
+          return { problem: t("alertConfig.invalidChannel") };
+        }
+        return {
+          rev: view.rev ?? 1,
+          rules: view.rules ?? [],
+          channels: [...channels, { id: name, [kinds[kind].field]: destination.trim() }],
+          ...(view.spend_detection ? { spend_detection: view.spend_detection } : {}),
+        } as ConfigInput;
+      }}
+      send={putConfiguration}
+      done={() => <p>{t("alertConfig.added")}</p>}
+      reload={reload}
+      onClose={onClose}
+    />
+  );
 }
 
 function Replace({ live, onClose }: { live: Config; onClose: () => void }) {
@@ -322,15 +422,7 @@ function Replace({ live, onClose }: { live: Config; onClose: () => void }) {
         </Stack>
       )}
       read={(values) => readConfiguration(view, values) ?? { problem: t("alertConfig.invalid") }}
-      send={(values, { key, reason }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/alerts/configuration", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...values, reason },
-            bodySerializer: formatJSON,
-          }),
-        )
-      }
+      send={putConfiguration}
       done={() => <p>{t("alertConfig.saved")}</p>}
       reload={reload}
       onClose={onClose}
@@ -365,28 +457,46 @@ function TestChannel({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-// The secret is shown nowhere and replaced whole: a webhook's signing secret rotates, keeping the old one for an hour.
-function Rotate({ id, live, onClose }: { id: string; live: Config; onClose: () => void }) {
+// Each kind's secret: its words, and the bounds the API holds it to (internal/observability channelKinds).
+const secrets = {
+  rotate: { label: "secret", intro: "rotateIntro", problem: "invalidSecret", min: 32, form: undefined },
+  botSecret: { label: "secret", intro: "botSecretIntro", problem: "invalidBotSecret", min: 1, form: undefined },
+  botToken: {
+    label: "token",
+    intro: "botSecretIntro",
+    problem: "invalidToken",
+    min: 1,
+    form: /^\d{1,20}:[\w-]{20,100}$/,
+  },
+} as const;
+
+// The secret is shown nowhere and replaced whole: a webhook's signing secret rotates, keeping the old one for an hour;
+// a bot's signing secret or token replaces the old one at once.
+function Rotate({ channel, live, onClose }: { channel: Channel; live: Config; onClose: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const [view, reload] = useSnapshot(live);
   const rev = view.rev;
-  if (rev === undefined) return null;
+  const id = channel.id ?? "";
+  const kind = kindOf(channel)?.[0];
+  const which = kind ? kinds[kind].secret : undefined;
+  if (rev === undefined || !which) return null;
+  const rule = secrets[which];
   return (
     <ChangeDialog
       operation={`rotate-alert-channel-secret:${id}`}
-      title={t("alertConfig.rotate")}
-      action={t("alertConfig.rotate")}
+      title={t(`alertConfig.${which}`)}
+      action={t(`alertConfig.${which}`)}
       intro={
         <p>
-          {t("alertConfig.rotateIntro")} <Code>{id}</Code>
+          {t(`alertConfig.${rule.intro}`)} <Code>{id}</Code>
         </p>
       }
       diff={[{ label: id, before: t("drafts.secretSet"), after: t("drafts.secretNew") }]}
-      warn={t("alertConfig.rotateWarn")}
+      warn={which === "rotate" ? t("alertConfig.rotateWarn") : undefined}
       fields={(error) => (
         <Field
-          label={t("alertConfig.secret")}
+          label={t(`alertConfig.${rule.label}`)}
           name="secret"
           type="password"
           autoComplete="new-password"
@@ -395,7 +505,8 @@ function Rotate({ id, live, onClose }: { id: string; live: Config; onClose: () =
       )}
       read={({ secret }) => {
         const size = new TextEncoder().encode(secret).length;
-        return secret && size >= 32 && size <= 512 ? secret : { problem: t("alertConfig.invalidSecret") };
+        const fits = secret && size >= rule.min && size <= 512 && (!rule.form || rule.form.test(secret));
+        return fits ? secret : { problem: t(`alertConfig.${rule.problem}`) };
       }}
       send={(secret, { key, reason }) =>
         unwrapChange(

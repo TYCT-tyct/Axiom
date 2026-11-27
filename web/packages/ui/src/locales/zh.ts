@@ -177,6 +177,12 @@ export default {
     verified: "已验证",
     unverified: "未验证",
     quantization: "量化",
+    score: "测评 {{score}}",
+    uptime: "可用（5m / 30m / 1d）",
+    latency: "首字 p50",
+    throughput: "输出 p50",
+    milliseconds: "{{value}} ms",
+    tokensPerSecond: "{{value}} token/秒",
     note: "这是本站的售价；中转端点用匿名代号，不显示供应商名称、上游或成本数据。",
     tierNote: "这是你的账户在当前等级下的价格。",
     item: {

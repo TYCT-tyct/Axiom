@@ -151,6 +151,7 @@ type Endpoint struct {
 	// from quality when the snapshot is built so the routing path reads no lock.
 	LatencyPercentiles    [4]time.Duration
 	ThroughputPercentiles [4]float64
+	Recent                quality.Recent         // what public discovery shows of its recent attempts; routing does not read it
 	Quantization          suppliers.Quantization // the level an admin recorded for this endpoint; empty is unrecorded
 
 	ServiceTiers catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
