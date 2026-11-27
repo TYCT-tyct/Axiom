@@ -115,11 +115,7 @@ func TestOnlyTheSyncMakesAGroupsKey(t *testing.T) {
 	w := newKeyWorld(t)
 	w.makeDuringARound()
 	reach := suppliers.Reach{DB: w.c.open(), Scope: platform}
-	over, stop := context.WithCancel(t.Context())
-	stop()
-	if g, none, err := w.admin.AwaitKey(over, reach, w.c.supplier, w.group); err != nil || none != nil || !g.Selected || g.KeyState != "pending" {
-		t.Fatalf("a wait that ends with no key stored = %+v, %v, %v; want the selected group, pending", g, none, err)
-	}
+	w.expectPending(reach)
 	if err := w.round("second"); err != nil {
 		t.Fatalf("the next round: %v", err)
 	}
@@ -214,5 +210,16 @@ func (w keyWorld) makeDuringARound() {
 	close(w.relay.release)
 	if err := <-fenced; !errors.Is(err, syncer.ErrFenced) {
 		w.t.Fatalf("the round in flight = %v, want fenced out by the change", err)
+	}
+}
+
+// expectPending fails the test unless a make's wait that ends before a key is stored answers the group selected and
+// its key pending, with no credential: what the make's 202 carries.
+func (w keyWorld) expectPending(reach suppliers.Reach) {
+	w.t.Helper()
+	over, stop := context.WithCancel(w.t.Context())
+	stop()
+	if g, none, err := w.admin.AwaitKey(over, reach, w.c.supplier, w.group); err != nil || none != nil || !g.Selected || g.KeyState != "pending" {
+		w.t.Fatalf("a wait that ends with no key stored = %+v, %v, %v; want the selected group, pending", g, none, err)
 	}
 }
