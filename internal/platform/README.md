@@ -40,7 +40,7 @@
 
 ## 出站 HTTP
 
-- `egress.New(egress.Direct)` 是并发安全的客户端，`Via` 经 http、https、socks5 代理；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
+- `egress.New(egress.Direct)` 并发安全，`Via` 经 http(s)、socks5 代理；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
 - DNS 结果全部合格才拨号，直连按 IP 拨，Host 和 SNI 保留原主机；拒绝私网、回环、链路本地、特殊用途段、非 `2000::/3` 的 IPv6、NAT64 知名与本地前缀、Azure 的 `168.63.129.16`，以及 URL 里的映射 IPv6、非常规 IPv4 写法和 zone。
 - 连接合计 10 秒（候选 IP 平分），TLS 握手 10 秒，空闲 90 秒，响应头至多 1 MiB；其余只受调用方期限约束。
 - 部署前提：出站网络没有转向内网的自选 NAT64 前缀。
