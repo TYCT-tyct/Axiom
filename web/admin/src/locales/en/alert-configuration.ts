@@ -54,6 +54,7 @@ export default {
   invalidToken: "Enter the token BotFather gave, such as 123456:ABC…",
   links: "Links in notifications open {{origin}}.",
   balanceLines: "Supplier balance alert lines",
+  editLines: "Edit balance lines",
   balanceLine: "Alerts under this amount, in the unit its balance is read in",
   balanceDefault:
     "A supplier without a line alerts under 5 of its settlement currency: a relay's account balance, and each key that reads its own wallet. Enter lines as a JSON array of supplier_id and threshold.",

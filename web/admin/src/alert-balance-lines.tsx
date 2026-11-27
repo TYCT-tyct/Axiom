@@ -25,7 +25,7 @@ export function BalanceLinesCard({
       title={t("alertConfig.balanceLines")}
       actions={
         <ActionButton size="sm" icon="pencil" onClick={onEdit}>
-          {t("alertConfig.edit")}
+          {t("alertConfig.editLines")}
         </ActionButton>
       }
     >

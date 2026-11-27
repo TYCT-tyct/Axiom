@@ -51,6 +51,7 @@ export default {
   invalidToken: "请填 BotFather 给的令牌，例如 123456:ABC…",
   links: "通知里的链接打开 {{origin}}。",
   balanceLines: "供应商余额告警线",
+  editLines: "编辑余额告警线",
   balanceLine: "余额低于此数时告警，单位与读到的余额相同",
   balanceDefault:
     "没有设告警线的供应商低于 5 个结算币种单位时告警：中转站看账户余额，自带钱包的每把 key 看自己的余额。告警线用 supplier_id 和 threshold 组成的 JSON 数组填写。",
