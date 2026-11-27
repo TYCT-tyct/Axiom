@@ -47,7 +47,7 @@ func (o lineOffer) price(snap *catalog.Snapshot, m catalog.Model, currency strin
 func (p *DirectPlan) offer() lineOffer {
 	return lineOffer{
 		names: p.names(), formats: func(m catalog.Model, name string) []protocol.Format { return p.direct.Formats(p.family, m, name) },
-		unmapped: familyFormats(p.family), serves: p.direct.Type().Serves,
+		unmapped: familyFormats(p.family), serves: p.direct.Type().ServesAt(p.origin, p.r.Currency.String()),
 	}
 }
 

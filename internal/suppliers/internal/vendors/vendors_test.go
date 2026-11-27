@@ -148,17 +148,25 @@ func TestARowSpeaksMessagesOnlyWhereTheKeysBalancePaysForIt(t *testing.T) {
 }
 
 // TestBailiansEntriesAreItsAccountSites: an Alibaba Cloud account settles at its own site's prices in its site's
-// currency wherever its key is used, so Bailian's entries are the two account sites, each named for the person to pick
-// by: a China-site account in yuan at Beijing, whose prices are the China site's yuan list (its Singapore prices are
-// others), and an international-site account in dollars.
+// currency wherever its key is used, so Bailian's entries are named by the account the person picks by: a China-site
+// account in yuan at Beijing, whose prices are the catalog's yuan list; a China-site account in yuan at Singapore,
+// whose prices the catalog does not hold (the yuan list is Beijing's), so the line there sells nothing at a catalog
+// price and its cost is unknown; and an international-site account in dollars.
 func TestBailiansEntriesAreItsAccountSites(t *testing.T) {
 	t.Parallel()
 	want := []adapter.PriceEntry{
 		{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+		{ID: "cn-sg", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号 · 新加坡", Unpriced: true},
 		{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
 	}
-	if diff := cmp.Diff(want, row(t, "bailian").(adapter.Described).Type().Entries); diff != "" {
+	typ := row(t, "bailian").(adapter.Described).Type()
+	if diff := cmp.Diff(want, typ.Entries); diff != "" {
 		t.Errorf("entries (-want +got):\n%s", diff)
+	}
+	for _, e := range want {
+		if serves := typ.ServesAt(e.Origin, e.Currency); (len(serves) == 0) != e.Unpriced {
+			t.Errorf("%s serves %v at its entry", e.ID, serves)
+		}
 	}
 }
 

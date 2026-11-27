@@ -39,6 +39,32 @@ func TestATypeOfAnyAuthorIsNotPricedFromTheCatalog(t *testing.T) {
 	}
 }
 
+// TestAnEntryWhosePricesTheCatalogLacksIsNotPriced: a line of the author's own API connected at an entry whose price
+// list the catalog does not hold (Bailian's China-site account at Singapore, whose yuan prices are not the catalog's
+// Beijing ones) sells the author's model at no catalog price: the endpoint has an unknown cost when connected, after a
+// new ratio and when projected again, and is not routed, though the catalog prices the model in the entry's currency.
+func TestAnEntryWhosePricesTheCatalogLacksIsNotPriced(t *testing.T) {
+	t.Parallel()
+	w := newPastedWorld(t)
+	w.provider.set("sk-good-key", providerKey{models: []string{"stone"}})
+	line := w.connect("regional", "", "sk-good-key")
+	for _, step := range []struct {
+		name string
+		do   func() error
+	}{
+		{"connected", func() error { return nil }},
+		{"a ratio set", func() error { return w.setRatio(line, "0.9") }},
+		{"projected again", func() error {
+			return (&lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}).reproject(t.Context())
+		}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		w.expectRouted(step.name, line, "stone", false)
+	}
+}
+
 // TestALineIsNotPricedFromAnAggregatorsPrice: a direct line of the author's own API sells the author's model at the
 // catalog's reference price unless that price came from OpenRouter's dataset (docs/domains/suppliers-direct.md「成本与线路
 // 倍率」): there it is an aggregator's selling price, for an open-weight model a third-party provider's, not the

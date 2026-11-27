@@ -42,7 +42,7 @@
 | `qianfan` | 百度千帆 | `qianfan.baidubce.com`（CNY） | `/v2` | — | — |
 | `minimax` | MiniMax | `api.minimax.cn`（CNY）、`api.minimax.io`（USD） | `/v1` | `/anthropic` | — |
 | `zhipu` | 智谱 | `open.bigmodel.cn`（CNY）、`api.z.ai`（USD） | `/api/paas/v4` | —（不用 `/api/anthropic`，见「决策与理由」） | — |
-| `bailian` | 阿里云百炼 | 中国站账号：`dashscope.aliyuncs.com`（CNY）；国际站账号：`dashscope-intl.aliyuncs.com`（USD） | `/compatible-mode/v1` | `/apps/anthropic` | — |
+| `bailian` | 阿里云百炼 | 中国站账号：`dashscope.aliyuncs.com`（CNY）；中国站账号 · 新加坡：`dashscope-intl.aliyuncs.com`（CNY，目录无价，成本未知）；国际站账号：`dashscope-intl.aliyuncs.com`（USD） | `/compatible-mode/v1` | `/apps/anthropic` | — |
 | `openrouter` | OpenRouter | `openrouter.ai`（USD） | `/api/v1`，清单 `/api/v1/models/user` | — | — |
 | `siliconflow` | 硅基流动 | `api.siliconflow.cn`（CNY）、`api.siliconflow.com`（USD） | `/v1` | — | — |
 | `xai` | xAI | `api.x.ai`（USD） | `/v1`，含 Responses | — | — |
@@ -135,7 +135,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 | 智谱、百炼按目录的官方价卖，用模型清单检测 | 两家的模型清单要鉴权、不收费，无效 key 回 401（四个地址都实测过）；百炼还卖 DeepSeek、Kimi、GLM 等别家的模型，价是百炼自己的，`serves` 只有 Qwen，这些端点成本未知 |
 | 直连和云线路不用来源为 OpenRouter 数据集的参考价，这样的端点成本未知；官方、LiteLLM、手填照用 | 目录给每个模型选一个价源（[价格以模型选定的来源为准](catalog.md#目录基线)）。OpenRouter 的价是聚合商的卖价，开源权重模型的是第三方服务商的：`glm-5.3` 在那里是每百万 $0.07／$1.40，智谱自己收 $1.40／$4.40，拿它给智谱直连定价会把成本算低，路由以为便宜，毛利虚高。LiteLLM 汇总的是各厂商自己的标价，官方是厂商页面，手填是人确认的数，new-api、sub2api 给直连渠道定价也是人设的数乘倍率；只要求官方会让大多数按 LiteLLM 定价的模型退出直连路由 |
 | 智谱只说 OpenAI 格式，不用 `/api/anthropic` | 智谱的 [API Key 分类管理说明](https://docs.bigmodel.cn/cn/coding-plan/notice/api-key-management)：分开管理之前建的「兼容」key，账号曾有编程套餐时在 `/api/anthropic` 消耗套餐额度、套餐到期后中断服务，而同一把 key 在 `/api/paas/v4` 照常按余额计费；检测走的是后者，验得过的 key 发 Messages 仍会失败，套餐期内按标准价记的成本也不对。Messages 请求由网关转成 Chat |
-| 百炼的入口按账号站点分：中国站账号只在北京地址、人民币，国际站账号在国际地址、美元 | 阿里云账号按所属站点的价和币种结算，与 key 用在哪个地域无关（[阿里云与 Alibaba Cloud 账号说明](https://www.alibabacloud.com/help/en/account/aliyun-vs-alibaba-cloud)）；中国站账号也能用新加坡地址，但那里的价（`qwen3.6-plus` 输入每百万 ¥3.747）不是目录里的人民币价（北京 ¥2），所以中国站入口只给北京。地址分不出账号，入口写明账号由人选；中国站账号的 key 选了国际站入口会按美元价记，这一条只靠人选对 |
+| 百炼的入口按账号站点分：中国站账号在北京（人民币）、中国站账号在新加坡（人民币，成本未知）、国际站账号在国际地址（美元） | 阿里云账号按所属站点的价和币种结算，与 key 用在哪个地域无关（[阿里云与 Alibaba Cloud 账号说明](https://www.alibabacloud.com/help/en/account/aliyun-vs-alibaba-cloud)）。中国站账号在新加坡的价（`qwen3.6-plus` 输入每百万 ¥3.747）不是目录里的人民币价（北京 ¥2）：这个入口照常接入、列模型，但入口标为目录无价（`Unpriced`），端点成本未知、不进路由，等目录有了这张价目表再卖；不卖比按错的价卖好。地址分不出账号，入口写明账号由人选；中国站账号的 key 选了国际站入口会按美元价记，这一条只靠人选对 |
 | 硅基流动不读余额 | 国内站的 `/v1/user/info` 已停用（官方公告），余额读法目前按类型而不是按价目入口声明；端点成本未知时余额也用不上 |
 | 直连的调用面共用 `direct` 包；OpenAI 那一行同时服务 BYOK，按 `kind` 取 | 同一个 `kind` 只能有一个适配器；BYOK 与平台的 OpenAI 线路是同一个调用面 |
 | 供应商带接入方式 `mode`：`relay` 登录中转站或号池，分组是线路；`direct` 贴 key 直连，一条线路；`cloud` 云平台凭证，一条线路 | 线路、凭证、端点、成本计划和路由三种方式共用，不同的只有 key 怎么来、成本从哪来 |

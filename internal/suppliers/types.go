@@ -55,7 +55,7 @@ func (a *Admin) Types(snap *catalog.Snapshot) []TypeView {
 		out[i].Models = make([]int, len(t.Entries))
 		for m := range snap.Models() {
 			for j, e := range t.Entries {
-				if _, priced := (lineOffer{serves: t.Serves}).price(snap, m, e.Currency); priced {
+				if _, priced := (lineOffer{serves: t.ServesAt(e.Origin, e.Currency)}).price(snap, m, e.Currency); priced {
 					out[i].Models[j]++
 				}
 			}

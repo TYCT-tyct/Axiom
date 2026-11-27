@@ -113,11 +113,13 @@ var rows = []direct.Provider{
 		Type: adapter.Type{
 			Kind: "bailian", Name: "阿里云百炼", Vendor: "qwen", Serves: []string{"qwen"}, Group: adapter.GroupDomestic,
 			// An account settles at its own site's prices in its site's currency wherever its key is used, which the
-			// address cannot tell: a China-site key also works at the Singapore address, at the China site's Singapore
-			// prices, which are not its yuan list (Beijing's). So the China-site entry is Beijing alone, and the person
-			// picks the entry of their account.
+			// address cannot tell, so the person picks the entry of their account. A China-site key at the Singapore
+			// address settles in yuan at the China site's Singapore prices, which are not the catalog's yuan list
+			// (Beijing's): that entry is connected and lists its models, but sells none at a catalog price; their cost
+			// is unknown and they are not routed until the catalog holds that list.
 			Entries: []adapter.PriceEntry{
 				{ID: "cn", Origin: "https://dashscope.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号"},
+				{ID: "cn-sg", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "CNY", Account: "中国站（阿里云）账号 · 新加坡", Unpriced: true},
 				{ID: "global", Origin: "https://dashscope-intl.aliyuncs.com", Currency: "USD", Account: "国际站（Alibaba Cloud）账号"},
 			},
 			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,

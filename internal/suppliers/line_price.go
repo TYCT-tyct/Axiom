@@ -125,7 +125,7 @@ func (a *Admin) priceLine(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot,
 	priced := 0
 	for _, e := range endpoints {
 		m, ok := snap.Model(catalog.ModelID(e.ModelID))
-		ref, has := lineOffer{serves: t.Serves}.price(snap, m, currency)
+		ref, has := lineOffer{serves: t.ServesAt(s.Origin, currency)}.price(snap, m, currency)
 		if !ok || !has {
 			if err := q.UnsetProjectedEndpointCost(ctx, tx, store.UnsetProjectedEndpointCostParams{ID: e.ID, Reason: new(string(syncer.CostUnknown))}); err != nil {
 				return 0, fmt.Errorf("take %s out of routing: %w", e.UpstreamName, err)

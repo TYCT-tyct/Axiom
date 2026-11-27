@@ -218,7 +218,7 @@ func (l *lines) project(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot, r
 	if _, _, err := insertLineModels(ctx, tx, q, r.ID, r.GroupID, snap, line.currency, o, has, line.ratio); err != nil {
 		return err
 	}
-	_, err = l.admin.priceLine(ctx, tx, snap, Supplier{ID: r.ID, Kind: r.Kind, SettlementCurrency: r.SettlementCurrency}, r.GroupID, line.ratio)
+	_, err = l.admin.priceLine(ctx, tx, snap, Supplier{ID: r.ID, Kind: r.Kind, Origin: r.Origin, SettlementCurrency: r.SettlementCurrency}, r.GroupID, line.ratio)
 	return err
 }
 
@@ -260,7 +260,7 @@ func (l *lines) offer(ctx context.Context, tx pg.Tx, q *store.Queries, snap *cat
 func directOffer(d adapter.Direct, line pastedLine, names []string) lineOffer {
 	return lineOffer{
 		names: names, formats: func(m catalog.Model, name string) []protocol.Format { return d.Formats(line.family, m, name) },
-		unmapped: familyFormats(line.family), serves: line.t.Serves,
+		unmapped: familyFormats(line.family), serves: line.t.ServesAt(line.Origin, line.currency.String()),
 	}
 }
 
