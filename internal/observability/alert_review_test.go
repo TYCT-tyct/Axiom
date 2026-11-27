@@ -171,7 +171,7 @@ func TestAlertConfigurationReplacementWaitsForEvaluation(t *testing.T) {
 	eventually(t, "configuration update to wait on the evaluation row lock", func() bool {
 		var waiting bool
 		alertTx(t, db, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), `SELECT EXISTS(SELECT FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'UPDATE observability.alert_configuration%')`).Scan(&waiting)
+			return tx.QueryRow(t.Context(), `SELECT EXISTS(SELECT FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type='Lock' AND query LIKE 'UPDATE observability.alert_configuration%')`).Scan(&waiting)
 		})
 		return waiting
 	})

@@ -121,7 +121,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		return s.brokeAggregate(a, relay, e, again, scope)
 	}
 	if s.isStarted() {
-		rec.Result = billing.Committed
+		rec.Result = s.startedResult()
 		s.record(a, true, scope, routing.ReturnToClient)
 		return over, ended{relay: relay, err: e}
 	}
@@ -257,10 +257,32 @@ func (s *session) left(e ended) ended {
 		return e
 	}
 	e.relay, s.part = s.part, nil
-	if s.c.Format != protocol.Messages { // Messages has no stop reason for an error: it answers the error alone
+	// Messages has no stop reason for an error, and Gemini no answer holding content and an error: both answer the
+	// error alone, so what was made did not reach the client.
+	if s.c.Format != protocol.Messages && s.c.gemini == nil {
 		s.ends[len(s.ends)-1].Result = billing.Aggregated
 	}
 	return e
+}
+
+// startedResult is the result of an attempt that failed after its stream began: committed, unless the client was given
+// none of its content, which is not charged as delivered (docs/domains/billing.md「免单规则」).
+func (s *session) startedResult() billing.Result {
+	if s.delivered() {
+		return billing.Committed
+	}
+	return billing.FailedBeforeCommit
+}
+
+// delivered reports whether a stream that began gave the client content of the reply: always, but for a Gemini client,
+// whose stream is Chat's converted and may have given it none (geminiWriter.delivered).
+func (s *session) delivered() bool {
+	if s.c.gemini == nil || s.c.gemini.w == nil {
+		return true
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.c.gemini.w.delivered()
 }
 
 // complete handles the upstream's normal end. After the commit point the stream is done and the call settles before it
@@ -351,7 +373,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
 	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 	if s.isStarted() {
-		rec.Result = billing.Committed
+		rec.Result = s.startedResult()
 		e.relay = relay
 		return over, e
 	}

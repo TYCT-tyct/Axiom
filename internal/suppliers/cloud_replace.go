@@ -116,8 +116,10 @@ func servedRegions(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]string,
 	return regions, nil
 }
 
-// lineExit sets the exit a replacement is checked through and a region it adds is stored with: the one the supplier's
-// credentials share now, direct when they share none.
+// lineExit sets the exit a replacement is checked through and every region it serves is stored with: the one the
+// supplier's credentials share now (direct for a line with none left). Credentials on different exits share none, and
+// ErrMixedEgress refuses the replacement: taking any one of them, direct among them, would move a region to an exit
+// nobody chose for it.
 func (a *Admin) lineExit(ctx context.Context, tx pg.Tx, p *CloudPlan) error {
 	creds, err := store.New().ListCredentialsOf(ctx, tx, p.supplier)
 	if err != nil {
@@ -131,8 +133,7 @@ func (a *Admin) lineExit(ctx context.Context, tx pg.Tx, p *CloudPlan) error {
 		if id := deref(c.EgressID); first {
 			shared, first = id, false
 		} else if id != shared {
-			shared = ""
-			break
+			return ErrMixedEgress
 		}
 	}
 	p.r.EgressID = shared

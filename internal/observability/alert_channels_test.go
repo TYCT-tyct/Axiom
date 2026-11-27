@@ -413,31 +413,49 @@ func saveChannel(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel)
 	})
 }
 
-// TestBotAddressesAreWriteOnly: an address that is a bot's credential is read back only masked, a save that sends the
-// masked form keeps the sealed address, and a masked form is no address for a channel that has none.
-func TestBotAddressesAreWriteOnly(t *testing.T) {
+// TestAddressesAreWriteOnly: an address that may carry a credential, a bot's or a generic webhook's (Slack's and
+// Discord's carry a token in their path, a workflow's trigger in its host), is read back only masked, a save that sends the masked form keeps the sealed
+// address, and a masked form is no address for a channel that has none.
+func TestAddressesAreWriteOnly(t *testing.T) {
 	db := openDB(t)
 	keys := webhookTestKeys(t)
-	configureBot(t, db, keys, AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, "", time.Now())
-	c := readAlertConfig(t, db)
-	raw, err := jsonx.MarshalCanonical(c)
-	if err != nil || strings.Contains(string(raw), wecomKey) || c.Channels[0].WeComURL != "https://qyapi.weixin.qq.com/…6789" {
-		t.Fatalf("configuration shows the address: %s %v", raw, err)
-	}
-	digest := c.Channels[0].AddressDigest
+	const hookPath = "T000/B000/XXXXabcd4321"
 	for _, tc := range []struct {
-		ch   AlertChannel
-		want error
+		ch     AlertChannel
+		secret string
+		masked string
 	}{
-		{AlertChannel{ID: "wc", WeComURL: c.Channels[0].WeComURL}, nil},
-		{AlertChannel{ID: "other", WeComURL: c.Channels[0].WeComURL}, ErrAlertConfiguration},
+		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, wecomKey, "https://qyapi.weixin.qq.com/…6789"},
+		{AlertChannel{ID: "hook", WebhookURL: "https://hooks.slack.com/services/" + hookPath}, hookPath, "https://…/…4321"},
+		// The host may be the part that is secret, and the last characters are counted as characters, not bytes.
+		{AlertChannel{ID: "flow", WebhookURL: "https://eo1a2b3c4d.m.pipedream.net/告警"}, "eo1a2b3c4d", "https://…/…警"},
+		// The last characters come from the path and query only, never more than half of them, so a short one or none
+		// tells nothing of the host either.
+		{AlertChannel{ID: "bare", WebhookURL: "https://x.ai"}, "x.ai", "https://…/…"},
+		{AlertChannel{ID: "short", WebhookURL: "https://x.ai/ab"}, "x.ai", "https://…/…b"},
 	} {
-		if err := saveChannel(t, db, keys, tc.ch); !errors.Is(err, tc.want) {
-			t.Errorf("%s: %v, want %v", tc.ch.ID, err, tc.want)
+		configureBot(t, db, keys, tc.ch, "", time.Now())
+		c := readAlertConfig(t, db)
+		raw, err := jsonx.MarshalCanonical(c)
+		_, address, _ := kindOf(c.Channels[0])
+		if err != nil || strings.Contains(string(raw), tc.secret) || address != tc.masked {
+			t.Fatalf("%s: configuration shows the address: %s %v", tc.ch.ID, raw, err)
 		}
-	}
-	if got := readAlertConfig(t, db).Channels[0].AddressDigest; got != digest {
-		t.Errorf("resaving the masked address changed it: %s, want %s", got, digest)
+		digest := c.Channels[0].AddressDigest
+		again, other := c.Channels[0], c.Channels[0]
+		other.ID, other.AddressDigest = "other", ""
+		again.AddressDigest = ""
+		for _, save := range []struct {
+			ch   AlertChannel
+			want error
+		}{{again, nil}, {other, ErrAlertConfiguration}} {
+			if err := saveChannel(t, db, keys, save.ch); !errors.Is(err, save.want) {
+				t.Errorf("%s as %s: %v, want %v", tc.ch.ID, save.ch.ID, err, save.want)
+			}
+		}
+		if got := readAlertConfig(t, db).Channels[0].AddressDigest; got != digest {
+			t.Errorf("%s: resaving the masked address changed it: %s, want %s", tc.ch.ID, got, digest)
+		}
 	}
 }
 

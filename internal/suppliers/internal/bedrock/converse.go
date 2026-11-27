@@ -10,7 +10,9 @@ import (
 // A model on Bedrock that is not Anthropic's is called through Converse
 // (https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html), which the gateway reaches in
 // Chat: converse turns a Chat Completions body into Converse's, and converseanswer.go turns the answer back. A Chat
-// member Converse has no word for is refused, not dropped: a body that would lose a parameter is not sent.
+// member that cannot change the answer is dropped and one Converse can say is said; one that could change it and that
+// Converse cannot say is refused, never dropped, and another endpoint is tried (Sign), as protocol refuses the same
+// members in Messages: a body that would lose what the client asked of the answer is not sent.
 
 // errUnconvertible is a Chat body Converse cannot say.
 var errUnconvertible = errors.New("bedrock: the Chat body has no Converse form")
@@ -28,20 +30,42 @@ type chatRequest struct {
 	Tools               []chatTool    `json:"tools"`
 	ToolChoice          jsonx.Raw     `json:"tool_choice"`
 	ParallelToolCalls   *bool         `json:"parallel_tool_calls"`
-	// Read and not sent: the model is in the path, a Converse stream always ends with its usage, and the identifiers
-	// are the gateway's opaque ones, which Converse has no member for and which change no answer.
+	ReasoningEffort     *string       `json:"reasoning_effort"`
+	// Read and refused unless absent or Chat's default (inert): Converse has no member for them, and any other value
+	// asks for an answer it cannot give: several choices, token probabilities, a seed, a penalty or bias in sampling,
+	// audio, a tier, a verbosity or a reply format.
+	N                jsonx.Raw `json:"n"`
+	Seed             jsonx.Raw `json:"seed"`
+	Logprobs         jsonx.Raw `json:"logprobs"`
+	FrequencyPenalty jsonx.Raw `json:"frequency_penalty"`
+	PresencePenalty  jsonx.Raw `json:"presence_penalty"`
+	LogitBias        jsonx.Raw `json:"logit_bias"`
+	Modalities       jsonx.Raw `json:"modalities"`
+	ServiceTier      jsonx.Raw `json:"service_tier"`
+	Verbosity        jsonx.Raw `json:"verbosity"`
+	ResponseFormat   jsonx.Raw `json:"response_format"`
+	// Read and not sent, as they cannot change the answer: the model is in the path, a Converse stream always ends with
+	// its usage, the identifiers are the gateway's opaque ones, top_logprobs says nothing without logprobs, and storing
+	// and its metadata are OpenAI's own.
 	Model            jsonx.Raw `json:"model"`
 	StreamOptions    jsonx.Raw `json:"stream_options"`
 	User             jsonx.Raw `json:"user"`
 	SafetyIdentifier jsonx.Raw `json:"safety_identifier"`
 	PromptCacheKey   jsonx.Raw `json:"prompt_cache_key"`
+	TopLogprobs      jsonx.Raw `json:"top_logprobs"`
+	Store            jsonx.Raw `json:"store"`
+	Metadata         jsonx.Raw `json:"metadata"`
 }
 
 type chatMessage struct {
 	Role       string     `json:"role"`
+	Name       string     `json:"name"`
 	Content    jsonx.Raw  `json:"content"`
 	ToolCalls  []chatCall `json:"tool_calls"`
 	ToolCallID string     `json:"tool_call_id"`
+	// Read and not sent: an earlier answer's reasoning, as the answer gave it (converseanswer.go), has no signature to
+	// replay it with, and a model reasons afresh each turn.
+	ReasoningContent jsonx.Raw `json:"reasoning_content"`
 }
 
 type chatCall struct {
@@ -78,6 +102,7 @@ type converseRequest struct {
 	System          []textBlock       `json:"system,omitzero"`
 	InferenceConfig inferenceConfig   `json:"inferenceConfig,omitzero"`
 	ToolConfig      toolConfig        `json:"toolConfig,omitzero"`
+	Additional      additional        `json:"additionalModelRequestFields,omitzero"`
 }
 
 type converseMessage struct {
@@ -157,11 +182,14 @@ type named struct {
 // noParameters is the schema of a function that declares none: Converse requires one.
 var noParameters = jsonx.Raw(`{"type":"object","properties":{}}`)
 
-// converse is the Converse body of a Chat body, and whether it asks for a stream. parallel_tool_calls may only be
-// true: Converse cannot hold a model to one call at a time.
-func converse(body []byte) ([]byte, bool, error) {
+// converse is the Converse body of a Chat body for model, and whether it asks for a stream. parallel_tool_calls may
+// only be true when there are tools: Converse cannot hold a model to one call at a time.
+func converse(body []byte, model string) ([]byte, bool, error) {
 	var in chatRequest
-	if jsonx.UnmarshalKnown(body, &in) != nil || in.ParallelToolCalls != nil && !*in.ParallelToolCalls {
+	if jsonx.UnmarshalKnown(body, &in) != nil || !inert(in) {
+		return nil, false, errUnconvertible
+	}
+	if in.ParallelToolCalls != nil && !*in.ParallelToolCalls && len(in.Tools) > 0 {
 		return nil, false, errUnconvertible
 	}
 	var out converseRequest
@@ -175,6 +203,9 @@ func converse(body []byte) ([]byte, bool, error) {
 	if out.ToolConfig, err = tools(in.Tools, in.ToolChoice); err != nil {
 		return nil, false, err
 	}
+	if out.Additional, err = reasoning(model, in.ReasoningEffort, out.InferenceConfig); err != nil {
+		return nil, false, err
+	}
 	b, err := jsonx.MarshalCanonical(out)
 	return b, in.Stream, err
 }
@@ -184,7 +215,7 @@ func converse(body []byte) ([]byte, bool, error) {
 func conversation(messages []chatMessage) ([]textBlock, []converseMessage, error) {
 	var system []textBlock
 	for len(messages) > 0 && (messages[0].Role == "system" || messages[0].Role == "developer") {
-		texts, err := textsOf(messages[0].Content)
+		texts, err := textsOf(messages[0].parts())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -220,10 +251,10 @@ func turnsOf(messages []chatMessage) ([]converseMessage, error) {
 func turn(m chatMessage) (string, []block, error) {
 	switch {
 	case m.Role == "user" && m.ToolCalls == nil && m.ToolCallID == "":
-		blocks, err := userBlocks(m.Content)
+		blocks, err := userBlocks(m.parts())
 		return "user", blocks, err
 	case m.Role == "tool" && m.ToolCalls == nil && m.ToolCallID != "":
-		texts, err := textsOf(m.Content)
+		texts, err := textsOf(m.parts())
 		if err != nil {
 			return "", nil, err
 		}
@@ -237,7 +268,7 @@ func turn(m chatMessage) (string, []block, error) {
 
 // assistantBlocks is what the assistant said, then the calls it made.
 func assistantBlocks(m chatMessage) ([]block, error) {
-	texts, err := textsOf(m.Content)
+	texts, err := textsOf(m.parts())
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +293,7 @@ func assistantBlocks(m chatMessage) ([]block, error) {
 
 // userBlocks is a user message's content: text, and images given inline as a data URL, which Converse takes as bytes;
 // an image by address, which Bedrock does not fetch, is refused.
-func userBlocks(content jsonx.Raw) ([]block, error) {
-	parts, err := partsOf(content)
+func userBlocks(parts []chatPart, err error) ([]block, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +321,7 @@ func userBlock(p chatPart) (block, error) {
 			return block{}, nil
 		}
 		return block{Text: p.Text}, nil
-	case p.Type == "image_url" && p.ImageURL != nil && p.Text == nil:
+	case p.Type == "image_url" && p.ImageURL != nil && p.Text == nil && p.ImageURL.Detail != "low": // no low detail
 		img, err := imageOf(p.ImageURL.URL)
 		return block{Image: img}, err
 	}
@@ -314,8 +344,7 @@ func imageOf(url string) (*image, error) {
 }
 
 // textsOf is a content that may only be text: a string, or text parts.
-func textsOf(content jsonx.Raw) ([]textBlock, error) {
-	parts, err := partsOf(content)
+func textsOf(parts []chatPart, err error) ([]textBlock, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +360,25 @@ func textsOf(content jsonx.Raw) ([]textBlock, error) {
 
 // absent says a member is missing or null.
 func absent(v jsonx.Raw) bool { return len(v) == 0 || v.Kind() == 'n' }
+
+// parts is the message's content as parts. Its name, which Converse has no member for, goes before its first text as
+// "name: ", or is a text of its own when it has none, as protocol writes a name in Messages; a tool result's name is
+// its call's, which its ID already says.
+func (m chatMessage) parts() ([]chatPart, error) {
+	parts, err := partsOf(m.Content)
+	if err != nil || m.Name == "" || m.Role == "tool" {
+		return parts, err
+	}
+	for i, p := range parts {
+		if p.Type == "text" && p.Text != nil {
+			named := m.Name + ": " + *p.Text
+			parts[i].Text = &named
+			return parts, nil
+		}
+	}
+	named := m.Name + ": "
+	return append([]chatPart{{Type: "text", Text: &named}}, parts...), nil
+}
 
 // partsOf is a content as parts: a string is one text part, none or null no part.
 func partsOf(content jsonx.Raw) ([]chatPart, error) {

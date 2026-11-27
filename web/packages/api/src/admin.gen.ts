@@ -2283,7 +2283,7 @@ export interface paths {
         get?: never;
         /**
          * Replace a cloud supplier's credential, or the regions it serves from
-         * @description Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes in at least one, seals it in place of the old one in the same change: the regions that passed are the supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and a region that failed or was left out is erased. Azure OpenAI's new key serves the deployments named when the supplier was connected. Calls in flight end with the credential they hold. When it passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409 for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the regions, never the credential.
+         * @description Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes in at least one, seals it in place of the old one in the same change: the regions that passed are the supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and a region that failed or was left out is erased. Azure OpenAI's new key serves the deployments named when the supplier was connected. Calls in flight end with the credential they hold. When it passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409 for another supplier. The new credential is checked and stored through the exit the supplier's credentials share; 409 when they use different ones. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the regions, never the credential.
          */
         put: operations["replaceSupplierCloudCredential"];
         post?: never;
@@ -4347,10 +4347,7 @@ export interface components {
             id?: string;
             /** Format: email */
             email?: string;
-            /**
-             * Format: uri
-             * @description HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
-             */
+            /** @description HTTPS destination, exclusive with email. A webhook's address may carry a token (Slack's and Discord's do, in the path; some in the host), so it is stored sealed and read back masked, host included (https://…/…<at most the last 4 characters of the path and query, never more than half>); sending the masked form back keeps the stored address. Configure only after all nodes support webhooks; set its signing secret before use. */
             webhook_url?: string;
             /** @description A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots. */
             feishu_url?: string;

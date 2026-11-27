@@ -26,10 +26,13 @@ import (
 type channelKind struct {
 	name  string
 	field func(*AlertChannel) *string // the member that names the kind, empty when ch is of another kind
-	// addressSecret is set for a bot whose address is its credential: it is sealed apart (SealAlertAddresses).
+	// addressSecret is set for a destination whose address is or may carry a credential (a bot's key or hook token, a
+	// generic webhook's path token): it is sealed apart (SealAlertAddresses).
 	addressSecret bool
-	check         func(string) (host string, err error) // the destination's form, and the host a post connects to
-	secret        secretRule
+	// hideHost is set for a kind whose host may be the secret, any host being allowed: its masked form shows none of it.
+	hideHost bool
+	check    func(string) (host string, err error) // the destination's form, and the host a post connects to
+	secret   secretRule
 	// post is the request that delivers text on ch with the channel's live secrets, nil for email. Webhook posts the
 	// frozen signed event instead (webhookWorker.send).
 	post func(ctx context.Context, ch AlertChannel, text string, keys []secret.Secret, now time.Time) (*http.Request, error)
@@ -60,7 +63,7 @@ const telegramAPI = "https://api.telegram.org"
 var channelKinds = []channelKind{
 	{name: "email", field: func(c *AlertChannel) *string { return &c.Email }, check: checkEmail},
 	{
-		name: "webhook", field: func(c *AlertChannel) *string { return &c.WebhookURL }, check: httpsHost(),
+		name: "webhook", field: func(c *AlertChannel) *string { return &c.WebhookURL }, check: httpsHost(), addressSecret: true, hideHost: true,
 		secret: secretRule{min: 32, max: 512, required: true, overlap: time.Hour}, // the receiver checks either while it switches
 	},
 	{
@@ -93,15 +96,16 @@ func kindOf(ch AlertChannel) (*channelKind, string, bool) {
 }
 
 // destination is what ch's self-test and secrets are bound to: changing it tests the channel again and leaves the
-// secrets of the old one behind. Email and webhook are their address alone, as they were before the other kinds; the
-// others carry their kind, so that one value can never name two kinds; a sealed address is its digest.
+// secrets of the old one behind. A sealed address is its digest, the same whether the address is open or masked; email
+// is its address alone, as it was before the other kinds; the others carry their kind, so that one value can never
+// name two kinds.
 func destination(ch AlertChannel) string {
 	k, dest, ok := kindOf(ch)
 	switch {
-	case !ok || k.name == "email" || k.name == "webhook":
-		return dest
-	case k.addressSecret:
+	case ok && k.addressSecret:
 		return k.name + ":" + ch.AddressDigest
+	case !ok || k.name == "email":
+		return dest
 	}
 	return k.name + ":" + dest
 }

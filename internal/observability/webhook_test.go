@@ -41,6 +41,8 @@ func webhookTestKeys(t *testing.T) *secret.Keyring {
 	return keys
 }
 
+// configureWebhook saves a webhook channel to destination as an admin's save does, its address sealed, with a signing
+// secret, and returns the channel as saved.
 func configureWebhook(t *testing.T, db *pg.DB, destination string, keys *secret.Keyring, now time.Time) AlertChannel {
 	t.Helper()
 	ch := AlertChannel{ID: "hook", WebhookURL: destination}
@@ -51,6 +53,10 @@ func configureWebhook(t *testing.T, db *pg.DB, destination string, keys *secret.
 		}
 		c.Channels = []AlertChannel{ch}
 		c.Rules = []AlertRule{{ID: "hook-rule", Kind: "test.failure", Channel: ch.ID, MinimumSeverity: "warning", Threshold: 1}}
+		if err = SealAlertAddresses(t.Context(), tx, keys, &c); err != nil {
+			return err
+		}
+		ch = c.Channels[0]
 		if err = SetAlertConfiguration(t.Context(), tx, c); err != nil {
 			return err
 		}
@@ -160,7 +166,7 @@ func TestWebhookSignatureRotationAndDestinationIsolation(t *testing.T) {
 			}
 			assertRotationSignature(t, values, tc.at, tc.old)
 			other := ch
-			other.WebhookURL = "https://other.example/hook"
+			other.AddressDigest = addressDigest(ch.ID, "https://other.example/hook")
 			values, err = readWebhookKeys(t.Context(), tx, keys, other, tc.at)
 			if len(values) != 0 {
 				t.Error("key crossed destination")
@@ -287,9 +293,9 @@ func TestWebhookKeyCannotBeRelabelledToAnotherDestination(t *testing.T) {
 	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
 	ch := configureWebhook(t, db, "https://receiver.example/hook", keys, now)
 	other := ch
-	other.WebhookURL = "https://other.example/hook"
+	other.AddressDigest = addressDigest(ch.ID, "https://other.example/hook")
 	alertTx(t, db, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), `UPDATE observability.webhook_keys SET destination=$1`, other.WebhookURL)
+		_, err := tx.Exec(t.Context(), `UPDATE observability.webhook_keys SET destination=$1`, destination(other))
 		return err
 	})
 	err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error { _, err := readWebhookKeys(t.Context(), tx, keys, other, now); return err })

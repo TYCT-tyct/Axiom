@@ -111,7 +111,7 @@ type Service struct {
 	reloadMu   sync.Mutex // one Reload at a time; no call takes it
 	generation uint64     // guarded by reloadMu; the next snapshot's generation
 	// exits are the proxies' clients the last Reload handed out; guarded by reloadMu.
-	exits map[egress.Proxy]*egress.Client
+	exits map[string]proxyClient
 	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.

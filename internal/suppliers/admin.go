@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 	"uuid"
 
@@ -99,6 +100,9 @@ type Admin struct {
 	egress   *egress.Client
 	now      func() time.Time
 	byok     bool
+
+	exitsMu sync.Mutex
+	exits   map[string]proxyClient // the proxies' clients its checks and re-lists went through; guarded by exitsMu
 }
 
 // AdminConfig is what the admin side needs.

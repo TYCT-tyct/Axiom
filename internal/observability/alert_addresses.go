@@ -18,13 +18,24 @@ const maskMark = "/…"
 // masked reports whether an address is the masked form the configuration returns, not one that can be posted to.
 func masked(address string) bool { return strings.Contains(address, maskMark) }
 
-// maskAddress is what the configuration shows of a sealed address: its host and its last four characters.
-func maskAddress(address string) string {
+// maskAddress is what the configuration shows of a sealed address: its host, unless the host may itself be the
+// secret (a generic webhook's, which a receiver can make unguessable), and the last characters of its path and query,
+// whole runes: four at most and never more than half of them, so a short path is not shown whole and none shows none.
+func maskAddress(address string, hideHost bool) string {
 	u, err := url.Parse(address)
 	if err != nil {
 		return maskMark
 	}
-	return "https://" + u.Host + maskMark + address[max(0, len(address)-4):]
+	host := u.Host
+	if hideHost {
+		host = "…"
+	}
+	rest := strings.TrimPrefix(u.Path, "/")
+	if u.RawQuery != "" {
+		rest += "?" + u.RawQuery
+	}
+	r := []rune(rest)
+	return "https://" + host + maskMark + string(r[len(r)-min(4, len(r)/2):])
 }
 
 func addressDigest(channel, address string) string {
@@ -36,8 +47,8 @@ func addressLocation(id string) secret.Location {
 	return secret.Location{Table: "observability.channel_addresses", RowID: id, Purpose: "address"}
 }
 
-// SealAlertAddresses keeps out of c every address that is a bot's credential (a WeCom key, a Feishu hook's token): a
-// new address is sealed, and c holds its masked form and digest instead; a masked one stands for the address the same
+// SealAlertAddresses keeps out of c every address that is or may carry a credential (a WeCom key, a Feishu hook's
+// token, a generic webhook's path token): a new address is sealed, and c holds its masked form and digest instead; a masked one stands for the address the same
 // channel already has, and is refused for any other. Call it in the transaction that then saves c.
 func SealAlertAddresses(ctx context.Context, tx pg.Tx, keys *secret.Keyring, c *AlertConfiguration) error {
 	held, err := readAlertConfiguration(ctx, tx, false)
@@ -80,7 +91,7 @@ func sealAddress(ctx context.Context, tx pg.Tx, keys *secret.Keyring, ch *AlertC
  VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO NOTHING`, id, ch.ID, ch.AddressDigest, s.Ciphertext, s.Nonce, s.WrappedDEK, int64(s.KeyVersion)); err != nil {
 		return err
 	}
-	*k.field(ch) = maskAddress(address)
+	*k.field(ch) = maskAddress(address, k.hideHost)
 	return nil
 }
 
@@ -91,7 +102,7 @@ func sendable(k *channelKind, dest string) bool {
 	return err == nil && !masked(dest)
 }
 
-// openAddress puts the sealed address back into ch, a bot channel whose address is its credential, for its post.
+// openAddress puts the sealed address back into ch, a channel whose address is sealed, for its post.
 func openAddress(ctx context.Context, tx pg.Tx, keys *secret.Keyring, ch *AlertChannel) error {
 	k, _, ok := kindOf(*ch)
 	if !ok || !k.addressSecret {

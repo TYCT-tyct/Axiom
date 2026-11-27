@@ -79,8 +79,8 @@ func TestWebhookPermanentFailureDoesNotUseRetries(t *testing.T) {
 			configureWebhook(t, db, "https://receiver.example/hook", keys, now)
 			id := queuedWebhook(t, db, now)
 			alertTx(t, db, func(tx pg.Tx) error {
-				if invalid {
-					_, err := tx.Exec(t.Context(), `UPDATE observability.alert_receipts SET channel=jsonb_set(channel,'{webhook_url}','"http://receiver.example"') WHERE id=$1`, id)
+				if invalid { // the sealed address is gone: what is left is its masked form, no address to post to
+					_, err := tx.Exec(t.Context(), `DELETE FROM observability.channel_addresses`)
 					return err
 				}
 				_, err := tx.Exec(t.Context(), `DELETE FROM observability.webhook_keys`)
