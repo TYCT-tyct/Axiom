@@ -69,11 +69,17 @@ func TestChatBecomesConverse(t *testing.T) {
 			{"toolSpec":{"name":"time","inputSchema":{"json":{"type":"object","properties":{}}}}}],"toolChoice":{"tool":{"name":"weather"}}}}`,
 		},
 		{
-			"the members that change no answer, and the defaults",
-			`{"messages":[{"role":"user","content":"Hi"}],"seed":7,"store":true,"metadata":{"k":"v"},"top_logprobs":2,"n":1,"logprobs":false,
+			"the members that cannot change the answer, and the defaults",
+			`{"messages":[{"role":"user","content":"Hi"}],"seed":null,"store":true,"metadata":{"k":"v"},"top_logprobs":2,"n":1,"logprobs":false,
 			"frequency_penalty":0,"presence_penalty":0.0,"logit_bias":{ },"modalities":["text"],"service_tier":"auto","response_format":{"type":"text"},
-			"reasoning_effort":"high"}`,
+			"reasoning_effort":"","parallel_tool_calls":false}`,
 			base + "converse", `{"messages":[{"role":"user","content":[{"text":"Hi"}]}]}`,
+		},
+		{
+			"an earlier turn's reasoning, which is not sent back",
+			`{"messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","reasoning_content":"Greet back."},{"role":"user","content":"Again"}]}`,
+			base + "converse",
+			`{"messages":[{"role":"user","content":[{"text":"Hi"}]},{"role":"assistant","content":[{"text":"Hello"}]},{"role":"user","content":[{"text":"Again"}]}]}`,
 		},
 		{
 			"names",
@@ -89,19 +95,23 @@ func TestChatBecomesConverse(t *testing.T) {
 		{"several choices", `{"messages":[{"role":"user","content":"Hi"}],"n":2}`, "", ""},
 		{"token probabilities", `{"messages":[{"role":"user","content":"Hi"}],"logprobs":true}`, "", ""},
 		{"a penalty", `{"messages":[{"role":"user","content":"Hi"}],"frequency_penalty":0.5}`, "", ""},
+		{"a presence penalty", `{"messages":[{"role":"user","content":"Hi"}],"presence_penalty":-1}`, "", ""},
+		{"a seed", `{"messages":[{"role":"user","content":"Hi"}],"seed":7}`, "", ""},
+		{"a low-detail image", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0K","detail":"low"}}]}]}`, "", ""},
+		{"an effort the model has no word for", `{"messages":[{"role":"user","content":"Hi"}],"reasoning_effort":"none"}`, "", ""},
 		{"a JSON reply", `{"messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_object"}}`, "", ""},
 		{"a reply schema", `{"messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"r","strict":true,"schema":{}}}}`, "", ""},
 		{"a member Chat does not define", `{"messages":[{"role":"user","content":"Hi"}],"top_k":5}`, "", ""},
 		{"a member of a message it has none for", `{"messages":[{"role":"user","audio":{"id":"a"},"content":"Hi"}]}`, "", ""},
 		{"no tool call allowed", `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"none"}`, "", ""},
 		{"a strict schema", `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f","strict":true}}]}`, "", ""},
-		{"one call at a time", `{"messages":[{"role":"user","content":"Hi"}],"parallel_tool_calls":false}`, "", ""},
+		{"one call at a time", `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"parallel_tool_calls":false}`, "", ""},
 		{"an audio part", `{"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`, "", ""},
 	} {
 		signsAs(t, tc.name, "amazon.nova-pro-v1:0", tc.body, tc.url, tc.want)
 	}
-	// Nova 2 Lite takes the effort as its extended thinking, the nearest level it has; its high effort beside an output
-	// cap, which Nova refuses, goes elsewhere.
+	// Nova 2 Lite takes the effort as its extended thinking, the nearest level it has, and none as its default, no
+	// thinking; its high effort beside an output cap, which Nova refuses, goes elsewhere.
 	const nova2 = "us.amazon.nova-2-lite-v1:0"
 	const lite = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1%3A0/converse"
 	const hi = `{"role":"user","content":"Hi"}`

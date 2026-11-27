@@ -23,7 +23,7 @@ type reasoningConfig struct {
 }
 
 // inert reports whether each member Converse has no word for is absent or holds Chat's default (OpenAI《Create chat
-// completion》), compared in canonical form; verbosity has no value that asks for nothing.
+// completion》), compared in canonical form; a seed and a verbosity have no value that asks for nothing.
 func inert(in chatRequest) bool {
 	for _, m := range []struct {
 		v        jsonx.Raw
@@ -37,6 +37,7 @@ func inert(in chatRequest) bool {
 		{in.Modalities, []string{`["text"]`}},
 		{in.ServiceTier, []string{`"auto"`, `"default"`}},
 		{in.ResponseFormat, []string{`{"type":"text"}`}},
+		{in.Seed, nil},
 		{in.Verbosity, nil},
 	} {
 		if absent(m.v) {
@@ -53,13 +54,17 @@ func inert(in chatRequest) bool {
 // default, no reasoning.
 var novaEfforts = map[string]string{"none": "", "minimal": "low", "low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
 
-// reasoning is the model's own parameters for a Chat reasoning_effort, none for model if it takes none. Nova 2 Lite is the one model behind
-// Converse that takes an effort; to any other the effort asks nothing it can act on, and it is dropped. Nova refuses its
-// high effort beside an output cap or a sampling, and every call the gateway sends has a cap, so that effort goes to
-// another endpoint rather than to an error from Bedrock.
+// reasoning is the model's own parameters for a Chat reasoning_effort, none for none set (an empty one is none, as in
+// protocol). Nova 2 Lite is the one model behind Converse whose effort is mapped; for any other a model may reason by
+// default or not, so no effort can be said to it and one is refused. Nova refuses its high effort beside an output cap
+// or a sampling, and every call the gateway sends has a cap, so that effort goes to another endpoint rather than to an
+// error from Bedrock.
 func reasoning(model string, effort *string, c inferenceConfig) (additional, error) {
-	if effort == nil || !strings.Contains(model, "amazon.nova-2-lite") {
+	if effort == nil || *effort == "" {
 		return additional{}, nil
+	}
+	if !strings.Contains(model, "amazon.nova-2-lite") {
+		return additional{}, errUnconvertible
 	}
 	level, ok := novaEfforts[*effort]
 	switch {
