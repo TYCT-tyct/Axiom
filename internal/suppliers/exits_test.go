@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -74,6 +76,48 @@ func TestACredentialCallsThroughItsProxy(t *testing.T) {
 	if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoEndpoint) {
 		t.Fatalf("a proxy whose password does not open: %v, want the supplier left out", err)
 	}
+}
+
+// TestAdminChecksReuseAProxysClient: the admin side's checks through a proxy share its client while the proxy is
+// unchanged, so a second check reuses the first's connection rather than opening a tunnel of its own, and a changed
+// proxy gets a new one.
+func TestAdminChecksReuseAProxysClient(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	server, proxy := newSupplierServer(t), newConnectProxy(t)
+	admin, who := w.adminOf(), audit.System("test")
+	spec := EgressProxySpec{ID: "hk", Scheme: "http", Host: "127.0.0.1", Port: proxy.port(), Set: EgressProxyChange{Name: "hk", Status: "active"}}
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := admin.CreateEgressProxy(ctx, tx, who, spec, "r")
+		return err
+	})
+	check := func(what string, want int) {
+		t.Helper()
+		var exit *egress.Client
+		w.tx(func(ctx context.Context, tx pg.Tx) (err error) { exit, err = admin.exitFor(ctx, tx, "hk"); return err })
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, strings.NewReader("ok"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := exit.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // read to the end so the connection is reused
+		_ = resp.Body.Close()                 //nolint:errcheck // as above
+		if n, _ := proxy.seen(); n != want {
+			t.Fatalf("%s: the proxy opened %d tunnels, want %d", what, n, want)
+		}
+	}
+	check("the first check", 1)
+	check("the second check", 1)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := admin.UpdateEgressProxy(ctx, tx, who, "hk", EgressProxyChange{Name: "hk", Status: "active", Auth: &ProxyAuth{Username: "u", Password: new(secret.New("p"))}}, "r")
+		return err
+	})
+	check("a check after the proxy changed", 2)
 }
 
 // sendOK sends a call the supplier answers, and fails the test unless it came back answered through egress.
