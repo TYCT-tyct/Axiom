@@ -197,7 +197,7 @@ func TestAStateSurvivesBeingStored(t *testing.T) {
 
 	for name, update := range map[string]string{
 		"a member this program does not know": `UPDATE suppliers.sync_states SET state = state || '{"Unknown": true}'`,
-		"a format this program does not read": `UPDATE suppliers.sync_states SET format = 3`,
+		"a format this program does not read": `UPDATE suppliers.sync_states SET format = 4`,
 	} {
 		err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
 			_, err := tx.Exec(t.Context(), update)

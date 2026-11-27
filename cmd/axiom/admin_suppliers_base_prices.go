@@ -49,6 +49,13 @@ func basePriceItems(b *adminapi.BasePriceConfirmation) ([]suppliers.BasePriceIte
 			return nil, err
 		}
 		items[i].BaseModel = model
+		if it.ModelId != nil {
+			expect, err := idIn(fmt.Sprintf("/items/%d/model_id", i), *it.ModelId)
+			if err != nil {
+				return nil, err
+			}
+			items[i].Expect = &expect
+		}
 		if it.Price == nil {
 			continue
 		}

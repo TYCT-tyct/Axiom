@@ -22,7 +22,7 @@ type officialPrices map[catalog.ModelID]catalog.Schedule
 
 func (o officialPrices) ReferencePrice(id catalog.ModelID, currency string) (catalog.ReferencePrice, bool) {
 	s, ok := o[id]
-	return catalog.ReferencePrice{Model: id, Currency: currency, Schedule: s}, ok && currency == "USD"
+	return catalog.ReferencePrice{Model: id, Currency: currency, Source: catalog.SourceManual, Schedule: s}, ok && currency == "USD"
 }
 
 // memState is the sync's store over a state read from the database: it keeps what a round commits.
@@ -72,6 +72,7 @@ func TestConfirmedBaseIsWhatACallIsCharged(t *testing.T) {
 	w := newWorld(t, 1) // quota, a unit value of 2 dollars, the endpoint "gpt" of group "g"
 	model := w.endpointModel()
 	w.listModel("gpt", &model)
+	w.readBySync(syncer.ModelSnap{Name: "gpt", CostReason: syncer.Unpriced})
 	official := officialPrices{model: mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015"}}`)}
 	var confirmed []BasePrice
 	w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
@@ -116,6 +117,13 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	w.listModel("gpt", &model)
 	w.listModel("fresh", &fresh) // listed and mapped, with no endpoint: its first price makes one
 	w.listModel("pending", nil)
+	w.listModel("priced", &model) // the supplier states a price for it now
+	w.listModel("unread", &model) // listed, and not in the sync's state
+	noPrice := syncer.ModelSnap{CostReason: syncer.Unpriced}
+	w.readBySync(
+		withName(noPrice, "gpt"), withName(noPrice, "fresh"), withName(noPrice, "pending"),
+		syncer.ModelSnap{Name: "priced", Published: true, CostReason: syncer.Unexpressible},
+	)
 	official := officialPrices{
 		model: mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000002"}}`),
 		fresh: mustParse(t, `{"v":1,"currency":"USD","rates":{"output":"0.00001"}}`),
@@ -128,6 +136,11 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	}
 	of := func(name string, price *catalog.Schedule) BasePriceItem {
 		return BasePriceItem{Group: w.group, Name: name, Price: price}
+	}
+	seen := func(name string, price *catalog.Schedule, model catalog.ModelID) BasePriceItem {
+		it := of(name, price)
+		it.Expect = (*uuid.UUID)(&model)
+		return it
 	}
 	entered := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000004","output":"0.00001"}}`)
 	cny := mustParse(t, `{"v":1,"currency":"CNY","rates":{"input":"0.00002"}}`)
@@ -142,11 +155,16 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	}{
 		{"the official price", of("gpt", nil), nil, "gpt", official1},
 		{"an entered price replaces it", of("gpt", &entered), nil, "gpt", entered1},
+		{"for the model the person saw", seen("gpt", &entered, model), nil, "gpt", entered1},
+		{"a name mapped to another model since it was seen", seen("gpt", nil, fresh), ErrModelChanged, "gpt", entered1},
+		{"a name seen mapped that maps to none now", seen("pending", &entered, model), ErrModelChanged, "pending", ""},
 		{"a price in another currency", of("gpt", &cny), ErrBasePrice, "gpt", entered1},
 		{"a price of nothing", of("gpt", &free), ErrBasePrice, "gpt", entered1},
 		{"a model with no endpoint yet", of("fresh", nil), nil, "fresh", `{"currency":"XXX","rates":{"output":"0.000005"},"v":1}`},
 		{"a name not mapped yet", of("pending", &entered), ErrNameNotMapped, "pending", ""},
 		{"a name the group does not list", of("unlisted", &entered), ErrNoModelName, "unlisted", ""},
+		{"a model the supplier states a price for", of("priced", &entered), ErrNotUnpriced, "priced", ""},
+		{"a name the sync has not read", of("unread", &entered), ErrNotUnpriced, "unread", ""},
 	} {
 		gen := w.configGen()
 		refuses(t, c.name, confirm(c.item), c.want)
@@ -157,6 +175,17 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	if base, _ := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: "fresh"}); base.For != uuid.UUID(fresh).String() {
 		t.Errorf("the base of fresh is for %q, want the model it maps to", base.For)
 	}
+	same(t, "the default's source is the reference price's", "manual",
+		w.query(`SELECT detail->'items'->0->>'source' FROM platform.audit_log WHERE action = 'supplier.base_price_confirm' ORDER BY id LIMIT 1`))
+
+	// An alias moved to another model, which no sync has projected yet, is what the name maps to now.
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.supplier_aliases (supplier_id, supplier_group_id, upstream_name, model_id, set_by)
+			VALUES ($1, $2, 'fresh', $3, 'user')`, w.supplier, w.group, uuid.UUID(model))
+		return err
+	})
+	refuses(t, "a name whose alias moved since it was seen", confirm(seen("fresh", nil, fresh)), ErrModelChanged)
+
 	delete(official, model)
 	refuses(t, "a model without an official price", confirm(of("gpt", nil)), ErrNoOfficialPrice)
 
@@ -174,7 +203,7 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	_, stored := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: "gpt"})
 	same(t, "a base after the clear", false, stored)
 	same(t, "a second clear", 0, len(clear()))
-	same(t, "the changes audited", "3 1", w.query(`SELECT
+	same(t, "the changes audited", "4 1", w.query(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_confirm')::text || ' ' ||
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_clear')::text`))
 
@@ -182,6 +211,29 @@ func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 	refuses(t, "a supplier whose unit value is not confirmed", confirm(of("gpt", &entered)), ErrNoUnitValue)
+}
+
+// readBySync stores a sync state that read these models in the world's group "g".
+func (w *world) readBySync(models ...syncer.ModelSnap) {
+	w.t.Helper()
+	for i := range models {
+		models[i].Formats = []int{2}
+	}
+	st := syncer.State{Groups: []syncer.GroupSnap{{Ref: "g", Name: "g", Ratio: "1", Facts: "{}", Models: models}}}
+	raw, err := jsonx.MarshalCanonical(st)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_states (supplier_id, format, state, next_due) VALUES ($1, 3, $2, now())
+			ON CONFLICT (supplier_id) DO UPDATE SET format = 3, state = $2`, w.supplier, raw)
+		return err
+	})
+}
+
+func withName(m syncer.ModelSnap, name string) syncer.ModelSnap {
+	m.Name = name
+	return m
 }
 
 // listModel lists an upstream name in the world's group, as the sync's projection does, mapped to model (nil: waiting

@@ -94,21 +94,21 @@ func TestGeminiToChat(t *testing.T) {
 // ChatToGemini is GeminiToChat the other way: a request converted to Chat and back is the request it was.
 func TestChatToGeminiUndoesGeminiToChat(t *testing.T) {
 	t.Parallel()
-	for _, body := range []string{
-		`{"systemInstruction":{"parts":[{"text":"Rules"}]},"contents":[{"role":"user","parts":[{"text":"Hi"},{"inlineData":{"mimeType":"application/pdf","data":"AAAA"}}]},` +
+	for model, body := range map[string]string{
+		"gemini-3-flash-preview": `{"systemInstruction":{"parts":[{"text":"Rules"}]},"contents":[{"role":"user","parts":[{"text":"Hi"},{"inlineData":{"mimeType":"application/pdf","data":"AAAA"}}]},` +
 			`{"role":"model","parts":[{"text":"Let me look."},{"functionCall":{"id":"a","name":"f","args":{"x":1}},"thoughtSignature":"c2ln"},{"functionCall":{"id":"b","name":"g","args":{}}}]},` +
 			`{"role":"user","parts":[{"functionResponse":{"id":"a","name":"f","response":{"ok":1}}},{"functionResponse":{"id":"b","name":"g","response":{"result":"done"}}},{"text":"next"}]}],` +
 			`"tools":[{"functionDeclarations":[{"name":"f","description":"F","parametersJsonSchema":{"type":"object","properties":{"x":{"type":"integer"}}}},{"name":"g","parametersJsonSchema":{"type":"object"}}]}],` +
 			`"toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f"]}},` +
 			`"generationConfig":{"temperature":0.5,"topP":0.9,"topK":40,"maxOutputTokens":100,"stopSequences":["END"],"seed":7,` +
 			`"responseMimeType":"application/json","responseJsonSchema":{"type":"object"},"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"high"}}}`,
-		`{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"toolConfig":{"functionCallingConfig":{"mode":"NONE"}},"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}`,
+		"gemini-2.5-flash": `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"toolConfig":{"functionCallingConfig":{"mode":"NONE"}},"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}`,
 	} {
 		chat, _, err := protocol.GeminiToChat([]byte(body), "m", true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		back, err := protocol.ChatToGemini(chat)
+		back, err := protocol.ChatToGemini(chat, model)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,27 +116,94 @@ func TestChatToGeminiUndoesGeminiToChat(t *testing.T) {
 	}
 }
 
-// What a Gemini endpoint cannot be sent is refused, so the call goes to another; a call made on another model gets
-// the signature Google documents for one whose own is lost.
+// A Chat request becomes the generateContent body for the model it is sent to when Gemini can say every member of it
+// exactly: what cannot change the answer is dropped, and the rest is mapped. Anything else is not supported, and the
+// google adapter sends that request through Google's OpenAI-compatible layer instead: thinking the model's row in
+// Google's table cannot say, an image's detail, mixed strictness, one call at a time where calls may be made, an output
+// past one request's cap. A call made on another model gets the signature Google documents for one whose own is lost;
+// an empty text is no part, which Gemini would refuse.
 func TestChatToGemini(t *testing.T) {
 	t.Parallel()
-	got, err := protocol.ChatToGemini([]byte(`{"model":"m","messages":[{"role":"user","content":"Go"},` +
-		`{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"plain"}],` +
-		`"stream":true,"stream_options":{"include_usage":true},"user":"u","parallel_tool_calls":false,"max_completion_tokens":50,"reasoning":{"effort":"low","exclude":true}}`))
-	if err != nil {
-		t.Fatal(err)
+	const hi = `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]`
+	const native = "gemini-2.5-flash"
+	ask := func(members string) string {
+		return `{"model":"m","messages":[{"role":"user","content":"Hi"}]` + members + `}`
 	}
-	sameJSON(t, `{"contents":[{"role":"user","parts":[{"text":"Go"}]},{"role":"model","parts":[{"functionCall":{"id":"c1","name":"f","args":{}},"thoughtSignature":"skip_thought_signature_validator"}]},`+
-		`{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"f","response":{"result":"plain"}}}]}],"generationConfig":{"maxOutputTokens":50,"thinkingConfig":{"thinkingLevel":"low"}}}`, got)
-	for _, body := range []string{
-		`{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"system","content":"late"}]}`,
-		`{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i.png"}}]}]}`,
-		`{"model":"m","messages":[{"role":"user","content":"Hi"}],"logprobs":true}`,
-		`{"model":"m","messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"custom","custom":{"name":"x"}}]}`,
+	thinking := func(config string) string { return hi + `,"generationConfig":{"thinkingConfig":` + config + `}}` }
+	tool := `,"tools":[{"type":"function","function":{"name":"f"}}]`
+	strict := `,"tools":[{"type":"function","function":{"name":"f","strict":true}}]`
+	image := func(detail string) string {
+		return `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","detail":` + detail + `}}]}]}`
+	}
+	for _, c := range []struct {
+		name, model, body string
+		want              string // the generateContent body; empty for a request refused as not supported
+	}{
+		{
+			"calls and results", "gemini-3-flash-preview",
+			`{"model":"m","messages":[{"role":"user","content":"Go"},` +
+				`{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"plain"}],` +
+				`"stream":true,"stream_options":{"include_usage":true},"user":"u","parallel_tool_calls":false,"max_completion_tokens":50,"reasoning":{"effort":"low","exclude":true}}`,
+			`{"contents":[{"role":"user","parts":[{"text":"Go"}]},{"role":"model","parts":[{"functionCall":{"id":"c1","name":"f","args":{}},"thoughtSignature":"skip_thought_signature_validator"}]},` +
+				`{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"f","response":{"result":"plain"}}}]}],"generationConfig":{"maxOutputTokens":50,"thinkingConfig":{"thinkingLevel":"low"}}}`,
+		},
+		{"the standard tier", native, ask(`,"service_tier":"default"`), hi + `}`},
+		{"the project's tier", native, ask(`,"service_tier":"auto"`), hi + `}`},
+		{"the priority tier", native, ask(`,"service_tier":"priority"`), hi + `,"serviceTier":"priority"}`},
+		{"the flex tier", native, ask(`,"service_tier":"flex"`), hi + `,"serviceTier":"flex"}`},
+		{"the scale tier", native, ask(`,"service_tier":"scale"`), ""},
+		{"parallel calls allowed", native, ask(tool + `,"parallel_tool_calls":true`), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}]}`},
+		{"one call at a time", native, ask(tool + `,"parallel_tool_calls":false`), ""},
+		{
+			"no call, one at a time", native, ask(tool + `,"tool_choice":"none","parallel_tool_calls":false`),
+			hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"NONE"}}}`,
+		},
+		{"strict functions", native, ask(strict), hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED"}}}`},
+		{
+			"a strict function required", native, ask(strict + `,"tool_choice":"required"`),
+			hi + `,"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"ANY"}}}`,
+		},
+		{"mixed strictness", native, ask(`,"tools":[{"type":"function","function":{"name":"f","strict":true}},{"type":"function","function":{"name":"g"}}]`), ""},
+		{"2.5 low effort", "gemini-2.5-flash", ask(`,"reasoning_effort":"low"`), thinking(`{"includeThoughts":true,"thinkingBudget":1024}`)},
+		{"2.5 medium effort", "gemini-2.5-pro", ask(`,"reasoning":{"effort":"medium","exclude":true}`), thinking(`{"thinkingBudget":8192}`)},
+		{"2.5 thinking off", "gemini-2.5-flash", ask(`,"reasoning_effort":"none"`), thinking(`{"thinkingBudget":0}`)},
+		{"2.5 budget", "gemini-2.5-flash-lite", ask(`,"reasoning":{"max_tokens":2000}`), thinking(`{"includeThoughts":true,"thinkingBudget":2000}`)},
+		{"2.5 budget out of range", "gemini-2.5-flash-lite", ask(`,"reasoning":{"max_tokens":300}`), ""},
+		{"2.5 Flash-Lite on, at its default off", "gemini-2.5-flash-lite", ask(`,"reasoning":{"enabled":true,"exclude":true}`), ""},
+		{"2.5 Pro thinking off", "gemini-2.5-pro", ask(`,"reasoning_effort":"none"`), ""},
+		{"2.5 xhigh", "gemini-2.5-flash", ask(`,"reasoning_effort":"xhigh"`), ""},
+		{"3 minimal level", "gemini-3-flash-preview", ask(`,"reasoning_effort":"minimal"`), thinking(`{"includeThoughts":true,"thinkingLevel":"minimal"}`)},
+		{"3.1 Pro has no minimal level", "gemini-3.1-pro-preview", ask(`,"reasoning_effort":"minimal"`), ""},
+		{"3 thinking off", "gemini-3-pro-preview", ask(`,"reasoning_effort":"none"`), ""},
+		{"a model not in the thinking table", "gemini-3-unlisted", ask(`,"reasoning_effort":"low"`), ""},
+		{"a model that can answer CONTINUATION", "gemini-4-neon", ask(""), ""},
+		{"a model of another family", "gemma-3-27b-it", ask(""), ""},
+		{"an assistant turn's audio", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","audio":{"id":"audio_1"}},{"role":"user","content":"Again"}]}`, ""},
+		{"a part member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"Hi","annotations":[{"x":1}]}]}]}`, ""},
+		{"an image member not read", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","crop":"top"}}]}]}`, ""},
+		{"a file's name", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,AAAA","filename":"a.pdf"}}]}]}`, ""},
+		{"an output past one request's cap", native, ask(`,"max_tokens":70000`), ""},
+		{"an inline image", native, image(`"auto"`), `{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}]}`},
+		{"an image's detail", native, image(`"low"`), ""},
+		{"a late system message", native, `{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"system","content":"late"}]}`, ""},
+		{"an image by address", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i.png"}}]}]}`, ""},
+		{"audio", native, `{"model":"m","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`, ""},
+		{"a cached content", native, ask(`,"extra_body":{"google":{"cached_content":"cachedContents/abc"}}`), ""},
+		{"logprobs", native, ask(`,"logprobs":true`), ""},
+		{"a custom tool", native, ask(`,"tools":[{"type":"custom","custom":{"name":"x"}}]`), ""},
 	} {
-		if _, err := protocol.ChatToGemini([]byte(body)); err == nil {
-			t.Errorf("converted %s", body)
+		got, err := protocol.ChatToGemini([]byte(c.body), c.model)
+		if c.want == "" {
+			if _, ok := errors.AsType[*protocol.NotSupported](err); !ok { //nolint:errcheck // absence is reported by ok
+				t.Errorf("%s: %s (%v), want not supported", c.name, got, err)
+			}
+			continue
 		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		sameJSON(t, c.want, got)
 	}
 }
 
@@ -150,11 +217,12 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name"
 
 `
 
-// A Gemini stream reads as a Chat endpoint's: the relay bills Gemini's usage, and a Chat client gets the call with its
-// signature where Google's own Chat endpoint puts it.
+// A Gemini stream reads as a Chat endpoint's: the relay bills Gemini's usage, and a Chat client gets the assistant's
+// role on the first delta, as the OpenAI SDKs require, and the call with its signature where Google's own Chat
+// endpoint puts it. A prompt Gemini blocked is a refusal by content policy, which no other endpoint is asked.
 func TestChatFromGemini(t *testing.T) {
 	t.Parallel()
-	got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream))),
+	got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream)), ""),
 		protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 	if got.err != nil {
 		t.Fatal(got.err)
@@ -166,74 +234,164 @@ func TestChatFromGemini(t *testing.T) {
 			t.Errorf("the Chat stream lacks %s:\n%s", want, out)
 		}
 	}
-	for name, stream := range map[string]string{
-		"cut off":      strings.SplitAfter(geminiStream, "\n\n")[0],
-		"an error":     `data: {"error":{"code":503,"message":"overloaded","status":"UNAVAILABLE"}}` + "\n\n",
-		"other reason": `data: {"candidates":[{"content":{"parts":[{"text":"x"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}]}` + "\n\n",
+	if first := out[strings.Index(out, `"delta":`):]; !strings.Contains(first[:strings.Index(first, "\n")], `"role":"assistant"`) {
+		t.Errorf("the first delta has no role:\n%s", out)
+	}
+	for _, c := range []struct {
+		name, stream string
+		fault        protocol.Fault
+	}{
+		{"cut off", strings.SplitAfter(geminiStream, "\n\n")[0], protocol.FaultBroken},
+		{"an error", `data: {"error":{"code":503,"message":"overloaded","status":"UNAVAILABLE"}}` + "\n\n", protocol.FaultServer},
+		{"other reason", `data: {"candidates":[{"content":{"parts":[{"text":"x"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}]}` + "\n\n", protocol.FaultServer},
+		{"a blocked prompt", `data: {"promptFeedback":{"blockReason":"SAFETY"},"usageMetadata":{"promptTokenCount":8,"totalTokenCount":8}}` + "\n\n", protocol.FaultModeration},
 	} {
-		got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(stream))),
+		got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(c.stream)), ""),
 			protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
-		if !errors.Is(got.err, protocol.ErrUpstream) {
-			t.Errorf("%s: %v, want an upstream failure", name, got.err)
+		if !errors.Is(got.err, protocol.ErrUpstream) || protocol.FaultOf(got.err) != c.fault {
+			t.Errorf("%s: %v (fault %d), want an upstream failure of fault %d", c.name, got.err, protocol.FaultOf(got.err), c.fault)
 		}
 	}
 }
 
-// What a Gemini stream reported is billed, by modality, also when the stream then fails: audio and image tokens at
-// their own price, and the cumulative usage of a stream that broke off or stopped for a reason Chat has no word for.
+// What a Gemini stream reported is billed, by modality and at the tier Google served, also when the stream then fails:
+// audio and image tokens at their own price, tool prompts' by theirs, and Gemini's usage in the event that ended the
+// reply, a reason Chat has no word for included. Usage before that event is final for the input alone: a stream that
+// breaks or that the gateway cuts has its output estimated from what it delivered, not billed at a count Gemini gave
+// before more was delivered; and the input reaches the relay with the content it came with, so a cut there bills it.
+// The tier Google's response header names is billed when the reply never names one, as a downgrade from priority.
 func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 	t.Parallel()
 	const usage = `"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"totalTokenCount":13}`
+	half := func(usage string) string {
+		return `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}]` + usage + `}` + "\n\n"
+	}
+	std, priority := catalog.ServiceTierStandard, catalog.ServiceTierPriority
+	input10, input10out3 := map[catalog.Item]int64{catalog.ItemInput: 10}, map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3}
 	for _, c := range []struct {
-		name, stream string
-		failed       bool
-		want         map[catalog.Item]int64
-		reset        bool // the connection is reset after the stream's bytes
+		name, stream, header string
+		how                  geminiRead
+		failed, final        bool // the stream fails; its output is reported as final
+		want                 map[catalog.Item]int64
+		asked, tier          catalog.ServiceTier
 	}{
 		{
 			"audio and image tokens",
 			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Heard."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":5,"totalTokenCount":14,` +
 				`"promptTokensDetails":[{"modality":"TEXT","tokenCount":4},{"modality":"AUDIO","tokenCount":3},{"modality":"IMAGE","tokenCount":2}],` +
-				`"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}]}}` + "\n\n",
-			false,
+				`"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}]}}` + "\n\n", "",
+			readEnds, false, true,
 			map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemAudioIn: 3, catalog.ItemImageIn: 2, catalog.ItemOutput: 3, catalog.ItemAudioOut: 2},
-			false,
+			std, std,
 		},
 		{
-			"cut off after reporting",
-			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
-			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
-			false,
+			"a tool prompt's audio at the priority tier",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Found."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"toolUsePromptTokenCount":5,"candidatesTokenCount":3,"totalTokenCount":17,` +
+				`"toolUsePromptTokensDetails":[{"modality":"TEXT","tokenCount":3},{"modality":"AUDIO","tokenCount":2}],"serviceTier":"priority"}}` + "\n\n", "",
+			readEnds, false, true,
+			map[catalog.Item]int64{catalog.ItemInput: 12, catalog.ItemAudioIn: 2, catalog.ItemOutput: 3},
+			std, priority,
+		},
+		{"cut off after an output count", half("," + usage), "", readEnds, true, false, input10, std, std},
+		{"reset after an output count", half("," + usage), "", readReset, true, false, input10, std, std},
+		{"cut by the gateway after an output count", half(","+usage) + half(""), "", readCut, false, false, input10, std, std},
+		{"cut off after only the input", half(`,"usageMetadata":{"promptTokenCount":10,"totalTokenCount":10}`), "", readEnds, true, false, input10, std, std},
+		{
+			"cut by the gateway after a cache hit", half(`,"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":4,"totalTokenCount":10}`) + half(","+usage), "",
+			readCut, false, false,
+			map[catalog.Item]int64{catalog.ItemInput: 6, catalog.ItemCacheRead: 4},
+			std, std,
 		},
 		{
-			"reset after reporting",
-			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]}}],` + usage + `}` + "\n\n",
-			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
-			true,
+			"a malformed call Gemini ended the reply with",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}],` + usage + `}` + "\n\n", "",
+			readEnds, true, true, input10out3, std, std,
 		},
 		{
-			"a malformed call after reporting",
-			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Half"}]},"finishReason":"MALFORMED_FUNCTION_CALL"}],` + usage + `}` + "\n\n",
-			true,
-			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 3},
-			false,
+			"a reply at one request's cap",
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Long"}]},"finishReason":"CONTINUATION"}],` + usage + `}` + "\n\n", "",
+			readEnds, false, true, input10out3, std, std,
 		},
+		{"a downgrade the header names, cut before any count", half("") + half(""), "standard", readCut, false, false, nil, priority, std},
+		{
+			"a closing STOP without usage, the header's downgrade", half(","+usage) + half(`,"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}`) +
+				half(``) + `data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}` + "\n\n", "standard",
+			readEnds, false, false, input10, priority, std,
+		},
+		{"usage after the closing STOP", half("") + `data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}` + "\n\n" +
+			`data: {"candidates":[],` + usage + `}` + "\n\n", "", readEnds, false, true, input10out3, std, std},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			var src io.Reader = strings.NewReader(c.stream)
-			if c.reset {
-				src = io.MultiReader(src, iotest.ErrReader(syscall.ECONNRESET))
+			seg := readGemini(t, c.stream, c.header, c.asked, c.how, c.failed).Segments[0]
+			if seg.Reported.Has(catalog.ItemOutput) != c.final || seg.Reported.Has(catalog.ItemInput) != (c.want != nil) {
+				t.Errorf("reported %v", seg.Reported)
 			}
-			got := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(src)),
-				protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
-			if failed := errors.Is(got.err, protocol.ErrUpstream); failed != c.failed {
-				t.Fatalf("error %v, want failed %v", got.err, c.failed)
-			}
-			checkBilledAs(t, c.name, got.r.Usage(), c.want)
+			checkSegment(t, seg, c.want, c.tier)
 		})
+	}
+}
+
+// checkSegment checks a reply's counts, item by item, its tier, and that nothing in it is unknown.
+func checkSegment(t *testing.T, seg protocol.Segment, want map[catalog.Item]int64, tier catalog.ServiceTier) {
+	t.Helper()
+	for it := range catalog.NumItems {
+		if seg.Usage.Count(it) != want[it] {
+			t.Errorf("%s = %d, want %d", it, seg.Usage.Count(it), want[it])
+		}
+	}
+	if seg.Usage.ServiceTier() != tier || len(seg.Usage.Unknown()) != 0 {
+		t.Errorf("tier %d, want %d; unknown %v", seg.Usage.ServiceTier(), tier, seg.Usage.Unknown())
+	}
+}
+
+// geminiRead is how a test reads a Gemini stream.
+type geminiRead int
+
+const (
+	readEnds  geminiRead = iota // the stream is read to its end
+	readReset                   // the connection is reset after the stream's bytes
+	readCut                     // the gateway stops reading once content was relayed
+)
+
+// readGemini is the usage a relay holds after reading the Gemini stream as how says, failed or not, for a request of
+// the tier asked whose answer's x-gemini-service-tier header was header.
+func readGemini(t *testing.T, stream, header string, asked catalog.ServiceTier, how geminiRead, failed bool) protocol.Usage {
+	t.Helper()
+	var src io.Reader = strings.NewReader(stream)
+	if how == readReset {
+		src = io.MultiReader(src, iotest.ErrReader(syscall.ECONNRESET))
+	}
+	body, ctx := protocol.ChatFromGemini(io.NopCloser(src), header), protocol.UsageContext{Tier: asked}
+	if how == readCut {
+		return usageAtFirstContent(t, body, ctx)
+	}
+	got := relayTo(t, protocol.Chat, protocol.Chat, body, ctx, protocol.NewMemory(64<<20), settled)
+	if errors.Is(got.err, protocol.ErrUpstream) != failed {
+		t.Fatalf("error %v, want failed %v", got.err, failed)
+	}
+	u := got.r.Usage()
+	if u.Invalid != nil || len(u.Segments) != 1 {
+		t.Fatalf("usage %+v", u)
+	}
+	return u
+}
+
+// usageAtFirstContent is the usage a relay of the Chat stream src holds once it relayed content, where the gateway
+// stops reading a stream it cuts.
+func usageAtFirstContent(t *testing.T, src io.Reader, ctx protocol.UsageContext) protocol.Usage {
+	t.Helper()
+	o := options
+	o.Memory = protocol.NewMemory(64 << 20)
+	r := protocol.NewRelay(protocol.Chat, protocol.Chat, src, ctx, o)
+	for {
+		step, err := r.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(step.Out) > 0 && step.Kind != protocol.StepBuffered {
+			return r.Usage()
+		}
 	}
 }
 
@@ -241,7 +399,7 @@ func TestChatFromGeminiBillsWhatItReported(t *testing.T) {
 // its signature, and Gemini's usage.
 func TestGeminiReply(t *testing.T) {
 	t.Parallel()
-	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream))),
+	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream)), ""),
 		protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 	if chat.err != nil {
 		t.Fatal(chat.err)
@@ -320,7 +478,7 @@ func geminiEvents(t *testing.T, reply *protocol.GeminiReply, chat []byte) []stri
 // TestGeminiReplyBody: a whole Chat reply, and a refusal, become Gemini's.
 func TestGeminiReplyBody(t *testing.T) {
 	t.Parallel()
-	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream))), protocol.NewMemory(64<<20), unsettled)
+	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream)), ""), protocol.NewMemory(64<<20), unsettled)
 	if whole.err != nil {
 		t.Fatal(whole.err)
 	}
@@ -346,8 +504,10 @@ const geminiCutOff = `data: {"candidates":[{"content":{"role":"model","parts":[{
 // has no answer holding both); a stream gives the text it held back and the usage before the error that ends it.
 func TestGeminiReplyFailsAfterContent(t *testing.T) {
 	t.Parallel()
-	const usage = `"usageMetadata":{"candidatesTokenCount":3,"promptTokenCount":10,"totalTokenCount":13}` // as written, in key order
-	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff))), protocol.NewMemory(64<<20), unsettled)
+	// The usage the relay holds, as written in key order: the input alone, as the stream broke before Gemini ended the
+	// reply, whose output the settlement estimates.
+	const usage = `"usageMetadata":{"candidatesTokenCount":0,"promptTokenCount":10,"totalTokenCount":10}`
+	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff)), ""), protocol.NewMemory(64<<20), unsettled)
 	if whole.status != http.StatusOK {
 		t.Fatalf("Chat answered %d: %s", whole.status, whole.body)
 	}
@@ -355,7 +515,7 @@ func TestGeminiReplyFailsAfterContent(t *testing.T) {
 	if err != nil || status != http.StatusBadGateway || !strings.Contains(string(body), `"code":502`) || !strings.Contains(string(body), usage) {
 		t.Errorf("the whole reply is %d (%v): %s", status, err, body)
 	}
-	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff))),
+	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiCutOff)), ""),
 		protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 	events := geminiEvents(t, protocol.NewGeminiReply(protocol.GeminiOptions{}), chat.out)
 	if n := len(events); n < 2 || !strings.Contains(events[n-2], `{"text":"Half"}`) || !strings.Contains(events[n-2], usage) ||

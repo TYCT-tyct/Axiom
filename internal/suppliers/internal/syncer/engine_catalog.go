@@ -58,13 +58,13 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans Plans) (GroupSnap
 		for i, f := range m.Formats {
 			reported[i] = int(f)
 		}
-		plan, confirmed, err := plan(c, g, m, ModelSnap{}, plans)
+		cost, err := plan(c, g, m, ModelSnap{}, plans)
 		if err != nil {
 			return snap, err
 		}
 		snap.Models = append(snap.Models, ModelSnap{
-			Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: plan,
-			Published: m.Published || m.Cost != nil, Confirmed: confirmed,
+			Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: cost.plan,
+			Published: m.Published || m.Cost != nil, Confirmed: cost.confirmed, CostReason: cost.why,
 		})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
@@ -87,51 +87,61 @@ func hasPlan(models []ModelSnap) bool {
 // changed ratio, and a plan made of a base that has been cleared since is gone.
 func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans Plans) (GroupSnap, error) {
 	for _, m := range before.Models {
-		plan, confirmed, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m, plans)
+		cost, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m, plans)
 		if err != nil {
 			return snap, err
 		}
 		snap.Models = append(snap.Models, ModelSnap{
-			Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan, Published: m.Published, Confirmed: confirmed,
+			Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: cost.plan, Published: m.Published,
+			Confirmed: cost.confirmed, CostReason: cost.why,
 		})
 	}
 	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
 	return snap, nil
 }
 
-// plan decides the cost plan of one endpoint and returns its fingerprint, or "" when the cost is unknown, and whether the
-// plan is made of a confirmed base. A schedule the supplier published comes first. A model the supplier prices in a way
-// no schedule expresses (per call, say) has no plan: a confirmed base never stands in for a price the supplier states.
-// Only while it states none does a person's confirmed base, scaled by the group's ratio, price it; a base the ratio
-// takes past a unit price leaves this one endpoint unknown. A model not read this time (kept) goes by what its last
-// read said: a price the supplier stated keeps its plan, or its unknown cost, ahead of any base; otherwise the base, if
-// one is confirmed now, and no plan if not, so a plan made of a base that has been cleared is gone.
-func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans Plans) (string, bool, error) {
+// planned is what plan decided of one endpoint: the fingerprint of its cost plan, "" when the cost is unknown, whether
+// the plan is made of a confirmed base, and why the cost is unknown when it is.
+type planned struct {
+	plan      string
+	confirmed bool
+	why       CostReason
+}
+
+// plan decides the cost plan of one endpoint. A schedule the supplier published comes first. A model the supplier
+// prices in a way no schedule expresses (per call, say) has no plan: a confirmed base never stands in for a price the
+// supplier states. Only while it states none does a person's confirmed base, scaled by the group's ratio, price it; a
+// base the ratio takes past a unit price leaves this one endpoint unknown. A model not read this time (kept) goes by
+// what its last read said: a price the supplier stated keeps its plan, or its unknown cost, ahead of any base;
+// otherwise the base, if one is confirmed now, and no plan if not, so a plan made of a base that has been cleared is
+// gone.
+func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans Plans) (planned, error) {
 	key := BaseKey{GroupRef: g.Ref, Model: m.UpstreamName}
 	switch base, confirmed := c.State.Base(key); {
 	case m.Cost != nil:
 		fp, err := put(c, key, *m.Cost, m.Derivation, "published", plans)
-		return fp, false, err
+		return planned{plan: fp}, err
 	case m.Published:
-		return "", false, nil
+		return planned{why: Unexpressible}, nil
 	case kept.Published:
 		if kept.Plan != "" {
 			plans[key] = kept.Plan
+			return planned{plan: kept.Plan}, nil
 		}
-		return kept.Plan, false, nil
+		return planned{why: Unexpressible}, nil
 	case confirmed:
 		parsed, err := catalog.ParseSchedule([]byte(base.Base))
 		if err != nil {
-			return "", false, fmt.Errorf("syncer: the confirmed base of %s in %s: %w", key.Model, key.GroupRef, err)
+			return planned{}, fmt.Errorf("syncer: the confirmed base of %s in %s: %w", key.Model, key.GroupRef, err)
 		}
 		schedule, ok := scaled(parsed, g.Ratio)
 		if !ok {
-			return "", false, nil
+			return planned{why: OverLimit}, nil
 		}
 		fp, err := put(c, key, schedule, adapter.ScaledDerivation(parsed, g.Ratio), "confirmed", plans)
-		return fp, true, err
+		return planned{plan: fp, confirmed: true}, err
 	default:
-		return "", false, nil
+		return planned{why: Unpriced}, nil
 	}
 }
 

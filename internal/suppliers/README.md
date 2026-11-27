@@ -13,7 +13,7 @@ internal/suppliers/internal/
   adapter/      契约：Adapter、Type、Manager、CallQuirks、Failure、CallPolicy、Client，及可选能力的接口（Onboarding、Direct、Cloud 等）
   registry/     唯一同时引用所有适配器的文件，一个内置适配器包一行
   newapi/ sub2api/ cpa/ 中转站和号池的内置适配器
-  vendors/ anthropic/ compatible/ 直连（vendors 是 OpenAI 格式的厂商表），共用 direct/
+  vendors/ anthropic/ google/ compatible/ 直连（vendors 是 OpenAI 格式的厂商表，google 的 Chat 走 Gemini 原生），共用 direct/
   vertex/ bedrock/ azure/ 云平台，共用 cloud/
   declared/     声明式适配器
   client/       适配器唯一的出站入口：egress 加限速桶（进程内 Limiter、数据库 SharedLimiter）
@@ -145,4 +145,4 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `FindKey`、`CheckKey`、`CheckCredential`、`AwaitKey`（经 `Reach`，不在调用方事务里） | `ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`RequestKey`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrCannotMakeKey`、`ErrNoKeyNeeded`、`ErrKeysHalted`、`ErrKeyBound`、`ErrStatusLocked` |
 | `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
-| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrModelChanged`、`ErrNotUnpriced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

@@ -65,7 +65,8 @@ func (q *Queries) GetEndpointPlan(ctx context.Context, db DBTX, arg GetEndpointP
 
 const listSupplierNames = `-- name: ListSupplierNames :many
 
-SELECT m.supplier_group_id, m.upstream_name, m.formats, m.first_seen_at, m.model_id, e.id AS endpoint_id
+SELECT m.supplier_group_id, m.upstream_name, m.formats, m.first_seen_at, m.model_id, e.id AS endpoint_id,
+    e.cost_state AS endpoint_cost_state, e.cost_state_reason AS endpoint_cost_reason, g.upstream_ref
 FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 LEFT JOIN suppliers.endpoints e
@@ -75,17 +76,20 @@ ORDER BY m.supplier_group_id, m.upstream_name
 `
 
 type ListSupplierNamesRow struct {
-	SupplierGroupID uuid.UUID
-	UpstreamName    string
-	Formats         []string
-	FirstSeenAt     time.Time
-	ModelID         *uuid.UUID
-	EndpointID      *uuid.UUID
+	SupplierGroupID    uuid.UUID
+	UpstreamName       string
+	Formats            []string
+	FirstSeenAt        time.Time
+	ModelID            *uuid.UUID
+	EndpointID         *uuid.UUID
+	EndpointCostState  *string
+	EndpointCostReason *string
+	UpstreamRef        string
 }
 
 // What the admin's model library reads of a supplier (#948): its names sorted into piles, and an endpoint's cost.
 // Every name the supplier's groups list now, by group and name, with the model the projection mapped it to and the
-// endpoint made for the name, when there is one.
+// endpoint made for the name, when there is one, with its cost state; and the group's ref the sync knows it by.
 func (q *Queries) ListSupplierNames(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListSupplierNamesRow, error) {
 	rows, err := db.Query(ctx, listSupplierNames, supplierID)
 	if err != nil {
@@ -102,6 +106,9 @@ func (q *Queries) ListSupplierNames(ctx context.Context, db DBTX, supplierID uui
 			&i.FirstSeenAt,
 			&i.ModelID,
 			&i.EndpointID,
+			&i.EndpointCostState,
+			&i.EndpointCostReason,
+			&i.UpstreamRef,
 		); err != nil {
 			return nil, err
 		}

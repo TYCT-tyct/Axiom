@@ -36,7 +36,6 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 	t.Parallel()
 	cases := []rowCase{
 		{"openai", "/v1/models", "/v1/chat/completions", "", []string{"model-id-0", "model-id-1"}},
-		{"google", "/v1beta/openai/models", "/v1beta/openai/chat/completions", "", []string{"gemini-2.5-flash", "text-embedding-004"}},
 		{"moonshot", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"kimi-k3", "kimi-k3.1-pro"}},
 		{"deepseek", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"deepseek-flash", "deepseek-v4-pro"}},
 		{"ark", "/api/v3/models", "/api/v3/chat/completions", "", []string{"doubao-seed-2-1-pro-260915"}},

@@ -522,7 +522,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 }
 
 const listEndpointsOf = `-- name: ListEndpointsOf :many
-SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, cost_state_reason, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = $1 ORDER BY upstream_name, id
 `
 
@@ -533,6 +533,7 @@ type ListEndpointsOfRow struct {
 	UpstreamName    string
 	Formats         []string
 	CostState       string
+	CostStateReason *string
 	Enabled         bool
 	Quantization    *string
 }
@@ -553,6 +554,7 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 			&i.UpstreamName,
 			&i.Formats,
 			&i.CostState,
+			&i.CostStateReason,
 			&i.Enabled,
 			&i.Quantization,
 		); err != nil {
@@ -813,7 +815,16 @@ func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UU
 }
 
 const modelNamesOf = `-- name: ModelNamesOf :many
-SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref, m.model_id
+SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref,
+    COALESCE((
+        SELECT COALESCE(r.model_id, a.model_id) FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (
+            SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1
+        ) r ON true
+        WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
+          AND (a.supplier_group_id = m.supplier_group_id OR a.supplier_group_id IS NULL)
+        ORDER BY a.supplier_group_id NULLS LAST LIMIT 1
+    ), m.model_id) AS model_id
 FROM suppliers.supplier_models m JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 WHERE m.supplier_id = $1
   AND (m.supplier_group_id, m.upstream_name) IN (SELECT unnest($2::uuid[]), unnest($3::text[]))
@@ -833,7 +844,8 @@ type ModelNamesOfRow struct {
 }
 
 // The models a supplier's groups list, among (group, name) pairs, with the group's ref the sync knows it by and the
-// catalog model the name maps to now (NULL while it waits to be mapped).
+// catalog model the name maps to now (NULL while it waits to be mapped): an alias at its current revision, the group's
+// before the supplier's, as the projection maps it, before the mapping the last projection wrote.
 func (q *Queries) ModelNamesOf(ctx context.Context, db DBTX, arg ModelNamesOfParams) ([]ModelNamesOfRow, error) {
 	rows, err := db.Query(ctx, modelNamesOf, arg.SupplierID, arg.Groups, arg.Names)
 	if err != nil {
