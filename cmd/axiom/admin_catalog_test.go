@@ -77,8 +77,9 @@ func (f catalogFixture) publish(m adminapi.Model, schedule string, base *adminap
 	return f.send(http.MethodPost, "/models/"+m.Id+"/prices", `{`+baseText+`"source":"manual","schedule":`+schedule+`,"evidence":`+proof+`,"reason":"the price"}`, http.StatusOK)
 }
 
-// officialProof is the current evidence a page watch would have left, without reaching a live vendor in API tests.
-func (f commandLine) officialProof(author, currency string) string {
+// officialProof is the current evidence a watch of the author's USD price page would have left, without reaching a live
+// vendor in API tests.
+func (f commandLine) officialProof(author string) string {
 	f.t.Helper()
 	ctx := f.t.Context()
 	var page, snapshot uuid.UUID
@@ -90,7 +91,7 @@ func (f commandLine) officialProof(author, currency string) string {
 			return err
 		}
 		var err error
-		page, err = q.InsertWatchedPage(ctx, tx, catalog.InsertWatchedPageParams{Author: author, Url: "https://example.com/" + uuid.NewV7().String(), Origin: "https://example.com", Currency: currency, SectionStart: "Start", SectionEnd: "End", IntervalSeconds: 3600})
+		page, err = q.InsertWatchedPage(ctx, tx, catalog.InsertWatchedPageParams{Author: author, Url: "https://example.com/" + uuid.NewV7().String(), Origin: "https://example.com", Currency: "USD", SectionStart: "Start", SectionEnd: "End", IntervalSeconds: 3600})
 		if err != nil {
 			return err
 		}
@@ -240,7 +241,7 @@ func TestModelRefusals(t *testing.T) {
 	f := newCatalogFixture(t)
 	m := f.create("acme/alpha")
 	f.addName(m, "acme/alpha")
-	official := f.officialProof("acme", "USD")
+	official := f.officialProof("acme")
 	for _, c := range []struct {
 		name, method, path, body string
 		status                   int
@@ -299,7 +300,7 @@ func TestSelectPriceSource(t *testing.T) {
 	f := newCatalogFixture(t)
 	m := f.publish(f.ready("acme/alpha"), cny, nil)
 	bases := `{"CNY":"` + m.Prices[0].Id + `","USD":"` + m.Prices[1].Id + `"}`
-	official := f.officialProof("acme", "USD")
+	official := f.officialProof("acme")
 	body := `{"rev":` + strconv.FormatInt(m.Rev, 10) + `,"source":"official","bases":` + bases + `,"prices":[{"schedule":` + usd + `,"evidence":` + official + `}],"reason":"the vendor's page"}`
 	switched := f.send(http.MethodPut, "/models/"+m.Id+"/price-source", body, http.StatusOK)
 	if switched.PriceSource != "official" || len(switched.Prices) != 2 || switched.Prices[0].Currency != "CNY" || switched.Prices[0].Schedule != nil ||

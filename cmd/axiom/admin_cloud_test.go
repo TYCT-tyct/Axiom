@@ -30,7 +30,7 @@ func newCloudFixture(t *testing.T) (catalogFixture, *fakeCloud) {
 	m := f.send(http.MethodPost, "/models", `{"slug":"anthropic/`+directModel+`","version_basis":"dated","price_source":"official","spec":`+directSpec+`,"reason":"a model"}`, http.StatusCreated)
 	m = f.addName(f.addName(m, "anthropic/"+directModel), directModel)
 	// A cloud line sells a model only at its author's own official price.
-	m = f.send(http.MethodPost, "/models/"+m.Id+"/prices", `{"source":"official","schedule":`+usd+`,"evidence":`+f.officialProof("anthropic", "USD")+`,"reason":"the price"}`, http.StatusOK)
+	m = f.send(http.MethodPost, "/models/"+m.Id+"/prices", `{"source":"official","schedule":`+usd+`,"evidence":`+f.officialProof("anthropic")+`,"reason":"the price"}`, http.StatusOK)
 	expectAdmin(t, "listing the model", f.setStatus(m, "listed"), http.StatusOK, "")
 	return f, c
 }

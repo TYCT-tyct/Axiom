@@ -292,7 +292,7 @@ func (w *callWorld) listModel(cat *catalog.Catalog, slug, name string) uuid.UUID
 	// The author's own official price: a direct or cloud line sells a model at no other.
 	if _, err := cat.PublishPrice(ctx, catalog.PublishPriceRequest{
 		Op: op(), Model: model, Source: catalog.SourceOfficial, Schedule: jsonx.Raw(servedReference),
-		Evidence: jsonx.Raw(w.officialProof(author, "USD")),
+		Evidence: jsonx.Raw(w.officialProof(author)),
 	}); err != nil {
 		w.t.Fatal(err)
 	}
