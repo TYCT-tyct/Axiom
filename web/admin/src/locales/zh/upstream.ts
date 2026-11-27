@@ -221,6 +221,8 @@ export default {
     body: "这把 Key 的请求、检测和重读都从选的出口出去。代理停用时走它的备用代理；备用也用不了时这把 Key 暂停，不会改成直连。",
     action: "保存",
     done: "出口已改成 {{exit}}",
+    unlisted: "代理列表没有读出来，现在不能修改出口：{{reason}}",
+    waiting: "代理列表读出来之后才能保存出口。",
   },
   enable: {
     offTitle: "停用这个账号",

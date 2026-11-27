@@ -18,7 +18,8 @@ type Type struct {
 	// Vendor names the maker and picks the icon: the catalog author's slug for a type that sells one maker's models, the
 	// platform's own for a cloud.
 	Vendor string
-	// Serves is the catalog authors whose models the type sells at their authors' official prices; empty for any.
+	// Serves is the catalog authors whose models the type sells at their authors' official prices. Empty is a type that
+	// may sell any author's models (compatible, a relay): at prices of its own, so none is priced from the catalog.
 	Serves []string
 	// Name is the brand's own name, not translated.
 	Name  string

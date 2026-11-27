@@ -28,8 +28,9 @@ import (
 
 // pastedWorld is a catalog with acme's model stone, a provider of acme's models reached with pasted keys, and the admin
 // and call sides over one database. The provider's types are made here, not taken from the providers' packages, so that
-// taking one of those out leaves this package building (just adapters-removable): pasted lists its keys' models, and
-// wallet also reads each key's balance.
+// taking one of those out leaves this package building (just adapters-removable): pasted lists its keys' models,
+// wallet also reads each key's balance, and aggregate names no author it serves, as a type that sells any author's
+// models does.
 type pastedWorld struct {
 	admins
 	cat      *catalog.Catalog
@@ -65,8 +66,11 @@ func newPastedWorld(t *testing.T) *pastedWorld {
 			Entries: entry, Families: []adapter.Family{adapter.FamilyOpenAI}, Lists: true,
 		}
 	}
+	aggregate := typeOf("aggregate")
+	aggregate.Serves = nil
 	reg, err := registry.New(
 		direct.New(direct.Provider{Type: typeOf("pasted")}),
+		direct.New(direct.Provider{Type: aggregate}),
 		direct.New(direct.Provider{Type: typeOf("wallet"), Balance: &direct.Balance{Path: "/v1/balance", Read: walletBalance}}),
 	)
 	if err != nil {

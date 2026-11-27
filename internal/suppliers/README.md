@@ -142,7 +142,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 退出信号不取消在跑的同步 | `pg.Queue.Start` 与启动 context 脱钩，只有 `Stop` 的期限取消 |
 | 移除后库里没有密文，做过的尝试仍能结算 | `Admin.Remove` 一个事务；`erased` 的 CHECK |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译；描述不合法不启动 | `CheckAdapters`；`just adapters-removable` 逐行；`registry.New` 核对描述 |
-| 平台直连和云线路成本 = 价 × 线路倍率，与倍率同成同败 | `SetCostRatio` 一个事务 |
+| 平台直连和云线路成本 = 价 × 线路倍率，与倍率同成同败 | 定价与倍率同一事务、锁里读倍率 |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 | 价目行就是收费：同一份计划、同一个 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |

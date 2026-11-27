@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+
+	"axiom/internal/catalog"
+	"axiom/internal/suppliers/internal/store"
 )
 
 // TestPastedLinesFollowTheirKeysAndTheCatalog: the re-list and the re-projection (docs/domains/suppliers-direct.md
@@ -60,5 +63,45 @@ func TestPastedLinesFollowTheirKeysAndTheCatalog(t *testing.T) {
 	}
 	if after := ownPlans(); after != before {
 		t.Errorf("an account's own key went from plans %s to %s", before, after)
+	}
+}
+
+// TestALineIsPricedAtTheRatioItHasUnderItsLock: the line's ratio changed after a job read the lines and before it took
+// the supplier's lock. The job prices the line at the ratio it has then, as setSupplierCostRatio priced it: a ratio
+// read before the lock would put the endpoints back on the plan of the ratio replaced, with the line showing the new.
+func TestALineIsPricedAtTheRatioItHasUnderItsLock(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		model string // the endpoint the job prices
+		run   func(*lines, context.Context, *catalog.Snapshot, store.ListPastedLinesRow) error
+	}{
+		{"re-projected", "stone", func(l *lines, ctx context.Context, snap *catalog.Snapshot, r store.ListPastedLinesRow) error {
+			return l.projectAll(ctx, snap, []store.ListPastedLinesRow{r})
+		}},
+		{"a model newly listed", "gravel", (*lines).relistKeys},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newPastedWorld(t)
+			w.provider.set("sk-good-listing", providerKey{models: []string{"stone"}})
+			line := w.connect("pasted", "0.8", "sk-good-listing")
+			gravel := `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_read":"0.0000001"}}`
+			w.list("gravel", gravel)
+			w.provider.set("sk-good-listing", providerKey{models: []string{"gravel", "stone"}})
+			jobs := &lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}
+			snap, rows, err := jobs.read(t.Context())
+			if err != nil || len(rows) != 1 || rows[0].ID != line {
+				t.Fatalf("the lines read are %+v (%v)", rows, err)
+			}
+			if err := w.setRatio(line, "1"); err != nil { // commits between the job's read and its lock
+				t.Fatal(err)
+			}
+			if err := tc.run(jobs, t.Context(), snap, rows[0]); err != nil {
+				t.Fatal(err)
+			}
+			price := map[string]string{"stone": stonePrice, "gravel": gravel}[tc.model]
+			w.expectPriced(tc.name, line, w.endpoint(line, tc.model), price, "1")
+		})
 	}
 }

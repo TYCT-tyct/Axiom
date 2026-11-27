@@ -31,7 +31,7 @@ UPDATE suppliers.supplier_groups SET ratio = @ratio WHERE id = @id AND supplier_
 -- name: ListPastedLines :many
 -- The platform's direct and cloud suppliers in service, each with its one line: what the periodic re-list and
 -- re-projection go over (docs/domains/suppliers-direct.md「模型重读与余额」). An account's own key is never one of them.
-SELECT s.id, s.kind, s.mode, s.origin, s.settlement_currency, s.api_format, g.id AS group_id, g.ratio::text AS ratio
+SELECT s.id, s.kind, s.mode, s.origin, s.settlement_currency, s.api_format, g.id AS group_id
 FROM suppliers.suppliers s
 JOIN suppliers.supplier_groups g ON g.supplier_id = s.id
 WHERE s.owner_scope = 'platform' AND s.mode IN ('direct', 'cloud') AND s.status = 'active'

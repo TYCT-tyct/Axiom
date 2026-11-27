@@ -197,7 +197,7 @@ func (q *Queries) ListLineKeys(ctx context.Context, db DBTX, supplierID uuid.UUI
 }
 
 const listPastedLines = `-- name: ListPastedLines :many
-SELECT s.id, s.kind, s.mode, s.origin, s.settlement_currency, s.api_format, g.id AS group_id, g.ratio::text AS ratio
+SELECT s.id, s.kind, s.mode, s.origin, s.settlement_currency, s.api_format, g.id AS group_id
 FROM suppliers.suppliers s
 JOIN suppliers.supplier_groups g ON g.supplier_id = s.id
 WHERE s.owner_scope = 'platform' AND s.mode IN ('direct', 'cloud') AND s.status = 'active'
@@ -212,7 +212,6 @@ type ListPastedLinesRow struct {
 	SettlementCurrency string
 	ApiFormat          *string
 	GroupID            uuid.UUID
-	Ratio              string
 }
 
 // The platform's direct and cloud suppliers in service, each with its one line: what the periodic re-list and
@@ -234,7 +233,6 @@ func (q *Queries) ListPastedLines(ctx context.Context, db DBTX) ([]ListPastedLin
 			&i.SettlementCurrency,
 			&i.ApiFormat,
 			&i.GroupID,
-			&i.Ratio,
 		); err != nil {
 			return nil, err
 		}

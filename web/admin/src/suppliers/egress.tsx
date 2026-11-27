@@ -1,11 +1,12 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
-import { accountKey } from "@axiom/app";
-import { Select } from "@axiom/ui";
+import { accountKey, useErrors } from "@axiom/app";
+import { FormError, Select } from "@axiom/ui";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { retry } from "../monitor-queries";
+import { chosenExit } from "./exit";
 
 type Credential = AdminSchemas["SupplierCredential"];
 type Supplier = AdminSchemas["Supplier"];
@@ -28,10 +29,15 @@ export function exitName(t: T, proxies: readonly Proxy[], id: string | undefined
   return proxy ? t("upstream.egress.option", { name: proxy.name, id }) : id;
 }
 
-// EgressSelect is the egress_id field of a form: shown only when there is a proxy to choose.
+// EgressSelect is the egress_id field of a form: shown only when there is a proxy to choose, and in its place why there
+// is no choice when the proxies did not load.
 export function EgressSelect({ defaultValue = "" }: { defaultValue?: string }) {
   const { t } = useTranslation();
-  const proxies = useQuery(egressProxiesQuery).data?.data ?? [];
+  const errors = useErrors();
+  const list = useQuery(egressProxiesQuery);
+  if (list.isError)
+    return <FormError>{t("upstream.egress.unlisted", { reason: errors.message(list.error) })}</FormError>;
+  const proxies = list.data?.data ?? [];
   if (proxies.length === 0) return null;
   return (
     <Select
@@ -50,7 +56,8 @@ export function EgressSelect({ defaultValue = "" }: { defaultValue?: string }) {
   );
 }
 
-// CredentialEgressDialog sets one key's exit.
+// CredentialEgressDialog sets one key's exit. Until the proxies are listed it has no choice to send, and saving waits:
+// an empty form would read as direct and move a key off its proxy.
 export function CredentialEgressDialog({
   supplier,
   credential,
@@ -61,15 +68,17 @@ export function CredentialEgressDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const proxies = useQuery(egressProxiesQuery).data?.data ?? [];
+  const list = useQuery(egressProxiesQuery);
+  const proxies = list.data?.data ?? [];
   return (
     <ChangeDialog
       operation={`supplier-credential-egress:${credential.id}`}
+      ready={list.isSuccess}
       title={t("upstream.egress.title")}
       intro={<p>{t("upstream.egress.body")}</p>}
       action={t("upstream.egress.action")}
       fields={() => <EgressSelect defaultValue={credential.egress_id ?? ""} />}
-      read={(values) => values.egress_id || null}
+      read={(values) => chosenExit(list.isSuccess, values.egress_id) ?? { problem: t("upstream.egress.waiting") }}
       send={(egress, { reason, key }) =>
         unwrapChange(
           adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress", {

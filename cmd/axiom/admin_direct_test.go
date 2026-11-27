@@ -37,12 +37,20 @@ type fakeProvider struct {
 
 func newFakeProvider(t *testing.T, stream string, models ...string) *fakeProvider {
 	t.Helper()
+	p := unstartedFakeProvider(t, stream, models...)
+	p.server.StartTLS()
+	return p
+}
+
+// unstartedFakeProvider is the fake provider before it listens, for a test to give it a certificate of its own.
+func unstartedFakeProvider(t *testing.T, stream string, models ...string) *fakeProvider {
+	t.Helper()
 	p := &fakeProvider{stream: stream}
 	listOf := func(models ...string) string {
 		return `{"data":[{"id":"` + strings.Join(models, `","type":"model"},{"id":"`) + `","type":"model"}],"has_more":false}`
 	}
 	list, alias := listOf(models...), listOf(directAlias)
-	p.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("the fake provider could not read a request: %v", err)
@@ -99,8 +107,8 @@ func directBody(origin string, keys ...string) string {
 }
 
 // TestCreateTypedSupplierDirect: each key is checked once and only the one the provider let in is stored, sealed, with the
-// limits given and the models it listed; the line has an endpoint for the catalog's model, costed at its official
-// price, and the name the catalog does not know waits for a person. No key text is in the answer, the audit log or a
+// limits given and the models it listed; the line has an endpoint for the catalog's model, and the name the catalog
+// does not know waits for a person. No key text is in the answer, the audit log or a
 // table. The same request again is answered from its claim without asking the provider again.
 func TestCreateTypedSupplierDirect(t *testing.T) {
 	t.Parallel()
@@ -128,7 +136,7 @@ func TestCreateTypedSupplierDirect(t *testing.T) {
 		t.Errorf("the provider was asked %d times, want once for each key that is not a duplicate", n)
 	}
 	f.checkDirectRows(s.Id)
-	f.expectAudit("supplier.direct_connect", map[string]string{"reason": "a direct source", "target_id": s.Id, "detail->>'models'": "2", "detail->>'priced_endpoints'": "1"})
+	f.expectAudit("supplier.direct_connect", map[string]string{"reason": "a direct source", "target_id": s.Id, "detail->>'models'": "2", "detail->>'priced_endpoints'": "0"})
 	if leaked := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE detail::text LIKE '%sk-good%' OR detail::text LIKE '%sk-refused%'`); leaked != "0" || strings.Contains(rec.Body.String(), "sk-") {
 		t.Error("a key's text is in the audit log or the answer")
 	}
@@ -173,16 +181,17 @@ func outcomesOf(checks []adminapi.CredentialCheck) []string {
 }
 
 // checkDirectRows: the one key that passed is stored with the request's limits and the models it listed, the catalog's
-// model has an endpoint at its official price, and the name the catalog does not know waits for a person.
+// model has an endpoint whose cost is unknown, and the name the catalog does not know waits for a person.
 func (f catalogFixture) checkDirectRows(id string) {
 	f.t.Helper()
 	if got := f.text(`SELECT count(*)::text || ' ' || max(max_concurrency)::text || ' ' || max(requests_per_minute)::text || ' ' ||
 		max(hint) || ' ' || max(array_to_string(allowed_models, ',')) || ' ' || max(status) FROM suppliers.credentials WHERE supplier_id = '` + id + `'`); got != "1 3 60 0001 "+directModel+",mystery-model active" {
 		f.t.Errorf("the credentials are %q", got)
 	}
-	if got := f.text(`SELECT string_agg(e.upstream_name || ' ' || e.cost_state || ' ' || (c.schedule->'rates'->>'output') || ' ' || c.basis, ',')
-		FROM suppliers.endpoints e JOIN suppliers.cost_schedules c ON c.id = e.cost_schedule_id WHERE e.supplier_id = '` + id + `'`); got != directModel+" known 0.000002 published" {
-		f.t.Errorf("the endpoints are %q, want the listed model's at its official price", got)
+	// A compatible API may sell any author's models, at prices of its own: none is its author's official price.
+	if got := f.text(`SELECT string_agg(upstream_name || ' ' || cost_state || ' ' || (cost_schedule_id IS NULL)::text, ',')
+		FROM suppliers.endpoints WHERE supplier_id = '` + id + `'`); got != directModel+" unknown true" {
+		f.t.Errorf("the endpoints are %q, want the listed model's with no cost", got)
 	}
 	if got := f.text(`SELECT string_agg(upstream_name || ' ' || (model_id IS NULL)::text, ',' ORDER BY upstream_name) FROM suppliers.supplier_models WHERE supplier_id = '` + id + `'`); got != directModel+" false,mystery-model true" {
 		f.t.Errorf("the line's names are %q, want the unknown one waiting for a person", got)

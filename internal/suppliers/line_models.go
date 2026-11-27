@@ -22,8 +22,9 @@ import (
 
 // lineOffer is what a connection lists on a line of one: each name, the name the catalog knows it by (known; nil for
 // the name itself), the formats an endpoint of a catalog model serves there, what a name the catalog does not map yet
-// is listed as speaking, and the catalog authors whose official prices are the line's own prices (serves; empty for
-// any): a model of another author is sold there at a price of the platform's, which the catalog does not hold.
+// is listed as speaking, and the catalog authors whose official prices are the line's own prices (serves): a model of
+// another author is sold there at a price of the platform's, which the catalog does not hold. A type that serves no
+// author by name (compatible, an aggregator) sells every model at a price of its own, so none is priced from the catalog.
 type lineOffer struct {
 	names    []string
 	known    func(name string) string
@@ -34,7 +35,7 @@ type lineOffer struct {
 
 // prices says the catalog's reference price of m is the line's own.
 func (o lineOffer) prices(m catalog.Model) bool {
-	return len(o.serves) == 0 || slices.Contains(o.serves, m.Author)
+	return slices.Contains(o.serves, m.Author)
 }
 
 // offer is what the passed keys list.

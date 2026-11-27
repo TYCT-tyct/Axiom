@@ -177,9 +177,10 @@ func (q *Queries) LockCloudCredentials(ctx context.Context, db DBTX, supplierID 
 const resealCloudCredential = `-- name: ResealCloudCredential :exec
 UPDATE suppliers.credentials
 SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, status = 'active',
-    allowed_models = $5, call_names = $6, settings = $7, checked_at = $8,
-    check_outcome = 'passed', check_cause = NULL, check_status = $9
-WHERE supplier_id = $10 AND id = $11
+    allowed_models = $5, call_names = $6, settings = $7,
+    egress_id = $8, checked_at = $9, check_outcome = 'passed', check_cause = NULL,
+    check_status = $10
+WHERE supplier_id = $11 AND id = $12
 `
 
 type ResealCloudCredentialParams struct {
@@ -190,13 +191,15 @@ type ResealCloudCredentialParams struct {
 	AllowedModels []string
 	CallNames     []byte
 	Settings      []byte
+	EgressID      *string
 	CheckedAt     *time.Time
 	CheckStatus   *int32
 	SupplierID    uuid.UUID
 	ID            uuid.UUID
 }
 
-// A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it.
+// A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it,
+// with the replacement's settings and the exit it was checked through, as a new row of it would be.
 func (q *Queries) ResealCloudCredential(ctx context.Context, db DBTX, arg ResealCloudCredentialParams) error {
 	_, err := db.Exec(ctx, resealCloudCredential,
 		arg.Ciphertext,
@@ -206,6 +209,7 @@ func (q *Queries) ResealCloudCredential(ctx context.Context, db DBTX, arg Reseal
 		arg.AllowedModels,
 		arg.CallNames,
 		arg.Settings,
+		arg.EgressID,
 		arg.CheckedAt,
 		arg.CheckStatus,
 		arg.SupplierID,

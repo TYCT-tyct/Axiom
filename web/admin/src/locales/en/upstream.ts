@@ -226,6 +226,8 @@ export default {
     body: "This key's calls, checks and re-lists leave from the exit chosen. While the proxy is disabled they go through its fallback; while that cannot be used either the key rests, and is never sent direct instead.",
     action: "Save",
     done: "The exit is now {{exit}}",
+    unlisted: "The proxies did not load, so the exit cannot be changed now: {{reason}}",
+    waiting: "The exit can be saved once the proxies have loaded.",
   },
   enable: {
     offTitle: "Stop this account",

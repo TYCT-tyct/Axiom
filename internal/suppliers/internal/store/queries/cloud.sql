@@ -24,11 +24,13 @@ SELECT id, upstream_key_ref, region, status, max_concurrency, requests_per_minut
 WHERE supplier_id = @supplier_id ORDER BY id FOR UPDATE;
 
 -- name: ResealCloudCredential :exec
--- A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it.
+-- A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it,
+-- with the replacement's settings and the exit it was checked through, as a new row of it would be.
 UPDATE suppliers.credentials
 SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version, status = 'active',
-    allowed_models = sqlc.narg(allowed_models), call_names = sqlc.narg(call_names), settings = sqlc.narg(settings), checked_at = @checked_at,
-    check_outcome = 'passed', check_cause = NULL, check_status = @check_status
+    allowed_models = sqlc.narg(allowed_models), call_names = sqlc.narg(call_names), settings = sqlc.narg(settings),
+    egress_id = sqlc.narg(egress_id), checked_at = @checked_at, check_outcome = 'passed', check_cause = NULL,
+    check_status = @check_status
 WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: SetCloudAccount :exec

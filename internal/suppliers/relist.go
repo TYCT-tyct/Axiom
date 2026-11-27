@@ -172,7 +172,7 @@ func (l *lines) projectAll(ctx context.Context, snap *catalog.Snapshot, rows []s
 }
 
 // pastedLine is a line of the listing with what its type and row say: its adapter, the family it speaks, its
-// settlement currency and ratio.
+// settlement currency, and its ratio once read under the supplier's lock (locked).
 type pastedLine struct {
 	store.ListPastedLinesRow
 	t        adapter.Type
@@ -191,11 +191,7 @@ func (l *lines) pasted(r store.ListPastedLinesRow) (pastedLine, error) {
 	if err != nil {
 		return pastedLine{}, fmt.Errorf("the settlement currency: %w", err)
 	}
-	ratio, ok := new(big.Rat).SetString(r.Ratio)
-	if !ok {
-		return pastedLine{}, fmt.Errorf("the line's ratio %q is not a number", r.Ratio)
-	}
-	return pastedLine{ListPastedLinesRow: r, t: t, family: family, currency: currency, ratio: ratio}, nil
+	return pastedLine{ListPastedLinesRow: r, t: t, family: family, currency: currency}, nil
 }
 
 // project projects one line again, under its supplier's lock: a name waiting for a mapping that the catalog maps now
@@ -204,11 +200,11 @@ func (l *lines) pasted(r store.ListPastedLinesRow) (pastedLine, error) {
 // alone. A type whose models a person names (deployments) is not mapped again: the name is not what the catalog knows.
 func (l *lines) project(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot, r store.ListPastedLinesRow) error {
 	q := store.New()
-	if s, err := q.LockSupplier(ctx, tx, r.ID); err != nil || s.Status != "active" {
-		return err
-	}
 	line, err := l.pasted(r)
 	if err != nil {
+		return err
+	}
+	if ok, err := line.locked(ctx, tx, q); !ok {
 		return err
 	}
 	o, err := l.offer(ctx, tx, q, snap, line)
@@ -390,7 +386,7 @@ func (l *lines) askKey(ctx context.Context, line pastedLine, key lineKey) relist
 // alone.
 func (l *lines) writeKeys(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot, line pastedLine, said []relisted) error {
 	q := store.New()
-	if s, err := q.LockSupplier(ctx, tx, line.ID); err != nil || s.Status != "active" {
+	if ok, err := line.locked(ctx, tx, q); !ok {
 		return err
 	}
 	var listed []string

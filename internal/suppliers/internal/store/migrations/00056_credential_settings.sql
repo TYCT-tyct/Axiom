@@ -8,6 +8,13 @@
 ALTER TABLE suppliers.credentials
     ADD COLUMN settings jsonb CONSTRAINT credentials_settings_check CHECK (jsonb_typeof(settings) = 'object');
 
+-- Bedrock now takes an access key or an API key, so a node loads its credential only with the form named. Every
+-- Bedrock credential stored before this was an access key, Bedrock's default form. Vertex AI keeps one form, and no
+-- other type stored before this has more than one.
+UPDATE suppliers.credentials c SET settings = '{"form": "access_key"}'
+FROM suppliers.suppliers s
+WHERE s.id = c.supplier_id AND s.kind = 'bedrock' AND c.status <> 'erased';
+
 -- A pasted key's own balance, for a type that reads one (docs/domains/suppliers-direct.md「模型重读与余额」): each key is
 -- a wallet of its own. The amount is in the currency of the price entry its supplier is connected at, and observed_at
 -- is when it was read; both NULL for a key whose balance was never read, and for every other credential.

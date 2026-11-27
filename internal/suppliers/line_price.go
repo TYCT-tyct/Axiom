@@ -14,6 +14,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/syncer"
 )
 
 // The line ratio (docs/domains/suppliers-direct.md「成本与线路倍率」). A direct or cloud line's cost is its type's price
@@ -107,9 +108,9 @@ func (a *Admin) SetCostRatio(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 // priceLine points each endpoint of a platform direct or cloud line whose model the type prices at the plan of the
 // type's current price times ratio, the plan of that fingerprint when the endpoint has one already: plans are
 // append-only and one row a fingerprint, so a ratio changed and changed back takes up the earlier plan again. An
-// endpoint whose model the type does not price, or the catalog has no price for, keeps what it has. It reports how many
-// endpoints it priced. s is a platform supplier, read with PlatformOwned: an account's own key (BYOK) is free, and its
-// plans stay all zeros.
+// endpoint whose model the type does not price, or the catalog has no price for (withdrawn, say), has an unknown cost
+// and leaves routing: the plan it had is a price that is no longer the line's. It reports how many endpoints it priced.
+// s is a platform supplier, read with PlatformOwned: an account's own key (BYOK) is free, and its plans stay all zeros.
 func (a *Admin) priceLine(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot, s Supplier, group uuid.UUID, ratio *big.Rat) (int, error) {
 	t, ok := a.TypeOf(s.Kind)
 	if !ok {
@@ -126,6 +127,9 @@ func (a *Admin) priceLine(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot,
 		m, ok := snap.Model(catalog.ModelID(e.ModelID))
 		ref, has := snap.ReferencePrice(catalog.ModelID(e.ModelID), currency)
 		if !ok || !has || !(lineOffer{serves: t.Serves}).prices(m) {
+			if err := q.UnsetProjectedEndpointCost(ctx, tx, store.UnsetProjectedEndpointCostParams{ID: e.ID, Reason: new(string(syncer.CostUnknown))}); err != nil {
+				return 0, fmt.Errorf("take %s out of routing: %w", e.UpstreamName, err)
+			}
 			continue
 		}
 		if err := priceEndpoint(ctx, tx, q, s.ID, e.ID, ref, ratio); err != nil {
@@ -190,4 +194,16 @@ func linePlan(ref catalog.ReferencePrice, ratio *big.Rat) (plannedCost, error) {
 		return plannedCost{}, err
 	}
 	return plannedCost{schedule: b, fingerprint: fingerprint, derivation: derivation}, nil
+}
+
+// locked takes the supplier's lock and reads the line's ratio under it, in the transaction that prices at it: a ratio
+// read before the lock may be one setSupplierCostRatio has replaced since, and pricing at it would undo that change
+// while the line shows the new ratio. It reports false for a supplier no longer active, which is left alone.
+func (line *pastedLine) locked(ctx context.Context, tx pg.Tx, q *store.Queries) (bool, error) {
+	if s, err := q.LockSupplier(ctx, tx, line.ID); err != nil || s.Status != "active" {
+		return false, err
+	}
+	_, ratio, err := lineOf(ctx, tx, q, line.ID)
+	line.ratio = ratio
+	return err == nil, err
 }

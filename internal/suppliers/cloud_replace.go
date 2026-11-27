@@ -302,7 +302,8 @@ func (a *Admin) storeRegion(ctx context.Context, tx pg.Tx, q *store.Queries, gro
 	return nil
 }
 
-// resealRegion seals the credential again in the row made for it, p.Checks[i].Credential.
+// resealRegion seals the credential again in the row made for it, p.Checks[i].Credential, with what a new row of it
+// would have: its settings and the exit it was checked through (lineExit).
 func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p *CloudPlan, i int) error {
 	c := &p.Checks[i]
 	s, err := a.sealRegion(p, i, c.Credential)
@@ -312,7 +313,8 @@ func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p 
 	status := statusColumn(c.UpstreamStatus)
 	if err := q.ResealCloudCredential(ctx, tx, store.ResealCloudCredentialParams{
 		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
-		AllowedModels: s.allowed, CallNames: s.callNames, CheckedAt: &c.CheckedAt, CheckStatus: &status, SupplierID: p.supplier, ID: c.Credential,
+		AllowedModels: s.allowed, CallNames: s.callNames, Settings: settingsColumn(p.settings), EgressID: orNull(p.r.EgressID),
+		CheckedAt: &c.CheckedAt, CheckStatus: &status, SupplierID: p.supplier, ID: c.Credential,
 	}); err != nil {
 		return fmt.Errorf("re-seal the region %q: %w", c.Region, err)
 	}

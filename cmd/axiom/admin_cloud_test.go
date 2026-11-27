@@ -11,6 +11,8 @@ import (
 
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/suppliers"
@@ -361,8 +363,8 @@ func TestConnectingAtOnceStoresTheCredentialOnce(t *testing.T) {
 	}{
 		{"direct", func(w *callWorld) storeFunc {
 			provider := newFakeProvider(t, "", directModel)
-			admin, snap := w.directAdmin(provider)
-			plan := w.checkedDirect(admin, provider)
+			admin, snap := w.directAdmin(egress.NewForTesting(egresstest.Loopback(t, provider.server.Certificate())))
+			plan := w.checkedDirect(admin, compatibleAt(t, provider))
 			return func(ctx context.Context, tx pg.Tx) (suppliers.Connected, error) {
 				return admin.CreateDirect(ctx, tx, audit.System("test"), snap, plan)
 			}
