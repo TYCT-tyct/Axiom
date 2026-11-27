@@ -63,14 +63,13 @@ type Reach struct {
 
 // MadeKey is the key a group is connected with when Axiom makes it: its ID there, the group's ref, and its text, which
 // is only sealed. Made is a key Axiom's create just made; any other was found at the supplier under the marker name,
-// with the status and policy the supplier lists for it. Stored is the group's credential already, stored by the sync,
-// which has no text. Claim is the group's claim the connection settles.
+// with the status and policy the supplier lists for it. Claim is the group's claim the connection settles.
 type MadeKey struct {
 	Ref, GroupRef string
 	Text          secret.Secret
 	Status        string
 	Policy        KeyPolicy
-	Made, Stored  bool
+	Made          bool
 	Claim         uuid.UUID
 }
 
@@ -82,8 +81,8 @@ var ErrKeyInProgress = errors.New("suppliers: a key for the group is being made"
 // MakeKey obtains the dedicated key of one of a relay's groups without ever making a second one: the key the group's
 // claim knows or the supplier lists under the marker name the sync gives, or one made now under the claim, and reads
 // its text. A key found by its name must be usable (ErrKeyUnusable), as a pasted one must; then the claim is ended,
-// because nothing was sent. A group the supplier no longer lists is ErrGroupGone, and one with a credential that is no
-// key Axiom made is ErrGroupHasKey. ConnectGroup checks the claim and the credentials again under the lock.
+// because nothing was sent. A group the supplier no longer lists is ErrGroupGone, and one with a credential is
+// ErrGroupHasKey. ConnectGroup checks the claim and the credentials again under the lock.
 func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (MadeKey, error) {
 	sup, err := a.supplierToReach(ctx, r, supplier)
 	if err != nil {
@@ -108,9 +107,9 @@ func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID)
 	}
 	made := MadeKey{
 		Ref: string(got.Key.Ref), GroupRef: ref, Text: got.Text, Status: upstreamStatus(got.Key.Status),
-		Policy: policyOf(got.Key.Policy), Made: got.Made, Stored: got.Stored, Claim: got.Claim.ID,
+		Policy: policyOf(got.Key.Policy), Made: got.Made, Claim: got.Claim.ID,
 	}
-	if got.Made || got.Stored {
+	if got.Made {
 		made.Policy = KeyPolicy{}
 		return made, nil
 	}

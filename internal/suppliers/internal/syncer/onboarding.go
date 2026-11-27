@@ -75,7 +75,7 @@ func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
 		text, err = o.e.mgr.KeySecret(ctx, key.Ref)
 	} else {
 		var got Obtained
-		if got, err = o.obtain(ctx, target); err != nil || got.Stored || got.Key.Ref == "" {
+		if got, err = o.obtain(ctx, target); err != nil || got.Key.Ref == "" {
 			return err
 		}
 		key, text = got.Key, got.Text

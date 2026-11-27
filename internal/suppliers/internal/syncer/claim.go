@@ -20,7 +20,7 @@ var (
 	// ErrKeyInProgress is a group whose key another holder is making, or whose create was sent with a result not known
 	// yet: it is adopted once the supplier lists it, or after a person releases the claim.
 	ErrKeyInProgress = errors.New("syncer: the group's key is being made, or its create was sent and its result is not known")
-	// ErrGroupKeyed is a group with a credential that is no key Axiom made.
+	// ErrGroupKeyed is a group with a credential already.
 	ErrGroupKeyed = errors.New("syncer: the group has a credential")
 	// ErrGroupUnlisted is a group the supplier no longer lists.
 	ErrGroupUnlisted = errors.New("syncer: the supplier no longer lists the group")
@@ -28,7 +28,7 @@ var (
 
 // Claim is a group's claim as one read of it found it. ID is zero when there is none; Mine is a claim this read took,
 // held with nothing sent. Keyed is a group that holds a credential, and Stored is the key Axiom made that one of them
-// is, when it is one.
+// is, when it is one: a write of the key this claim led to finds it stored by the other path.
 type Claim struct {
 	Group  uuid.UUID
 	ID     uuid.UUID
@@ -57,14 +57,12 @@ type Claims interface {
 }
 
 // Obtained is a group's key as ObtainKey got it. Made is a key Axiom's own create made, unlimited and active; any
-// other was found by its name and must pass the caller's checks. Stored is a key stored already as the group's
-// credential, which has no Text. Claim is the claim to settle when the key is stored.
+// other was found by its name and must pass the caller's checks. Claim is the claim to settle when the key is stored.
 type Obtained struct {
-	Key    adapter.KeyState
-	Text   secret.Secret
-	Made   bool
-	Stored bool
-	Claim  Claim
+	Key   adapter.KeyState
+	Text  secret.Secret
+	Made  bool
+	Claim Claim
 }
 
 // ObtainKey gets the key of a group the sync or a person connects with a key Axiom makes, without ever making a second
@@ -85,8 +83,6 @@ func ObtainKey(ctx context.Context, claims Claims, m adapter.Manager, target Key
 			return Obtained{}, err
 		case c.Gone:
 			return Obtained{}, ErrGroupUnlisted
-		case c.Keyed && c.Stored != "":
-			return Obtained{Key: adapter.KeyState{Ref: c.Stored, GroupRef: target.GroupRef}, Stored: true, Claim: c}, nil
 		case c.Keyed:
 			return Obtained{}, ErrGroupKeyed
 		}

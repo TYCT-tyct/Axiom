@@ -164,7 +164,7 @@ func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, sourc
 	if source == adminapi.Make {
 		made, err := a.suppliers.MakeKey(ctx, a.reach(ctx), supplier, group)
 		return suppliers.GroupKey{
-			Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text, Policy: made.Policy, Claim: made.Claim, Stored: made.Stored,
+			Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text, Policy: made.Policy, Claim: made.Claim,
 		}, err
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)

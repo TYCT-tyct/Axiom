@@ -167,7 +167,7 @@ func (w claimWorld) connect(made MadeKey) (Credential, error) {
 	var c Credential
 	err := w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) (err error) {
 		_, c, err = w.admin.ConnectGroup(w.t.Context(), tx, w.actor, w.supplier, w.group, GroupKey{
-			Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text, Policy: made.Policy, Claim: made.Claim, Stored: made.Stored,
+			Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text, Policy: made.Policy, Claim: made.Claim,
 		}, "connect")
 		return err
 	})

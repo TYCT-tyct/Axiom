@@ -73,7 +73,7 @@ func (*Admin) Credentials(ctx context.Context, tx pg.Tx, q CredentialQuery) (pag
 // GroupKey is the key a group is connected with: one Axiom made at the supplier or found there under the marker name
 // (Source made, from MakeKey) or one a person pasted that the supplier lists under the group (Source pasted). Ref is
 // the supplier's ID of it; Text is only sealed; Policy is what the supplier lets it call, which a key Axiom made is not
-// limited in. Claim is the group's claim a made key settles, and Stored a made key the sync stored already.
+// limited in. Claim is the group's claim a made key settles.
 type GroupKey struct {
 	Source   string
 	Ref      string
@@ -81,7 +81,6 @@ type GroupKey struct {
 	Text     secret.Secret
 	Policy   KeyPolicy
 	Claim    uuid.UUID
-	Stored   bool
 }
 
 // ConnectGroup selects a group and gives it the key, in one change: the credential starts active with

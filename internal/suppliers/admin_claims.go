@@ -59,16 +59,10 @@ func (a *Admin) storeConnection(ctx context.Context, tx pg.Tx, supplier, group u
 			source: key.Source, ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
 		})
 	}
-	var id uuid.UUID
-	var err error
-	if key.Stored {
-		id, err = a.storedMade(ctx, tx, supplier, key.Ref)
-	} else {
-		id, _, err = persist.StoreMadeKey(ctx, tx, a.keys, supplier, group, persist.MadeKey{
-			Ref: key.Ref, Text: key.Text, Status: "active",
-			Policy: &adapter.KeyPolicy{Models: key.Policy.Models, ExpiresAt: key.Policy.ExpiresAt},
-		})
-	}
+	id, _, err := persist.StoreMadeKey(ctx, tx, a.keys, supplier, group, persist.MadeKey{
+		Ref: key.Ref, Text: key.Text, Status: "active",
+		Policy: &adapter.KeyPolicy{Models: key.Policy.Models, ExpiresAt: key.Policy.ExpiresAt},
+	})
 	if errors.Is(err, persist.ErrKeyBound) {
 		return Credential{}, ErrKeyBound
 	}
@@ -76,15 +70,6 @@ func (a *Admin) storeConnection(ctx context.Context, tx pg.Tx, supplier, group u
 		return Credential{}, err
 	}
 	return a.credential(ctx, tx, supplier, id)
-}
-
-// storedMade is the credential a made key the sync stored is.
-func (a *Admin) storedMade(ctx context.Context, tx pg.Tx, supplier uuid.UUID, ref string) (uuid.UUID, error) {
-	id, ok, err := a.CredentialByRef(ctx, tx, supplier, ref)
-	if err == nil && !ok {
-		err = ErrNoCredential
-	}
-	return id, err
 }
 
 // ReleaseKeyClaim ends a group's claim on making its key, for a person who has checked the supplier: a create whose
