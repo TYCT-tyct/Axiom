@@ -28,14 +28,13 @@
 
 ### 兼容 OpenAI 的厂商表
 
-说 OpenAI 格式、只是地址和路径不同的厂商，是 `vendors` 包里一张表的行，不各开一个包；删一行就删了这个类型，其余照常编译。有自己协议或签名的厂商各自一个包：Anthropic、Azure、Bedrock、Vertex，以后的 Gemini 原生也是。人填地址和调用族的 `compatible` 也是自己的包。
+说 OpenAI 格式、只是地址和路径不同的厂商，是 `vendors` 包里一张表的行，不各开一个包；删一行就删了这个类型，其余照常编译。有自己协议或签名的厂商各自一个包：Anthropic、Google（Gemini 原生调用）、Azure、Bedrock、Vertex。人填地址和调用族的 `compatible` 也是自己的包。
 
 一行写：`kind`、显示名、`vendor` 和 `serves`；地址及各自币种；OpenAI 格式所在的路径前缀（代替 `/v1`）；同一地址下 Anthropic 兼容接口的路径前缀（厂商提供时）；是否服务 Responses 和旧版补全；模型清单的路径（缺省是前缀加 `/models`）；余额读法；额外的设置字段。
 
 | `kind` | 名字 | 地址（币种） | OpenAI 前缀 | Anthropic 前缀 | 余额 |
 |---|---|---|---|---|---|
 | `openai` | OpenAI | `api.openai.com`（USD） | `/v1`，含 Responses、旧版补全 | — | — |
-| `google` | Google Gemini | `generativelanguage.googleapis.com`（USD） | `/v1beta/openai` | — | — |
 | `moonshot` | Kimi | `api.moonshot.cn`（CNY）、`api.moonshot.ai`（USD） | `/v1` | `/anthropic` | `/v1/users/me/balance` |
 | `deepseek` | DeepSeek | `api.deepseek.com`（CNY，或同址 USD） | `/v1` | `/anthropic` | `/user/balance` |
 | `ark` | 火山方舟 | `ark.cn-beijing.volces.com`（CNY） | `/api/v3` | — | — |
@@ -73,6 +72,7 @@
 ### 调用
 
 - **路径和鉴权**：按格式走类型的路径前缀和鉴权头（`adapter.Wire`）：OpenAI 族用 Bearer，Messages 用 `x-api-key` 和 `anthropic-version`。
+- **Google**：`google` 包，地址 `generativelanguage.googleapis.com`（USD）。key 的检测、模型清单和嵌入走 OpenAI 兼容层（`/v1beta/openai`，Bearer）；Chat 由 `Signer` 转成 Gemini 原生的 `generateContent` 请求体（`protocol.ChatToGemini`，按调用用的模型名写思考），流式发 `/v1beta/models/<模型>:streamGenerateContent?alt=sse`，否则 `:generateContent`，key 在 `x-goog-api-key`；回答经 `protocol.ChatFromGemini` 读成 Chat 流，整份回答当作只有一个事件的流读。用量（缓存、思考、按模态的 token，含工具提示的）和实际服务档位与 Gemini 入站同一张表；Gemini 中途报的用量随下一段内容交给中继，网关截流也按它结算。Gemini 说不了又会改变回答的 Chat 请求（音频输入、`extra_body` 的 `cached_content`、带工具的 `parallel_tool_calls:false`、模型不收的思考设置等）在发出前判为端点的失败、不执行，换下一个端点；被拦的提示词是内容策略拒绝，回 403。
 - **模型名**：请求体的 `model` 是端点的上游名；所选凭证的 `call_names` 给这个端点另起了名字时，发它自己的名字（云平台由 `Signer` 按 `SignedCall.Model` 签出，直连由调用面替换请求体顶层的 `model`，只在名字不同时做）。
 - **失败**：401 和 Google 的无效 key 是凭证被拒，OpenAI 的 `insufficient_quota` 和 402（DeepSeek 的余额不足）是这把 key 额度用尽，只歇这把；403 不标 key。调用面不取请求号（`ChargeRef` 为空）。
 
@@ -137,7 +137,8 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 | 直连接口建好即 `active` | key 已逐把检测、模型已读出，没有同步会把它从 `connecting` 移走 |
 | 直连 key 各算各的每分钟窗口；`upstream_key_ref` 是 key 的 SHA-256 前 128 位 | 贴多把 key 就是为了多份额度；摘要能找出重复而不保存原文 |
 | 直连接口不取请求号，成本按官方价估算、不对账 | 厂商的扣费读不到，取了请求号的尝试每条都会被报「等不到扣费」 |
-| Google 走它的 OpenAI 兼容层，`gemini` 格式先回 422 | 网关还不发 Gemini 原生的 `generateContent`（[接入的待定问题](gateway.md#待定问题)） |
+| Google 的 Chat 走 Gemini 原生的 `generateContent`，检测、模型清单和嵌入仍走 OpenAI 兼容层 | 原生接口带回完整的思考签名、按模态的用量和实际服务档位，同一份回答走两条路径计费逐项相同（`TestChatGoesNative`）；兼容层的模型清单能用同一把 key 免费检测 |
+| Chat 转 Gemini 与转 Converse 同一条规则：改变不了回答的丢掉，能同样说出的照说（`service_tier` 的 flex、priority 写 `serviceTier`，default、auto 不写；`reasoning_effort` 照 Google 兼容层的表：2.5 写预算，3 起写档位，4 的 minimal 写 low，xhigh 只给 Neon、Hydrogen），会改变回答又说不了的不执行、换下一个条目 | 回 400 会让有备选的请求也失败，悄悄丢掉会让回答不是客户端要的；照兼容层的映射，两条路径对同一请求得到同样的思考量 |
 | 只有声明了 Responses 的行（OpenAI、xAI）的端点声明 Responses，其余 OpenAI 族只声明 Chat | 兼容接口多数没有 Responses；网关会把 Responses 请求转成 Chat |
 | 贴进来的 key 和云凭证只写不读，接口只回末四位和不是秘密的部分；幂等指纹不含原文 | 与 BYOK、商户密钥同一规则：明文只在 `credentials` 的密文里 |
 | 云平台一个区域一条凭证，并发和每分钟上限按区域设；换凭证时所有区域一起换 | 复用挑凭证：一个区域满了自然换到下一个 |
@@ -149,7 +150,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 
 ## 待定问题
 
-- Vertex 的 API key 只能调 Gemini 的 `generateContent`，不能调 Claude 的 `rawPredict`，也不能调 OpenAI 兼容的 Chat：这种形式要等网关能发 Gemini 原生格式才能开，开之前描述里不列它。
+- Vertex 的 API key 只能调 Gemini 的 `generateContent`，不能调 Claude 的 `rawPredict`，也不能调 OpenAI 兼容的 Chat。Chat 转 Gemini 原生已有（`google` 包），开这种形式还要：新的凭证形式和它的检测（API key 不能列模型）、只给这种凭证建 Gemini 模型的端点、Vertex 的地址和鉴权；不是一行的改动，开之前描述里不列它。
 - 聚合商（硅基流动、OpenRouter 的 `/api/v1/models` 带价）、`compatible` 接入的地址和 Bedrock 上第三方模型的价从哪来（各自的价目、AWS 的 Price List 接口，或人确认基础价；直连线路现在没有人确认价的操作），定下之前聚合商不收，后两者成本未知、不进路由；Perplexity 等它的清单接口证实会校验 key；智谱、百炼的清单接口和腾讯 TokenHub 待查证后再加。
 - 每把 key 的余额告警（`BalanceLow`）：告警线设在哪一层、默认多少待定，定下之前只读余额、不告警。
 - 同一钱包的几把 key 各读一次余额、各自比较，若厂商的余额接口给出账户标识，可以合成一个钱包少读几次；看录制样本再定。
