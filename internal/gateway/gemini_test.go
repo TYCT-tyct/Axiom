@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -101,6 +102,42 @@ func TestGeminiFailureChargesOnlyWhatReachedTheClient(t *testing.T) {
 			}
 			resp, got := r.do(http.MethodPost, "/v1beta/models/acme/beta:"+c.method, a.key, strings.NewReader(body))
 			if resp.StatusCode != c.status {
+				t.Fatalf("%d: %s", resp.StatusCode, got)
+			}
+			r.exec.Outstanding.Drain(t.Context(), time.Minute)
+			if charged := r.charged(r.lastCall().ID); (charged > 0) != c.charged {
+				t.Errorf("charged %d, want a charge %v: %s", charged, c.charged, got)
+			}
+		})
+	}
+}
+
+// TestGeminiStreamCutForFundsChargesOnlyWhatReachedTheClient: a stream the gateway cuts because the reservation could
+// not be topped up is charged its model usage only when the Gemini client got some of it: text, which it did, and not
+// thoughts it did not ask for (docs/domains/billing.md「免单规则」).
+func TestGeminiStreamCutForFundsChargesOnlyWhatReachedTheClient(t *testing.T) {
+	t.Parallel()
+	const chunk = `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":%s,"finish_reason":null}]}` + "\n\n"
+	long := strings.Repeat("word ", 400) // past the reserved segment, so the reservation is topped up
+	const body = `{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"generationConfig":{"maxOutputTokens":1000}}`
+	for _, c := range []struct {
+		name, member string
+		charged      bool
+	}{
+		{"text", "content", true},
+		{"hidden thoughts", "reasoning_content", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := ledgerRig(t)
+			up := withExecutor(r, &flakyLedger{extend: func() (bool, error) { return false, errors.New("connection refused") }})
+			a := r.funded(1e12)
+			for _, e := range up.eps {
+				e.script = []scripted{hold(beat{data: fmt.Sprintf(chunk, `{"role":"assistant","`+c.member+`":"A start."}`)},
+					beat{data: fmt.Sprintf(chunk, `{"`+c.member+`":"`+long+`"}`)})}
+			}
+			resp, got := r.do(http.MethodPost, "/v1beta/models/acme/beta:streamGenerateContent?alt=sse", a.key, strings.NewReader(body))
+			if resp.StatusCode != http.StatusOK || !strings.Contains(got, "billing_unavailable") {
 				t.Fatalf("%d: %s", resp.StatusCode, got)
 			}
 			r.exec.Outstanding.Drain(t.Context(), time.Minute)

@@ -121,10 +121,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		return s.brokeAggregate(a, relay, e, again, scope)
 	}
 	if s.isStarted() {
-		rec.Result = billing.Committed
-		if !s.delivered() {
-			rec.Result = billing.FailedBeforeCommit
-		}
+		rec.Result = s.startedResult()
 		s.record(a, true, scope, routing.ReturnToClient)
 		return over, ended{relay: relay, err: e}
 	}
@@ -268,6 +265,15 @@ func (s *session) left(e ended) ended {
 	return e
 }
 
+// startedResult is the result of an attempt that failed after its stream began: committed, unless the client was given
+// none of its content, which is not charged as delivered (docs/domains/billing.md「免单规则」).
+func (s *session) startedResult() billing.Result {
+	if s.delivered() {
+		return billing.Committed
+	}
+	return billing.FailedBeforeCommit
+}
+
 // delivered reports whether a stream that began gave the client content of the reply: always, but for a Gemini client,
 // whose stream is Chat's converted and may have given it none (geminiWriter.delivered).
 func (s *session) delivered() bool {
@@ -367,7 +373,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
 	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 	if s.isStarted() {
-		rec.Result = billing.Committed
+		rec.Result = s.startedResult()
 		e.relay = relay
 		return over, e
 	}
