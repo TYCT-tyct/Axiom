@@ -128,7 +128,10 @@ test("an authorised admin can revoke and restore an existing platform grant", as
 
   await restore.click();
   await send(page, "resume the support assignment");
-  await expect(status(zhText("platformGrants.active"))).toBeVisible();
+  // The row offers revoking again only once the grants were read back after the change, its last request. The status
+  // word is no proof: the change dialog inside the drawer shows it as the change's result before it is sent, and a log
+  // cleared then would catch that read.
+  await expect(revoke).toBeVisible();
   expect(state.stored.size).toBe(2);
 
   // without platform_grants.manage the roles are not read at all
