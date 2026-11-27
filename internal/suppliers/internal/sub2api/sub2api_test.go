@@ -508,6 +508,7 @@ func TestCreateKey(t *testing.T) {
 		{"the login may not manage keys", 403, `{"code":"FORBIDDEN"}`, adapter.ErrKeyNotPermitted},
 		{"the group is gone", 404, `{"code":"NOT_FOUND"}`, adapter.ErrKeyGroupUnavailable},
 		{"the supplier refuses", 400, `{"code":"BAD_REQUEST"}`, adapter.ErrKeyRefused},
+		{"the same create is still running", 409, `{"code":409,"reason":"IDEMPOTENCY_IN_PROGRESS"}`, nil},
 		{"a supplier error", 500, `{}`, nil},
 	}
 	for _, c := range cases {
@@ -525,5 +526,31 @@ func TestCreateKey(t *testing.T) {
 				t.Fatalf("CreateKey = %v, want %v", err, c.want)
 			}
 		})
+	}
+}
+
+// TestKeyNamed: sub2api's search matches part of a name, so only the key with the same whole name in the group counts,
+// the oldest of two, over every page; a key it answers it does not have is gone.
+func TestKeyNamed(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	page := func(n, pages int, items ...string) adapter.Response {
+		return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"page":%d,"page_size":100,"pages":%d}}`,
+			strings.Join(items, ","), len(items), n, pages))}
+	}
+	srv := routes(map[string]adapter.Response{
+		"GET /api/v1/keys?page=1&page_size=100&search=axiom-1-2": page(1, 2,
+			`{"id":5,"name":"axiom-1-2-old","group_id":1,"status":"active"}`, `{"id":9,"name":"axiom-1-2","group_id":1,"status":"active"}`),
+		"GET /api/v1/keys?page=2&page_size=100&search=axiom-1-2": page(2, 2,
+			`{"id":7,"name":"axiom-1-2","group_id":1,"status":"disabled"}`, `{"id":3,"name":"axiom-1-2","group_id":2,"status":"active"}`),
+		"GET /api/v1/keys/7": {Status: 404, Body: []byte(`{"code":404,"reason":"API_KEY_NOT_FOUND","message":"api key not found"}`)},
+	})
+	m := manager0(t, srv, login(t, now.Add(24*time.Hour)))
+	key, found, err := m.(adapter.KeyMaker).KeyNamed(t.Context(), "1", "axiom-1-2")
+	if err != nil || !found || key.Ref != "7" || key.Status != adapter.KeyDisabled {
+		t.Fatalf("KeyNamed = %+v, %v, %v; want the oldest key of the name in the group, as listed", key, found, err)
+	}
+	if _, err := m.KeySecret(t.Context(), "7"); !errors.Is(err, adapter.ErrKeyGone) {
+		t.Errorf("KeySecret of a key sub2api does not have = %v, want gone", err)
 	}
 }

@@ -2304,9 +2304,29 @@ export interface paths {
         put?: never;
         /**
          * Connect a relay's group with a key made for it or pasted
-         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409, before any key is made: it is paused and resumed with `selectSupplierGroup`, keeping its key.
+         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. Axiom makes at most one key for a group: a key the supplier lists under that name already is used instead (422 when it is disabled, expired or out of quota), and while another request or the sync is making the group's key, or a key was asked for and the answer was lost, `make` and `paste` are 409 until the key is adopted or the claim is released (`releaseSupplierGroupKeyClaim`). A `make` that finds the key the sync stored meanwhile completes with that credential. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409, before any key is made: it is paused and resumed with `selectSupplierGroup`, keeping its key.
          */
         post: operations["connectSupplierGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/key-claim/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Let Axiom make a group's key afresh
+         * @description Axiom makes at most one key at the supplier for a group, under a claim the group holds until the key is stored. A key asked for whose answer was lost keeps the group `unconfirmed` until the supplier lists it under its name, and the group takes no other key meanwhile. Release the claim once the supplier is checked: no key named as Axiom names them is in the group, or one is and will be revoked there (the audit entry names its ID when Axiom knows it). The next `make` or sync then makes or finds the key afresh. A group with no claim is returned as it is, and nothing is recorded.
+         */
+        post: operations["releaseSupplierGroupKeyClaim"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6163,10 +6183,10 @@ export interface components {
             /** @description False when the supplier no longer lists the group. */
             present: boolean;
             /**
-             * @description How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+             * @description How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unconfirmed` when a key was asked for and the answer was lost: it is used once the supplier lists it, or after `releaseSupplierGroupKeyClaim`; `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
              * @enum {string}
              */
-            key_state?: "pending" | "ready" | "failed" | "unavailable";
+            key_state?: "pending" | "ready" | "failed" | "unconfirmed" | "unavailable";
             /**
              * @description Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
              * @enum {string}
@@ -12380,6 +12400,43 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    releaseSupplierGroupKeyClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                group_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The group, its claim released. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

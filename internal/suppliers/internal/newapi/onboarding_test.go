@@ -2,6 +2,8 @@ package newapi
 
 import (
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -59,8 +61,8 @@ func TestCreateKey(t *testing.T) {
 		t.Parallel()
 		f := newFake()
 		f.routes["POST /api/token/"] = answer(200, `{"success":true,"message":""}`)
-		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(200,
-			`{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`)
+		f.routes[searchFirst] = answer(200,
+			`{"success":true,"data":{"total":1,"items":[{"id":12,"name":"axiom-1-2","group":"g","status":1}]}}`)
 		ref, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
 		if err != nil || ref != "12" {
 			t.Fatalf("CreateKey = %q, %v", ref, err)
@@ -85,11 +87,11 @@ func TestCreateKey(t *testing.T) {
 		t.Parallel()
 		f := newFake()
 		f.routes["POST /api/token/"] = answer(200, `{"success":true}`)
-		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(403,
+		f.routes[searchFirst] = answer(403,
 			`{"code":"ACCESS_TOKEN_SCOPE_DENIED","message_params":{"scope":"api_key:read"},"success":false}`)
 		_, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
-		if !errors.Is(err, adapter.ErrKeyNotPermitted) {
-			t.Fatalf("CreateKey = %v, want not permitted", err)
+		if !errors.Is(err, adapter.ErrKeyNotPermitted) || !errors.Is(err, adapter.ErrKeyMade) {
+			t.Fatalf("CreateKey = %v, want not permitted to search a key that was made", err)
 		}
 	})
 	t.Run("the supplier refuses", func(t *testing.T) {
@@ -105,10 +107,10 @@ func TestCreateKey(t *testing.T) {
 		t.Parallel()
 		f := newFake()
 		f.routes["POST /api/token/"] = answer(200, `{"success":true}`)
-		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(200, `{"success":true,"data":{"items":[]}}`)
+		f.routes[searchFirst] = answer(200, `{"success":true,"data":{"total":0,"items":[]}}`)
 		_, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
-		if err == nil || errors.Is(err, adapter.ErrKeyNotPermitted) || errors.Is(err, adapter.ErrKeyRefused) {
-			t.Fatalf("CreateKey = %v, want a task failure", err)
+		if !errors.Is(err, adapter.ErrKeyMade) || errors.Is(err, adapter.ErrKeyNotPermitted) || errors.Is(err, adapter.ErrKeyRefused) {
+			t.Fatalf("CreateKey = %v, want a key made and not listed yet", err)
 		}
 	})
 }
@@ -121,13 +123,13 @@ func TestA5xxOnAKeyReadIsRetryable(t *testing.T) {
 		t.Parallel()
 		f := newFake()
 		f.routes["POST /api/token/"] = answer(200, `{"success":true}`)
-		search := "GET /api/token/search?keyword=axiom-1-2&page_size=100"
+		search := searchFirst
 		f.routes[search] = answer(503, `{"success":false}`)
 		m := open(t, f, now)
-		if _, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2"); !errors.Is(err, errServer) || errors.Is(err, adapter.ErrUnrecognised) {
+		if _, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2"); !errors.Is(err, errServer) || !errors.Is(err, adapter.ErrKeyMade) || errors.Is(err, adapter.ErrUnrecognised) {
 			t.Fatalf("search = %v, want a retryable server error", err)
 		}
-		f.routes[search] = answer(200, `{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`)
+		f.routes[search] = answer(200, `{"success":true,"data":{"total":1,"items":[{"id":12,"name":"axiom-1-2","group":"g","status":1}]}}`)
 		ref, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
 		if err != nil || ref != "12" {
 			t.Fatalf("after recovery CreateKey = %q, %v; want 12", ref, err)
@@ -146,4 +148,64 @@ func TestA5xxOnAKeyReadIsRetryable(t *testing.T) {
 			t.Fatalf("after recovery KeySecret = %v, %v; want text", text, err)
 		}
 	})
+}
+
+// searchFirst is the first page of new-api's search for the key name the tests make.
+const searchFirst = "GET /api/token/search?keyword=axiom-1-2&p=1&page_size=100"
+
+// TestKeyNamed: only a key whose name and group are the same whole counts, the oldest of two; every page of the search
+// is read to its total, and a search that ends short of it, or cannot be read, is no absence.
+func TestKeyNamed(t *testing.T) {
+	t.Parallel()
+	item := func(id int, name, group string) string {
+		return fmt.Sprintf(`{"id":%d,"name":%q,"group":%q,"status":1}`, id, name, group)
+	}
+	page := func(total int, items ...string) adapter.Response {
+		return answer(200, fmt.Sprintf(`{"success":true,"data":{"total":%d,"items":[%s]}}`, total, strings.Join(items, ",")))
+	}
+	second := "GET /api/token/search?keyword=axiom-1-2&p=2&page_size=100"
+	many := make([]string, 100)
+	for i := range many {
+		many[i] = item(500+i, "axiom-1-2", "other")
+	}
+	for _, c := range []struct {
+		name   string
+		routes map[string]adapter.Response
+		ref    adapter.KeyRef
+		found  bool
+		broken bool
+	}{
+		{name: "none", routes: map[string]adapter.Response{searchFirst: page(0)}},
+		{name: "another group's", routes: map[string]adapter.Response{searchFirst: page(1, item(3, "axiom-1-2", "vip"))}},
+		{name: "the oldest of two", routes: map[string]adapter.Response{searchFirst: page(2, item(9, "axiom-1-2", "g"), item(4, "axiom-1-2", "g"))}, ref: "4", found: true},
+		{name: "on the second page", routes: map[string]adapter.Response{searchFirst: page(101, many...), second: page(101, item(7, "axiom-1-2", "g"))}, ref: "7", found: true},
+		{name: "a search that ends short", routes: map[string]adapter.Response{searchFirst: page(101, many...), second: page(101)}, broken: true},
+		{name: "a search that fails", routes: map[string]adapter.Response{searchFirst: answer(503, `{"success":false}`)}, broken: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFake()
+			maps.Copy(f.routes, c.routes)
+			key, found, err := open(t, f, now).(adapter.KeyMaker).KeyNamed(t.Context(), "g", "axiom-1-2")
+			if (err != nil) != c.broken || found != c.found || key.Ref != c.ref {
+				t.Fatalf("KeyNamed = %+v, %v, %v; want %q, %v, broken %v", key, found, err, c.ref, c.found, c.broken)
+			}
+		})
+	}
+}
+
+// TestKeySecretOfAKeyNewAPIDoesNotHave: new-api's answer that the account has no such key is the key gone, and no other
+// failed answer is.
+func TestKeySecretOfAKeyNewAPIDoesNotHave(t *testing.T) {
+	t.Parallel()
+	for body, gone := range map[string]bool{
+		`{"success":false,"message":"record not found"}`: true,
+		`{"success":false,"message":"something else"}`:   false,
+	} {
+		f := newFake()
+		f.routes["POST /api/token/9/key"] = answer(200, body)
+		if _, err := open(t, f, now).KeySecret(t.Context(), "9"); errors.Is(err, adapter.ErrKeyGone) != gone {
+			t.Errorf("KeySecret after %s = %v, want gone %v", body, err, gone)
+		}
+	}
 }

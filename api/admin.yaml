@@ -4917,7 +4917,12 @@ paths:
       description: >-
         Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated
         key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals
-        it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the
+        it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. Axiom makes at
+        most one key for a group: a key the supplier lists under that name already is used instead (422 when it is
+        disabled, expired or out of quota), and while another request or the sync is making the group's key, or a key
+        was asked for and the answer was lost, `make` and `paste` are 409 until the key is adopted or the claim is
+        released (`releaseSupplierGroupKeyClaim`). A `make` that finds the key the sync stored meanwhile completes with
+        that credential. `paste`: the
         person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another
         group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at
         `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential
@@ -4958,6 +4963,52 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/key-claim/release:
+    post:
+      operationId: releaseSupplierGroupKeyClaim
+      tags: [Suppliers]
+      summary: Let Axiom make a group's key afresh
+      description: >-
+        Axiom makes at most one key at the supplier for a group, under a claim the group holds until the key is stored.
+        A key asked for whose answer was lost keeps the group `unconfirmed` until the supplier lists it under its
+        name, and the group takes no other key meanwhile. Release the claim once the supplier is checked: no key named
+        as Axiom names them is in the group, or one is and will be revoked there (the audit entry names its ID when
+        Axiom knows it). The next `make` or sync then makes or finds the key afresh. A group with no claim is returned
+        as it is, and nothing is recorded.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: group_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The group, its claim released.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierGroup"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}/key-identifications:
     post:
@@ -11014,12 +11065,13 @@ components:
         present: {type: boolean, description: "False when the supplier no longer lists the group."}
         key_state:
           type: string
-          enum: [pending, ready, failed, unavailable]
+          enum: [pending, ready, failed, unconfirmed, unavailable]
           description: >-
             How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make
             one or is reading the text of one a person bound, `failed` when the last attempt did not work (see
-            `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server
-            of an earlier release.
+            `key_reason`), `unconfirmed` when a key was asked for and the answer was lost: it is used once the supplier
+            lists it, or after `releaseSupplierGroupKeyClaim`; `unavailable` when no key is needed because the group
+            cannot be called. Absent from a server of an earlier release.
         key_reason:
           type: string
           enum: [not_permitted, group_unavailable, refused]

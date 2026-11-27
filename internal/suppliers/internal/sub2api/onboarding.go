@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
@@ -57,6 +58,10 @@ func createdKey(resp adapter.Response) (adapter.KeyRef, error) {
 			return "", fmt.Errorf("%w: a key answer without an id", adapter.ErrUnrecognised)
 		}
 		return adapter.KeyRef(k.ID), nil
+	case resp.Status == http.StatusConflict && idempotencyCodes[errorCode(resp.Body)]:
+		// A create of this name is still running, waiting to be retried, or was sent with another body: whether a key
+		// came of it is not known, so it is no refusal.
+		return "", fmt.Errorf("sub2api: make the key: the create of this name is %s", errorCode(resp.Body))
 	case resp.Status == http.StatusBadRequest, resp.Status == http.StatusConflict:
 		return "", adapter.ErrKeyRefused
 	case resp.Status >= http.StatusInternalServerError:
@@ -65,3 +70,35 @@ func createdKey(resp adapter.Response) (adapter.KeyRef, error) {
 		return "", fmt.Errorf("%w: make the key: status %d", adapter.ErrUnrecognised, resp.Status)
 	}
 }
+
+// KeyNamed implements adapter.KeyMaker with sub2api's key search, which matches part of a name: every page of it is
+// read and only the key whose name and group are the same whole counts. Of two, the oldest (lowest id) is the answer.
+func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+	var best adapter.KeyState
+	bestID := int64(0)
+	for p := 1; ; p++ {
+		items, pages, _, err := m.keysAt(ctx, p, name)
+		if err != nil {
+			return adapter.KeyState{}, false, err
+		}
+		for _, k := range items {
+			id, err := k.ID.int64()
+			if err != nil {
+				return adapter.KeyState{}, false, err
+			}
+			if k.Name == name && string(k.GroupID) == groupRef && (bestID == 0 || id < bestID) {
+				best, bestID = keyState(k), id
+			}
+		}
+		if p >= pages || len(items) == 0 {
+			return best, bestID != 0, nil
+		}
+	}
+}
+
+// CreateReplay implements adapter.KeyMaker: sub2api keeps a create's answer under its idempotency key, the name, for 24
+// hours (service.DefaultIdempotencyConfig); an hour less leaves room for the two clocks.
+func (*manager) CreateReplay() time.Duration { return 23 * time.Hour }
+
+// idempotencyCodes are sub2api's answers to a create whose idempotency key, the name, it has seen before.
+var idempotencyCodes = map[string]bool{"IDEMPOTENCY_IN_PROGRESS": true, "IDEMPOTENCY_KEY_CONFLICT": true, "IDEMPOTENCY_RETRY_BACKOFF": true}

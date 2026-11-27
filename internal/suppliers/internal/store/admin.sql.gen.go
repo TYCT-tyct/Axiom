@@ -213,7 +213,7 @@ func (q *Queries) GetEndpointOf(ctx context.Context, db DBTX, arg GetEndpointOfP
 const getGroupOf = `-- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
-    pool_observed_at
+    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed
 FROM suppliers.supplier_groups g WHERE g.supplier_id = $1 AND g.id = $2
 `
 
@@ -240,6 +240,7 @@ type GetGroupOfRow struct {
 	PoolCapacity   *int32
 	PoolLow        bool
 	PoolObservedAt *time.Time
+	KeyUnconfirmed bool
 }
 
 func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams) ([]GetGroupOfRow, error) {
@@ -269,6 +270,7 @@ func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams)
 			&i.PoolCapacity,
 			&i.PoolLow,
 			&i.PoolObservedAt,
+			&i.KeyUnconfirmed,
 		); err != nil {
 			return nil, err
 		}
@@ -569,7 +571,7 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 const listGroupsOf = `-- name: ListGroupsOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
-    pool_observed_at
+    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed
 FROM suppliers.supplier_groups g WHERE g.supplier_id = $1 ORDER BY g.name, g.id
 `
 
@@ -591,6 +593,7 @@ type ListGroupsOfRow struct {
 	PoolCapacity   *int32
 	PoolLow        bool
 	PoolObservedAt *time.Time
+	KeyUnconfirmed bool
 }
 
 func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListGroupsOfRow, error) {
@@ -620,6 +623,7 @@ func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUI
 			&i.PoolCapacity,
 			&i.PoolLow,
 			&i.PoolObservedAt,
+			&i.KeyUnconfirmed,
 		); err != nil {
 			return nil, err
 		}

@@ -157,12 +157,15 @@ func connectionKey(b *adminapi.GroupConnection) (secret.Secret, string, error) {
 	return text, last4(*b.Key), err
 }
 
-// groupKey asks the supplier for the key a group is connected with: one it makes now, or which of its keys the pasted
-// text is, which must be listed, usable, and is stored with what the supplier lets it call.
+// groupKey asks the supplier for the key a group is connected with: the one Axiom makes for it (or found under its
+// name), or which of its keys the pasted text is, which must be listed, usable, and is stored with what the supplier
+// lets it call.
 func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, source adminapi.GroupConnectionKeySource, text secret.Secret) (suppliers.GroupKey, error) {
 	if source == adminapi.Make {
 		made, err := a.suppliers.MakeKey(ctx, a.reach(ctx), supplier, group)
-		return suppliers.GroupKey{Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text}, err
+		return suppliers.GroupKey{
+			Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text, Policy: made.Policy, Claim: made.Claim, Stored: made.Stored,
+		}, err
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
 	switch {
@@ -438,4 +441,25 @@ func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupR
 		check.Outcome, check.Cause = suppliers.CheckFailed, suppliers.CauseWrongGroup
 	}
 	return check, found, nil
+}
+
+// ReleaseSupplierGroupKeyClaim ends a group's claim on making its key, so the next make or sync makes or finds it afresh.
+func (a adminAPI) ReleaseSupplierGroupKeyClaim(ctx context.Context, request adminapi.ReleaseSupplierGroupKeyClaimRequestObject) (adminapi.ReleaseSupplierGroupKeyClaimResponseObject, error) {
+	supplier, err := supplierIDOf(request.SupplierId)
+	if err != nil {
+		return nil, err
+	}
+	group, err := supplierIDOf(request.GroupId)
+	if err != nil {
+		return nil, suppliers.ErrNoGroup
+	}
+	released, replayed, err := idempotently(ctx, a.db, "releaseSupplierGroupKeyClaim", request.Params.IdempotencyKey, []any{request.SupplierId, request.GroupId, request.Body},
+		func(tx pg.Tx) (adminapi.SupplierGroup, error) {
+			g, err := a.suppliers.ReleaseKeyClaim(ctx, tx, actor(ctx), supplier, group, request.Body.Reason)
+			return groupBody(g), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ReleaseSupplierGroupKeyClaim200JSONResponse{Body: released, Headers: adminapi.ReleaseSupplierGroupKeyClaim200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }

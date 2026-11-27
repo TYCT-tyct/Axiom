@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
@@ -14,8 +15,7 @@ import (
 var _ adapter.KeyMaker = (*manager)(nil)
 
 // CreateKey implements adapter.KeyMaker: a token with no quota, expiry or model limit, in the group the sync names.
-// new-api answers with no id, so the key is found by the name the sync gave it; a lost answer is adopted by the same
-// name on the next complete listing instead of making a second key.
+// new-api answers with no id, so the key is found by the name the sync gave it.
 func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter.KeyRef, error) {
 	body, err := jsonx.MarshalCanonical(struct {
 		Name               string `json:"name"`
@@ -35,7 +35,7 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 }
 
 // keyCreated reads what new-api said to an add. Its successful answer has no id, so a made key is found by the name the
-// sync gave it; a lost answer is adopted by that name on the next complete listing.
+// sync gave it; any failure to find it then wraps ErrKeyMade, because the key exists whatever the search says.
 func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp adapter.Response) (adapter.KeyRef, error) {
 	var env envelope
 	parsed := jsonx.Unmarshal(resp.Body, &env) == nil
@@ -47,7 +47,15 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 		}
 		return "", refused
 	case resp.Status == http.StatusOK && parsed && env.Success:
-		return m.keyByName(ctx, name, groupRef)
+		key, found, err := m.KeyNamed(ctx, groupRef, name)
+		switch {
+		case err != nil:
+			return "", fmt.Errorf("%w: %w", adapter.ErrKeyMade, err)
+		case !found:
+			// The key may exist but not be visible yet. A second create now would make a second key.
+			return "", fmt.Errorf("%w: new-api does not list it yet", adapter.ErrKeyMade)
+		}
+		return key.Ref, nil
 	case resp.Status == http.StatusOK && parsed:
 		// A token limit, a group the account cannot use, or another refusal the supplier states in its words. The
 		// words are not kept: they may echo the request, and the class is all the page needs.
@@ -59,37 +67,39 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 	}
 }
 
-// keyByName finds the key just made: the create answer has no id, and the search is the only read that names it.
-func (m *manager) keyByName(ctx context.Context, name, group string) (adapter.KeyRef, error) {
-	var found struct {
-		Data *struct {
-			Items []struct {
-				ID    int64  `json:"id"`
-				Name  string `json:"name"`
-				Group string `json:"group"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	query := url.Values{"keyword": {name}, "page_size": {"100"}}
-	if err := m.api.get(ctx, "/api/token/search?"+query.Encode(), global, &found); err != nil {
-		if scopeDenied(err) {
-			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
+// KeyNamed implements adapter.KeyMaker with new-api's search, which matches the name whole when it holds no % or _:
+// every page is read, to the total the search reports, and a search that stops short of it is an error, not an
+// absence. Of two keys with the name in the group, the oldest (lowest id) is the answer.
+func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+	var best adapter.KeyState
+	bestID, read := int64(0), 0
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d pages of keys named %s", adapter.ErrUnrecognised, maxPages, name)
 		}
-		return "", err
-	}
-	if found.Data == nil || found.Data.Items == nil {
-		return "", errMissing("keys named " + name)
-	}
-	ref := int64(0)
-	for _, item := range found.Data.Items {
-		if item.ID > 0 && item.Name == name && item.Group == group && (ref == 0 || item.ID < ref) {
-			ref = item.ID
+		query := url.Values{"keyword": {name}, "p": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(keyPageSize)}}
+		tokens, total, err := m.tokens(ctx, "/api/token/search?"+query.Encode())
+		if err != nil {
+			if scopeDenied(err) {
+				return adapter.KeyState{}, false, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
+			}
+			return adapter.KeyState{}, false, err
+		}
+		for _, t := range tokens {
+			id, _ := strconv.ParseInt(string(t.state.Ref), 10, 64) //nolint:errcheck // tokens made the ref from an int64
+			if t.state.Name == name && t.state.GroupRef == groupRef && (bestID == 0 || id < bestID) {
+				best, bestID = t.state, id
+			}
+		}
+		read += len(tokens)
+		switch {
+		case read >= total:
+			return best, bestID != 0, nil
+		case len(tokens) == 0:
+			return adapter.KeyState{}, false, fmt.Errorf("%w: the search of keys named %s ended before its total", adapter.ErrUnrecognised, name)
 		}
 	}
-	if ref == 0 {
-		// The key may exist but not be visible yet. The next complete listing adopts it by name; a second create now
-		// would make a second key.
-		return "", fmt.Errorf("new-api: the key made is not listed yet")
-	}
-	return adapter.KeyRef(strconv.FormatInt(ref, 10)), nil
 }
+
+// CreateReplay implements adapter.KeyMaker: new-api makes a second key for a second create, whatever its name.
+func (*manager) CreateReplay() time.Duration { return 0 }

@@ -2866,6 +2866,7 @@ const (
 	SupplierGroupKeyStatePending     SupplierGroupKeyState = "pending"
 	SupplierGroupKeyStateReady       SupplierGroupKeyState = "ready"
 	SupplierGroupKeyStateUnavailable SupplierGroupKeyState = "unavailable"
+	SupplierGroupKeyStateUnconfirmed SupplierGroupKeyState = "unconfirmed"
 )
 
 // Valid indicates whether the value is a known member of the SupplierGroupKeyState enum.
@@ -2878,6 +2879,8 @@ func (e SupplierGroupKeyState) Valid() bool {
 	case SupplierGroupKeyStateReady:
 		return true
 	case SupplierGroupKeyStateUnavailable:
+		return true
+	case SupplierGroupKeyStateUnconfirmed:
 		return true
 	default:
 		return false
@@ -8237,7 +8240,7 @@ type SupplierGroup struct {
 	// KeyReason Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
 	KeyReason *SupplierGroupKeyReason `json:"key_reason,omitempty"`
 
-	// KeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+	// KeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unconfirmed` when a key was asked for and the answer was lost: it is used once the supplier lists it, or after `releaseSupplierGroupKeyClaim`; `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
 	KeyState *SupplierGroupKeyState `json:"key_state,omitempty"`
 
 	// ModelCount The models the supplier lists in the group.
@@ -8267,7 +8270,7 @@ type SupplierGroup struct {
 // SupplierGroupKeyReason Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
 type SupplierGroupKeyReason string
 
-// SupplierGroupKeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+// SupplierGroupKeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unconfirmed` when a key was asked for and the answer was lost: it is used once the supplier lists it, or after `releaseSupplierGroupKeyClaim`; `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
 type SupplierGroupKeyState string
 
 // SupplierInboxItem One item; the members beyond the first are present for the kinds that have them.
@@ -9998,6 +10001,12 @@ type ConnectSupplierGroupParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ReleaseSupplierGroupKeyClaimParams defines parameters for ReleaseSupplierGroupKeyClaim.
+type ReleaseSupplierGroupKeyClaimParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSupplierIntakeRuleParams defines parameters for SetSupplierIntakeRule.
 type SetSupplierIntakeRuleParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -10468,6 +10477,9 @@ type SelectSupplierGroupJSONRequestBody = GroupSelection
 
 // ConnectSupplierGroupJSONRequestBody defines body for ConnectSupplierGroup for application/json ContentType.
 type ConnectSupplierGroupJSONRequestBody = GroupConnection
+
+// ReleaseSupplierGroupKeyClaimJSONRequestBody defines body for ReleaseSupplierGroupKeyClaim for application/json ContentType.
+type ReleaseSupplierGroupKeyClaimJSONRequestBody = ReasonRequest
 
 // SetSupplierIntakeRuleJSONRequestBody defines body for SetSupplierIntakeRule for application/json ContentType.
 type SetSupplierIntakeRuleJSONRequestBody = SupplierIntakeRuleUpdate

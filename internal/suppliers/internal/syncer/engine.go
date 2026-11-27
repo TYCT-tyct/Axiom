@@ -33,6 +33,8 @@ type KeyStore interface {
 	// KeysToBind lists the credentials a person bound by reference that the sync has not read the text of yet, and
 	// whose group is not waiting out a failure.
 	KeysToBind(ctx context.Context, now time.Time) ([]BindTarget, error)
+	// Claims are the groups' claims on making their keys, which a person's make shares.
+	Claims() Claims
 }
 
 // KeyTarget is a group the sync makes a key for, and the name that marks the key as ours.

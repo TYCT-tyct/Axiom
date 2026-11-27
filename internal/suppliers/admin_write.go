@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -115,7 +116,7 @@ func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Grou
 	g := rows[0]
 	return groupOf(groupFacts{
 		ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
-		Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError,
+		Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed,
 		Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
 	})
 }
@@ -136,6 +137,9 @@ func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 		return Credential{}, err
 	case !g.Selected:
 		return Credential{}, ErrGroupNotSelected
+	}
+	if err := unclaimed(persist.Unclaimed(ctx, tx, supplier, group, a.now())); err != nil {
+		return Credential{}, err
 	}
 	id := uuid.NewV7()
 	err = store.New().InsertBindingCredential(ctx, tx, store.InsertBindingCredentialParams{

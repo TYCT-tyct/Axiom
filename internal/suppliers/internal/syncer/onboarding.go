@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
@@ -32,7 +33,7 @@ func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.Key
 	}
 	now := e.now()
 	run := &keyOnboarding{
-		e: e, c: c, policies: policies, retry: now.Add(e.set.KeyRetry),
+		e: e, c: c, policies: policies, retry: now.Add(e.set.KeyRetry), claims: store.Claims(),
 		byName: make(map[string]adapter.KeyState, len(*policies)),
 		byRef:  make(map[adapter.KeyRef]bool, len(*policies)),
 	}
@@ -42,7 +43,7 @@ func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.Key
 			run.byName[k.Name] = k
 		}
 	}
-	run.maker, run.canMake = e.mgr.(adapter.KeyMaker)
+	_, run.canMake = e.mgr.(adapter.KeyMaker)
 	for _, target := range targets {
 		if err := run.makeKey(ctx, target); err != nil {
 			return nil, err
@@ -59,24 +60,26 @@ type keyOnboarding struct {
 	policies *[]adapter.KeyState
 	byName   map[string]adapter.KeyState
 	byRef    map[adapter.KeyRef]bool
-	maker    adapter.KeyMaker
+	claims   Claims
 	canMake  bool
 	retry    time.Time
 }
 
-// makeKey makes or adopts one key, reads its text and adds it to the state and the policies. A name that belongs to
-// another group is not evidence of this key, so it is made again with this group's marker.
+// makeKey adopts the key the listing has under the group's marker name, or obtains one under the group's claim, reads
+// its text and adds it to the state and the policies. A name that belongs to another group is not evidence of this key.
 func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
-	found, adopted := o.find(target)
-	ref, status := found.Ref, found.Status
-	if !adopted {
-		created, made, err := o.create(ctx, target)
-		if err != nil || !made {
+	key, adopted := o.find(target)
+	var text secret.Secret
+	var err error
+	if adopted {
+		text, err = o.e.mgr.KeySecret(ctx, key.Ref)
+	} else {
+		var got Obtained
+		if got, err = o.obtain(ctx, target); err != nil || got.Stored || got.Key.Ref == "" {
 			return err
 		}
-		ref, status = created, adapter.KeyActive
+		key, text = got.Key, got.Text
 	}
-	text, err := o.e.mgr.KeySecret(ctx, ref)
 	if err != nil {
 		if reason, failed := keyFailure(err); failed {
 			o.fail(target.GroupRef, reason)
@@ -84,12 +87,11 @@ func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
 		}
 		return err
 	}
-	if !adopted {
-		key := adapter.KeyState{Ref: ref, GroupRef: target.GroupRef, Name: target.Name, Status: status, Policy: &adapter.KeyPolicy{}}
+	if !o.byRef[key.Ref] {
 		*o.policies = append(*o.policies, key)
-		o.byRef[ref] = true
+		o.byRef[key.Ref] = true
 	}
-	o.c.KeyWrites.Made = append(o.c.KeyWrites.Made, KeyMade{Ref: ref, GroupRef: target.GroupRef, Status: status, Secret: text})
+	o.c.KeyWrites.Made = append(o.c.KeyWrites.Made, KeyMade{Ref: key.Ref, GroupRef: target.GroupRef, Status: key.Status, Secret: text})
 	return nil
 }
 
@@ -103,25 +105,28 @@ func (o *keyOnboarding) find(target KeyTarget) (adapter.KeyState, bool) {
 	return found, adopted
 }
 
-// create makes the key. made is false when there is no maker or the group failed a fixed way; then the step continues
-// with the next group. A task failure is returned.
-func (o *keyOnboarding) create(ctx context.Context, target KeyTarget) (ref adapter.KeyRef, made bool, err error) {
+// obtain gets the group's key under its claim. A group whose key someone else is making, or that has a key by now, is
+// left alone this round, and so is every group once the adapter turns out to make none; a group that failed a fixed
+// way waits for the retry. The key is zero then, and the error is a task failure's.
+func (o *keyOnboarding) obtain(ctx context.Context, target KeyTarget) (Obtained, error) {
 	if !o.canMake {
-		return "", false, nil
+		return Obtained{}, nil
 	}
-	ref, err = o.maker.CreateKey(ctx, target.GroupRef, target.Name)
-	if err == nil {
-		return ref, true, nil
-	}
-	if errors.Is(err, adapter.ErrNoKeyMaker) {
+	got, err := ObtainKey(ctx, o.claims, o.e.mgr, target, o.e.now())
+	switch {
+	case err == nil:
+		return got, nil
+	case errors.Is(err, adapter.ErrNoKeyMaker):
 		o.canMake = false
-		return "", false, nil
-	}
-	if reason, failed := keyFailure(err); failed {
+	case errors.Is(err, ErrKeyInProgress), errors.Is(err, ErrGroupKeyed), errors.Is(err, ErrGroupUnlisted):
+	default:
+		reason, failed := keyFailure(err)
+		if !failed {
+			return Obtained{}, err
+		}
 		o.fail(target.GroupRef, reason)
-		return "", false, nil
 	}
-	return "", false, err
+	return Obtained{}, nil
 }
 
 // bindKeys reads the text of the credentials people bound by reference. A key the listing does not have is kept in the

@@ -3,12 +3,14 @@ package newapi
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -147,6 +149,12 @@ type token struct {
 }
 
 func (m *manager) keyPage(ctx context.Context, page int) ([]token, int, error) {
+	return m.tokens(ctx, "/api/token/?p="+strconv.Itoa(page)+"&page_size="+strconv.Itoa(keyPageSize))
+}
+
+// tokens reads one page of keys, from the listing or from a search, which answer in the same form, with how many there
+// are in all.
+func (m *manager) tokens(ctx context.Context, path string) ([]token, int, error) {
 	var list struct {
 		Data *struct {
 			Total *int `json:"total"`
@@ -162,7 +170,6 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]token, int, error) {
 			} `json:"items"`
 		} `json:"data"`
 	}
-	path := "/api/token/?p=" + strconv.Itoa(page) + "&page_size=" + strconv.Itoa(keyPageSize)
 	if err := m.api.get(ctx, path, global, &list); err != nil {
 		return nil, 0, err
 	}
@@ -224,7 +231,14 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 			Key string `json:"key"`
 		} `json:"data"`
 	}
-	if err := m.api.do(ctx, "POST", "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
+	resp, err := m.api.send(ctx, http.MethodPost, "/api/token/"+string(ref)+"/key", globalCritical, nil)
+	if err != nil {
+		return secret.Secret{}, err
+	}
+	if missingRecord(resp) {
+		return secret.Secret{}, adapter.ErrKeyGone
+	}
+	if err := read(resp, &reveal); err != nil {
 		if scopeDenied(err) {
 			return secret.Secret{}, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
@@ -234,4 +248,15 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 		return secret.Secret{}, errMissing("key text")
 	}
 	return secret.New("sk-" + strings.TrimPrefix(reveal.Data.Key, "sk-")), nil
+}
+
+// missingRecord is new-api's answer that the account has no key with the id asked for: its handler passes the database's
+// not-found error on as the message of a failed answer, and no other failure says these words.
+func missingRecord(resp adapter.Response) bool {
+	var failed struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	return resp.Status == http.StatusOK && jsonx.Unmarshal(resp.Body, &failed) == nil && !failed.Success &&
+		failed.Message == "record not found"
 }

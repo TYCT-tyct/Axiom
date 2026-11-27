@@ -136,12 +136,14 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud` | 前三种，`ErrCloudRegions`、`ErrCloudDeployments`、`ErrNotCloud` |
 | `SetCostRatio` | `ErrCostRatio`、`ErrNotPasted`、`ErrStatusLocked` |
 | `SetStatus`、`Remove`、`ReplaceLogin`、`ConfirmUnitValue` | `ErrStatusLocked`、`ErrNoSupplier`、`ErrUnitValue`、`ErrUnitValueFixed` |
-| `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound` |
+| `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound`、`ErrKeyInProgress` |
 | `SetLimits` | `ErrNoCredential`、`ErrLimits`、`ErrStatusLocked` |
 | `MapModel`、`MapPending` | `ErrAliasExists`、`ErrAliasRevision`、`ErrNotPending`、`ErrModelTaken`、`ErrNoGroup`、`ErrStatusLocked` |
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`、`EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
-| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
-| `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
+| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked`；`MakeKey` 另有 `ErrKeyInProgress`、`ErrKeyUnusable`、`ErrGroupHasKey`、`ErrGroupGone` |
+| `ConnectGroup`、`AddKeys`、`ReleaseKeyClaim`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrKeyInProgress`、`ErrStatusLocked` |
 | `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
 | `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+
+不变量：Axiom 在对方那边给一个分组至多建一把 key。后台的 `MakeKey` 和同步走同一个 `syncer.ObtainKey`，靠分组行上的占用（`persist.Claims`）决定谁能发建 key 请求；发出后结果不明的只认领、不重发，往分组写别的凭证之前先过 `persist.Unclaimed`。存下建出的 key 只经 `persist.StoreMadeKey`，它复用被擦除的同一行并清掉占用。行为见[供应商的「一个分组只建一把」](../../docs/domains/suppliers.md#接入流程)。

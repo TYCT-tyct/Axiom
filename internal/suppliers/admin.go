@@ -205,7 +205,7 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Own
 	for _, g := range groups {
 		group, err := groupOf(groupFacts{
 			ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
-			Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError,
+			Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed,
 			Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
 		})
 		if err != nil {

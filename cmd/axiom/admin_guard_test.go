@@ -199,6 +199,7 @@ var adminOperations = []adminOperation{
 	{"createTypedSupplier", http.MethodPost, "/supplier-types/openai/suppliers", `{"name":"OpenAI","keys":["test-key-0001"],"max_concurrency":4,"reason":"r"}`, "suppliers.manage", true},
 	{"replaceSupplierCloudCredential", http.MethodPut, someSupplier + "/cloud-credential", `{"fields":{"api_key":"test"},"reason":"r"}`, "suppliers.manage", true},
 	{"connectSupplierGroup", http.MethodPost, someSupplier + "/groups/0198c0a8-0000-7000-8000-000000000004/connection", `{"key_source":"make","reason":"r"}`, "suppliers.manage", true},
+	{"releaseSupplierGroupKeyClaim", http.MethodPost, someSupplier + "/groups/0198c0a8-0000-7000-8000-000000000004/key-claim/release", `{"reason":"r"}`, "suppliers.manage", true},
 	{"identifySupplierKey", http.MethodPost, someSupplier + "/key-identifications", `{"key":"test-key-0001"}`, "suppliers.manage", false},
 	{"listSupplierSyncRuns", http.MethodGet, someSupplier + "/sync-runs", "", "suppliers.view", false},
 	{"requestSupplierSync", http.MethodPost, someSupplier + "/sync-requests", `{"reason":"r"}`, "suppliers.manage", true},

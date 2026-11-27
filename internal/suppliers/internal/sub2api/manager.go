@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -91,10 +92,19 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 }
 
 func (m *manager) keyPage(ctx context.Context, p int) ([]keyDTO, int, int, error) {
+	return m.keysAt(ctx, p, "")
+}
+
+// keysAt reads page p of the account's keys, of only those whose name or text holds search when it is not empty.
+func (m *manager) keysAt(ctx context.Context, p int, search string) ([]keyDTO, int, int, error) {
 	if p > maxPages {
 		return nil, 0, 0, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
 	}
-	resp, err := m.get(ctx, "/api/v1/keys?page="+strconv.Itoa(p)+"&page_size="+strconv.Itoa(keyPageSize), bucketPanel)
+	query := url.Values{"page": {strconv.Itoa(p)}, "page_size": {strconv.Itoa(keyPageSize)}}
+	if search != "" {
+		query.Set("search", search)
+	}
+	resp, err := m.get(ctx, "/api/v1/keys?"+query.Encode(), bucketPanel)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -154,6 +164,9 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 	resp, err := m.get(ctx, "/api/v1/keys/"+id, bucketPanel)
 	if err != nil {
 		return secret.Secret{}, err
+	}
+	if resp.Status == http.StatusNotFound && errorCode(resp.Body) == "API_KEY_NOT_FOUND" {
+		return secret.Secret{}, adapter.ErrKeyGone
 	}
 	if resp.Status != http.StatusOK {
 		return secret.Secret{}, statusError("key", resp)

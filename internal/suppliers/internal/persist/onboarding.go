@@ -2,7 +2,6 @@ package persist
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"uuid"
 
@@ -64,59 +63,22 @@ func projectKeyFailures(ctx context.Context, tx pg.Tx, id uuid.UUID, failed []sy
 	return nil
 }
 
-// projectMadeKey stores the text of a key the sync made. A row erased when the key was once lost is revived instead of
-// inserting a second row for the same upstream key.
+// projectMadeKey stores the text of a key the sync made or adopted, and settles the group's claim (StoreMadeKey). A key
+// a person's make stored first is left as it is.
 func projectMadeKey(ctx context.Context, tx pg.Tx, id uuid.UUID, groups map[string]uuid.UUID, made syncer.KeyMade, keys *secret.Keyring) error {
 	group, ok := groups[made.GroupRef]
 	if !ok {
 		return fmt.Errorf("made a key for group %s, which is not in the tables", made.GroupRef)
 	}
-	credential, revive, err := erasedCredential(ctx, tx, id, made.GroupRef, made.Ref)
-	if err != nil {
-		return err
-	}
-	sealed := keys.Seal(made.Secret, secret.Location{
-		Table: "suppliers.credentials", RowID: credential.String(), Purpose: "key",
-	})
-	version := int64(sealed.KeyVersion)
-	q := store.New()
-	if revive {
-		changed, err := q.ReviveCredential(ctx, tx, store.ReviveCredentialParams{
-			ID: credential, SupplierID: id, Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce,
-			WrappedDek: sealed.WrappedDEK, KeyVersion: &version, Status: credentialStatus(made.Status),
-		})
-		if err != nil {
-			return fmt.Errorf("revive the key of group %s: %w", made.GroupRef, err)
-		}
-		if changed != 1 {
-			return fmt.Errorf("revive the key of group %s: the credential is no longer erased", made.GroupRef)
-		}
-	} else if err := q.InsertCredential(ctx, tx, store.InsertCredentialParams{
-		ID: credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: string(made.Ref),
-		Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
-		Status: credentialStatus(made.Status), MaxConcurrency: 4,
+	if _, _, err := StoreMadeKey(ctx, tx, keys, id, group, MadeKey{
+		Ref: string(made.Ref), Text: made.Secret, Status: credentialStatus(made.Status),
 	}); err != nil {
 		return fmt.Errorf("keep the key of group %s: %w", made.GroupRef, err)
 	}
-	if err := q.ClearGroupKeyError(ctx, tx, store.ClearGroupKeyErrorParams{SupplierID: id, UpstreamRef: made.GroupRef}); err != nil {
+	if err := store.New().ClearGroupKeyError(ctx, tx, store.ClearGroupKeyErrorParams{SupplierID: id, UpstreamRef: made.GroupRef}); err != nil {
 		return fmt.Errorf("clear the key error of group %s: %w", made.GroupRef, err)
 	}
 	return nil
-}
-
-// erasedCredential is the row of an erased key with this reference, or a new id when there is none.
-func erasedCredential(ctx context.Context, tx pg.Tx, id uuid.UUID, groupRef string, ref adapter.KeyRef) (uuid.UUID, bool, error) {
-	existing, err := store.New().ErasedCredentialID(ctx, tx, store.ErasedCredentialIDParams{
-		SupplierID: id, UpstreamKeyRef: string(ref),
-	})
-	switch {
-	case err == nil:
-		return existing, true, nil
-	case errors.Is(err, pg.ErrNoRows):
-		return uuid.NewV7(), false, nil
-	default:
-		return uuid.Nil(), false, fmt.Errorf("read the erased key of group %s: %w", groupRef, err)
-	}
 }
 
 // projectBoundKey activates a credential a person bound by reference, now that its text has been read.

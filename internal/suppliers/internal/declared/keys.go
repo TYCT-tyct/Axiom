@@ -338,3 +338,28 @@ func decodeKeys(from adapter.Listing, size int) *keysState {
 	}
 	return &st
 }
+
+// KeyNamed implements adapter.KeyMaker by reading the whole key listing in one go, which a declaration that makes keys
+// must answer with names and groups. A listing a limit stops is an error, not an absence; of two keys with the name in
+// the group, the first listed is the answer.
+func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+	if m.a.keys.create == nil {
+		return adapter.KeyState{}, false, adapter.ErrNoKeyMaker
+	}
+	page, err := m.keys(ctx, nil, false)
+	switch {
+	case err != nil:
+		return adapter.KeyState{}, false, err
+	case !page.Done:
+		return adapter.KeyState{}, false, adapter.Blocked{Until: page.Until}
+	}
+	for _, k := range page.Items {
+		if k.Name == name && k.GroupRef == groupRef {
+			return k, true, nil
+		}
+	}
+	return adapter.KeyState{}, false, nil
+}
+
+// CreateReplay implements adapter.KeyMaker: a declaration says nothing of how the supplier answers a repeated create.
+func (*manager) CreateReplay() time.Duration { return 0 }

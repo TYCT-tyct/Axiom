@@ -26,16 +26,12 @@ WHERE c.supplier_id = @supplier_id AND c.status = 'binding'
   AND (g.key_retry_at IS NULL OR g.key_retry_at <= @now)
 ORDER BY c.id;
 
--- name: ErasedCredentialID :one
--- A key made again after its credential was erased (the listing had lost it, then found it): revive the row instead of
--- inserting a second one for the same upstream key.
-SELECT id FROM suppliers.credentials
-WHERE supplier_id = @supplier_id AND upstream_key_ref = @upstream_key_ref AND status = 'erased';
-
 -- name: ReviveCredential :execrows
+-- A key adopted again after its credential was erased: the row is sealed again instead of a second one inserted for the
+-- same upstream key, with what the supplier lets it call.
 UPDATE suppliers.credentials
 SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version,
-    status = @status, cooldown_until = NULL, expires_at = NULL
+    status = @status, cooldown_until = NULL, allowed_models = sqlc.narg(allowed_models), expires_at = sqlc.narg(expires_at)
 WHERE id = @id AND supplier_id = @supplier_id AND status = 'erased';
 
 -- name: ActivateCredential :exec

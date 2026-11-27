@@ -19,6 +19,71 @@ type keyStore struct {
 	targets   []KeyTarget
 	askedMake int
 	askedBind int
+	claims    memClaims
+}
+
+func (s *keyStore) Claims() Claims {
+	if s.claims == nil {
+		s.claims = memClaims{}
+	}
+	return s.claims
+}
+
+// memClaims are the groups' claims in memory, as the tables keep them: one per group ref, every change compared by id.
+type memClaims map[string]*Claim
+
+func (m memClaims) Claim(_ context.Context, groupRef string) (Claim, error) {
+	if c, ok := m[groupRef]; ok {
+		return *c, nil
+	}
+	c := Claim{Group: uuid.NewV7(), ID: uuid.NewV7(), Mine: true, At: t0}
+	m[groupRef] = &c
+	return c, nil
+}
+
+func (m memClaims) held(c Claim) *Claim {
+	for _, h := range m {
+		if h.ID == c.ID {
+			return h
+		}
+	}
+	return nil
+}
+
+func (m memClaims) Send(_ context.Context, c Claim) (bool, error) {
+	h := m.held(c)
+	if h == nil || !h.SentAt.IsZero() {
+		return false, nil
+	}
+	h.SentAt, h.Mine = t0, false
+	return true, nil
+}
+
+func (m memClaims) Resend(_ context.Context, c Claim) (Claim, bool, error) {
+	h := m.held(c)
+	if h == nil || h.SentAt.IsZero() || h.Ref != "" {
+		return c, false, nil
+	}
+	h.ID = uuid.NewV7()
+	return *h, true, nil
+}
+
+func (m memClaims) Know(_ context.Context, c Claim, ref adapter.KeyRef) (bool, error) {
+	h := m.held(c)
+	if h == nil || h.SentAt.IsZero() || (h.Ref != "" && h.Ref != ref) {
+		return false, nil
+	}
+	h.Ref = ref
+	return true, nil
+}
+
+func (m memClaims) Drop(_ context.Context, c Claim) error {
+	for ref, h := range m {
+		if h.ID == c.ID {
+			delete(m, ref)
+		}
+	}
+	return nil
 }
 
 func (s *keyStore) KeysToMake(context.Context) ([]KeyTarget, error) {
@@ -47,6 +112,22 @@ func (m *maker) CreateKey(_ context.Context, groupRef, name string) (adapter.Key
 func (m *maker) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Secret, error) {
 	return m.secret(ref)
 }
+
+// KeyNamed finds the key in the supplier's listing, as new-api's search would.
+func (m *maker) KeyNamed(_ context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+	page, err := m.supplier.keys(nil)
+	if err != nil {
+		return adapter.KeyState{}, false, err
+	}
+	for _, k := range page.Items {
+		if k.Name == name && k.GroupRef == groupRef {
+			return k, true, nil
+		}
+	}
+	return adapter.KeyState{}, false, nil
+}
+
+func (*maker) CreateReplay() time.Duration { return 0 }
 
 func keyEngine(m adapter.Manager, st Store) *Engine {
 	return New(st, m, Defaults(), (&clock{t: t0}).now)

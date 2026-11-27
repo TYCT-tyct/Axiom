@@ -17,6 +17,7 @@ import (
 	"axiom/internal/suppliers/internal/client"
 	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/syncer"
 )
 
 // The admin's own requests to a supplier (README.md「管理接口」): making a key for a group, finding which of its keys a
@@ -60,38 +61,79 @@ type Reach struct {
 	Scope pg.Scope
 }
 
-// MadeKey is a key made for a group at the supplier: its ID there, the group's ref, and its text, which is only sealed.
+// MadeKey is the key a group is connected with when Axiom makes it: its ID there, the group's ref, and its text, which
+// is only sealed. Made is a key Axiom's create just made; any other was found at the supplier under the marker name,
+// with the status and policy the supplier lists for it. Stored is the group's credential already, stored by the sync,
+// which has no text. Claim is the group's claim the connection settles.
 type MadeKey struct {
 	Ref, GroupRef string
 	Text          secret.Secret
+	Status        string
+	Policy        KeyPolicy
+	Made, Stored  bool
+	Claim         uuid.UUID
 }
 
-// MakeKey makes a dedicated key for one of a relay's groups, named as the sync names the keys it makes, and reads its
-// text. A key whose answer was lost is adopted by that name by the sync's next listing, not made twice. A group the
-// supplier no longer lists (ErrGroupGone) or one that has a credential already (ErrGroupHasKey) is refused before the
-// supplier is asked: the key would be live there and stored nowhere. ConnectGroup checks both again under the lock.
+// ErrKeyInProgress is a group whose key Axiom may be making for it: another request or the sync holds its claim, or a
+// create was sent and its result is not known yet (docs/domains/suppliers.md「一个分组只建一把」). The key is adopted
+// once the supplier lists it, or a person releases the claim (ReleaseKeyClaim).
+var ErrKeyInProgress = errors.New("suppliers: a key for the group is being made")
+
+// MakeKey obtains the dedicated key of one of a relay's groups without ever making a second one: the key the group's
+// claim knows or the supplier lists under the marker name the sync gives, or one made now under the claim, and reads
+// its text. A key found by its name must be usable (ErrKeyUnusable), as a pasted one must; then the claim is ended,
+// because nothing was sent. A group the supplier no longer lists is ErrGroupGone, and one with a credential that is no
+// key Axiom made is ErrGroupHasKey. ConnectGroup checks the claim and the credentials again under the lock.
 func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (MadeKey, error) {
-	sup, ref, err := a.groupToReach(ctx, r, supplier, group)
+	sup, err := a.supplierToReach(ctx, r, supplier)
 	if err != nil {
+		return MadeKey{}, err
+	}
+	var ref string
+	if err := r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
+		g, err := a.group(ctx, tx, supplier, group)
+		ref = g.UpstreamRef
+		return err
+	}); err != nil {
 		return MadeKey{}, err
 	}
 	m, err := a.manager(ctx, r, sup)
 	if err != nil {
 		return MadeKey{}, err
 	}
-	maker, ok := m.(adapter.KeyMaker)
-	if !ok {
-		return MadeKey{}, ErrCannotMakeKey
-	}
-	made, err := maker.CreateKey(ctx, ref, persist.KeyName(supplier, ref))
+	claims := persist.NewClaims(r.DB, r.Scope, supplier, a.now)
+	got, err := syncer.ObtainKey(ctx, claims, m, syncer.KeyTarget{GroupRef: ref, Name: persist.KeyName(supplier, ref)}, a.now())
 	if err != nil {
-		return MadeKey{}, keyError(err)
+		return MadeKey{}, obtainError(err)
 	}
-	text, err := m.KeySecret(ctx, made)
-	if err != nil {
-		return MadeKey{}, keyError(err)
+	made := MadeKey{
+		Ref: string(got.Key.Ref), GroupRef: ref, Text: got.Text, Status: upstreamStatus(got.Key.Status),
+		Policy: policyOf(got.Key.Policy), Made: got.Made, Stored: got.Stored, Claim: got.Claim.ID,
 	}
-	return MadeKey{Ref: string(made), GroupRef: ref, Text: text}, nil
+	if got.Made || got.Stored {
+		made.Policy = KeyPolicy{}
+		return made, nil
+	}
+	if made.Status != "active" {
+		return MadeKey{}, errors.Join(ErrKeyUnusable, syncer.Abandon(ctx, claims, got))
+	}
+	return made, nil
+}
+
+// obtainError is a failure to obtain a group's key as the admin names it.
+func obtainError(err error) error {
+	switch {
+	case errors.Is(err, syncer.ErrKeyInProgress):
+		return ErrKeyInProgress
+	case errors.Is(err, syncer.ErrGroupKeyed):
+		return ErrGroupHasKey
+	case errors.Is(err, syncer.ErrGroupUnlisted):
+		return ErrGroupGone
+	case errors.Is(err, adapter.ErrKeyMade):
+		// The key exists and its id is not known yet: asking again adopts it once the supplier lists it.
+		return ErrSupplierUnanswered
+	}
+	return keyError(err)
 }
 
 // FoundKey is which of the supplier's keys a pasted text is: its ID there, the ref of the group it is listed under,
@@ -209,35 +251,6 @@ func (a *Admin) supplierToReach(ctx context.Context, r Reach, supplier uuid.UUID
 		return reachable{}, ErrNoAdapter
 	}
 	return reachable{id: supplier, origin: row.Origin, apiFormat: deref(row.ApiFormat), adapter: ad}, nil
-}
-
-// groupToReach is supplierToReach for a group of the supplier that a key can be made for, with the group's ref there:
-// one the supplier still lists and that has no credential.
-func (a *Admin) groupToReach(ctx context.Context, r Reach, supplier, group uuid.UUID) (reachable, string, error) {
-	sup, err := a.supplierToReach(ctx, r, supplier)
-	if err != nil {
-		return reachable{}, "", err
-	}
-	var ref string
-	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
-		g, err := a.group(ctx, tx, supplier, group)
-		if err != nil {
-			return err
-		}
-		if !g.Present {
-			return ErrGroupGone
-		}
-		has, err := store.New().GroupHasCredential(ctx, tx, group)
-		switch {
-		case err != nil:
-			return fmt.Errorf("read the group's keys: %w", err)
-		case has:
-			return ErrGroupHasKey
-		}
-		ref = g.UpstreamRef
-		return nil
-	})
-	return sup, ref, err
 }
 
 // manager logs in to the supplier with the login the sync uses. A login the adapter would refresh is not stored from

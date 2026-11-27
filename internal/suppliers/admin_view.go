@@ -81,8 +81,9 @@ type Group struct {
 	Codename          string
 	Facts             map[string]any
 	// KeyState is how the key Axiom uses for the group stands: ready (one is stored), pending (the sync will make one),
-	// failed (the last attempt did not work, see KeyReason) or unavailable (the group is not in use, gone, or cannot be
-	// called, so no key is needed).
+	// failed (the last attempt did not work, see KeyReason), unconfirmed (a create was sent and its result is not known:
+	// the key is adopted once the supplier lists it, or a person releases the claim) or unavailable (the group is not in
+	// use, gone, or cannot be called, so no key is needed).
 	KeyState string
 	// KeyReason is the fixed reason a key could not be made: not_permitted, group_unavailable or refused.
 	KeyReason string
@@ -240,12 +241,16 @@ type groupFacts struct {
 	Ref, Name, Ratio               string
 	Facts                          []byte
 	Selected, Present, KeyEligible bool
+	KeyUnconfirmed                 bool
 	Codename, KeyError             *string
 	Pool                           *Pool
 }
 
 func groupOf(f groupFacts) (Group, error) {
 	state, reason := keyStateOf(f.Present, f.Selected, f.Codename != nil, f.KeyEligible, f.KeyError)
+	if f.KeyUnconfirmed && state != "unavailable" {
+		state, reason = "unconfirmed", ""
+	}
 	g := Group{
 		ID: f.ID, UpstreamRef: f.Ref, Name: f.Name, Ratio: f.Ratio, Selected: f.Selected, Codename: deref(f.Codename),
 		Present: f.Present, KeyState: state, KeyReason: reason, Pool: f.Pool,

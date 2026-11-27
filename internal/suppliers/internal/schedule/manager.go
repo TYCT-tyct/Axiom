@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"time"
 
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -93,6 +94,28 @@ func (o *openOnUse) CreateKey(ctx context.Context, groupRef, name string) (adapt
 		return "", adapter.ErrNoKeyMaker
 	}
 	return maker.CreateKey(ctx, groupRef, name)
+}
+
+// KeyNamed forwards the name lookup to the adapter that makes keys; one that does not answers ErrNoKeyMaker.
+func (o *openOnUse) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+	m, err := o.get()
+	if err != nil {
+		return adapter.KeyState{}, false, err
+	}
+	maker, ok := m.(adapter.KeyMaker)
+	if !ok {
+		return adapter.KeyState{}, false, adapter.ErrNoKeyMaker
+	}
+	return maker.KeyNamed(ctx, groupRef, name)
+}
+
+// CreateReplay forwards to the adapter that makes keys. It is asked only after a create was sent, so the manager is
+// open; one that failed to open, or makes no keys, never replays.
+func (o *openOnUse) CreateReplay() time.Duration {
+	if maker, ok := o.manager.(adapter.KeyMaker); ok && o.err == nil {
+		return maker.CreateReplay()
+	}
+	return 0
 }
 
 // Pool forwards the pool read to the adapter that has one. A relay's manager does not, and answers ErrNotPool; that is

@@ -67,25 +67,6 @@ func (q *Queries) ClearKeyErrors(ctx context.Context, db DBTX, supplierID uuid.U
 	return err
 }
 
-const erasedCredentialID = `-- name: ErasedCredentialID :one
-SELECT id FROM suppliers.credentials
-WHERE supplier_id = $1 AND upstream_key_ref = $2 AND status = 'erased'
-`
-
-type ErasedCredentialIDParams struct {
-	SupplierID     uuid.UUID
-	UpstreamKeyRef string
-}
-
-// A key made again after its credential was erased (the listing had lost it, then found it): revive the row instead of
-// inserting a second one for the same upstream key.
-func (q *Queries) ErasedCredentialID(ctx context.Context, db DBTX, arg ErasedCredentialIDParams) (uuid.UUID, error) {
-	row := db.QueryRow(ctx, erasedCredentialID, arg.SupplierID, arg.UpstreamKeyRef)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const groupIDsOf = `-- name: GroupIDsOf :many
 SELECT id, upstream_ref FROM suppliers.supplier_groups WHERE supplier_id = $1
 `
@@ -206,20 +187,24 @@ func (q *Queries) GroupsToKey(ctx context.Context, db DBTX, arg GroupsToKeyParam
 const reviveCredential = `-- name: ReviveCredential :execrows
 UPDATE suppliers.credentials
 SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4,
-    status = $5, cooldown_until = NULL, expires_at = NULL
-WHERE id = $6 AND supplier_id = $7 AND status = 'erased'
+    status = $5, cooldown_until = NULL, allowed_models = $6, expires_at = $7
+WHERE id = $8 AND supplier_id = $9 AND status = 'erased'
 `
 
 type ReviveCredentialParams struct {
-	Ciphertext []byte
-	Nonce      []byte
-	WrappedDek []byte
-	KeyVersion *int64
-	Status     string
-	ID         uuid.UUID
-	SupplierID uuid.UUID
+	Ciphertext    []byte
+	Nonce         []byte
+	WrappedDek    []byte
+	KeyVersion    *int64
+	Status        string
+	AllowedModels []string
+	ExpiresAt     *time.Time
+	ID            uuid.UUID
+	SupplierID    uuid.UUID
 }
 
+// A key adopted again after its credential was erased: the row is sealed again instead of a second one inserted for the
+// same upstream key, with what the supplier lets it call.
 func (q *Queries) ReviveCredential(ctx context.Context, db DBTX, arg ReviveCredentialParams) (int64, error) {
 	result, err := db.Exec(ctx, reviveCredential,
 		arg.Ciphertext,
@@ -227,6 +212,8 @@ func (q *Queries) ReviveCredential(ctx context.Context, db DBTX, arg ReviveCrede
 		arg.WrappedDek,
 		arg.KeyVersion,
 		arg.Status,
+		arg.AllowedModels,
+		arg.ExpiresAt,
 		arg.ID,
 		arg.SupplierID,
 	)

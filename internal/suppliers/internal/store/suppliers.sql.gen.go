@@ -37,9 +37,9 @@ func (q *Queries) GetCredentialSecret(ctx context.Context, db DBTX, id uuid.UUID
 
 const insertCredential = `-- name: InsertCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce,
-    wrapped_dek, key_version, status, max_concurrency, source)
+    wrapped_dek, key_version, status, max_concurrency, source, allowed_models, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-    $9, $10, 'made')
+    $9, $10, 'made', $11, $12)
 `
 
 type InsertCredentialParams struct {
@@ -53,8 +53,12 @@ type InsertCredentialParams struct {
 	KeyVersion      *int64
 	Status          string
 	MaxConcurrency  int32
+	AllowedModels   []string
+	ExpiresAt       *time.Time
 }
 
+// A key Axiom made or adopted by its marker name, with what the supplier lets it call (allowed_models NULL is every
+// model); the sync's complete listing projects the policy again in the same commit.
 func (q *Queries) InsertCredential(ctx context.Context, db DBTX, arg InsertCredentialParams) error {
 	_, err := db.Exec(ctx, insertCredential,
 		arg.ID,
@@ -67,6 +71,8 @@ func (q *Queries) InsertCredential(ctx context.Context, db DBTX, arg InsertCrede
 		arg.KeyVersion,
 		arg.Status,
 		arg.MaxConcurrency,
+		arg.AllowedModels,
+		arg.ExpiresAt,
 	)
 	return err
 }

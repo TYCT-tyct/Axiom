@@ -604,6 +604,9 @@ type ServerInterface interface {
 	// ConnectSupplierGroup Connect a relay's group with a key made for it or pasted
 	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection)
 	ConnectSupplierGroup(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params ConnectSupplierGroupParams)
+	// ReleaseSupplierGroupKeyClaim Let Axiom make a group's key afresh
+	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/key-claim/release)
+	ReleaseSupplierGroupKeyClaim(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params ReleaseSupplierGroupKeyClaimParams)
 	// SetSupplierIntakeRule Choose which of a supplier's models become endpoints
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/intake-rule)
 	SetSupplierIntakeRule(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierIntakeRuleParams)
@@ -9495,6 +9498,69 @@ func (siw *ServerInterfaceWrapper) ConnectSupplierGroup(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
+// ReleaseSupplierGroupKeyClaim operation middleware
+func (siw *ServerInterfaceWrapper) ReleaseSupplierGroupKeyClaim(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReleaseSupplierGroupKeyClaimParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReleaseSupplierGroupKeyClaim(w, r, supplierId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetSupplierIntakeRule operation middleware
 func (siw *ServerInterfaceWrapper) SetSupplierIntakeRule(w http.ResponseWriter, r *http.Request) {
 
@@ -10809,6 +10875,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/cost-ratio", wrapper.SetSupplierCostRatio)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/cloud-credential", wrapper.ReplaceSupplierCloudCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection", wrapper.ConnectSupplierGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/key-claim/release", wrapper.ReleaseSupplierGroupKeyClaim)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/key-identifications", wrapper.IdentifySupplierKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/sync-runs", wrapper.ListSupplierSyncRuns)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/sync-requests", wrapper.RequestSupplierSync)
@@ -31773,6 +31840,128 @@ func (response ConnectSupplierGroupdefaultJSONResponse) VisitConnectSupplierGrou
 	return err
 }
 
+type ReleaseSupplierGroupKeyClaimRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	GroupId    Uuid `json:"group_id"`
+	Params     ReleaseSupplierGroupKeyClaimParams
+	Body       *ReleaseSupplierGroupKeyClaimJSONRequestBody
+}
+
+type ReleaseSupplierGroupKeyClaimResponseObject interface {
+	VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error
+}
+
+type ReleaseSupplierGroupKeyClaim200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ReleaseSupplierGroupKeyClaim200JSONResponse struct {
+	Body    SupplierGroup
+	Headers ReleaseSupplierGroupKeyClaim200ResponseHeaders
+}
+
+func (response ReleaseSupplierGroupKeyClaim200JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaim400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ReleaseSupplierGroupKeyClaim400JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaim401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ReleaseSupplierGroupKeyClaim401JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaim403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ReleaseSupplierGroupKeyClaim403JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaim404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ReleaseSupplierGroupKeyClaim404JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaim409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ReleaseSupplierGroupKeyClaim409JSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseSupplierGroupKeyClaimdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ReleaseSupplierGroupKeyClaimdefaultJSONResponse) VisitReleaseSupplierGroupKeyClaimResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetSupplierIntakeRuleRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     SetSupplierIntakeRuleParams
@@ -34690,6 +34879,9 @@ type StrictServerInterface interface {
 	// ConnectSupplierGroup Connect a relay's group with a key made for it or pasted
 	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection)
 	ConnectSupplierGroup(ctx context.Context, request ConnectSupplierGroupRequestObject) (ConnectSupplierGroupResponseObject, error)
+	// ReleaseSupplierGroupKeyClaim Let Axiom make a group's key afresh
+	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/key-claim/release)
+	ReleaseSupplierGroupKeyClaim(ctx context.Context, request ReleaseSupplierGroupKeyClaimRequestObject) (ReleaseSupplierGroupKeyClaimResponseObject, error)
 	// SetSupplierIntakeRule Choose which of a supplier's models become endpoints
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/intake-rule)
 	SetSupplierIntakeRule(ctx context.Context, request SetSupplierIntakeRuleRequestObject) (SetSupplierIntakeRuleResponseObject, error)
@@ -40673,6 +40865,41 @@ func (sh *strictHandler) ConnectSupplierGroup(w http.ResponseWriter, r *http.Req
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ConnectSupplierGroupResponseObject); ok {
 		if err := validResponse.VisitConnectSupplierGroupResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReleaseSupplierGroupKeyClaim operation middleware
+func (sh *strictHandler) ReleaseSupplierGroupKeyClaim(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params ReleaseSupplierGroupKeyClaimParams) {
+	var request ReleaseSupplierGroupKeyClaimRequestObject
+
+	request.SupplierId = supplierId
+	request.GroupId = groupId
+	request.Params = params
+
+	var body ReleaseSupplierGroupKeyClaimJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReleaseSupplierGroupKeyClaim(ctx, request.(ReleaseSupplierGroupKeyClaimRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReleaseSupplierGroupKeyClaim")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReleaseSupplierGroupKeyClaimResponseObject); ok {
+		if err := validResponse.VisitReleaseSupplierGroupKeyClaimResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -11,6 +11,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
 )
@@ -70,29 +71,32 @@ func (*Admin) Credentials(ctx context.Context, tx pg.Tx, q CredentialQuery) (pag
 	return page, more, nil
 }
 
-// GroupKey is the key a group is connected with: one Axiom made at the supplier (Source made) or one a person pasted
-// that the supplier lists under the group (Source pasted). Ref is the supplier's ID of it; Text is only sealed; Policy
-// is what the supplier lets it call, which a key Axiom made is not limited in.
+// GroupKey is the key a group is connected with: one Axiom made at the supplier or found there under the marker name
+// (Source made, from MakeKey) or one a person pasted that the supplier lists under the group (Source pasted). Ref is
+// the supplier's ID of it; Text is only sealed; Policy is what the supplier lets it call, which a key Axiom made is not
+// limited in. Claim is the group's claim a made key settles, and Stored a made key the sync stored already.
 type GroupKey struct {
 	Source   string
 	Ref      string
 	GroupRef string
 	Text     secret.Secret
 	Policy   KeyPolicy
+	Claim    uuid.UUID
+	Stored   bool
 }
 
-// ConnectGroup selects a group that has no credential yet and gives it the key, in one change: the credential starts
-// active with defaultMaxConcurrency calls at once and no per-minute ceiling. A pasted key must be listed under this
-// group (ErrWrongGroup), and a group with a credential is ErrGroupHasKey: a person pauses and resumes it with
-// SelectGroup, keeping its key.
+// ConnectGroup selects a group and gives it the key, in one change: the credential starts active with
+// defaultMaxConcurrency calls at once and no per-minute ceiling. A pasted key must be listed under this group
+// (ErrWrongGroup), and a group with a credential is ErrGroupHasKey: a person pauses and resumes it with SelectGroup,
+// keeping its key. The one exception is a made key the group holds already, stored by the sync while the request asked
+// for it: the connection completes with that credential. A made key is stored only under its own claim or the one
+// that knows it, and a pasted key not while a claim may still lead to a made one (ErrKeyInProgress).
 func (a *Admin) ConnectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, group uuid.UUID, key GroupKey, reason string) (Group, Credential, error) {
-	row, err := a.connectable(ctx, tx, supplier, group, key.GroupRef)
+	row, err := a.connectable(ctx, tx, supplier, group, key)
 	if err != nil {
 		return Group{}, Credential{}, err
 	}
-	c, err := a.storeKey(ctx, tx, supplier, group, storedKey{
-		source: key.Source, ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
-	})
+	c, err := a.storeConnection(ctx, tx, supplier, group, key)
 	if err != nil {
 		return Group{}, Credential{}, err
 	}
@@ -120,9 +124,9 @@ func (a *Admin) ConnectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	return g, c, nil
 }
 
-// connectable is the group, locked after its supplier, when a key listed under groupRef can connect it: it is the
-// supplier's, still listed, the key's, and has no credential yet.
-func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, groupRef string) (store.LockGroupRow, error) {
+// connectable is the group, locked after its supplier, when the key can connect it: it is the supplier's, still listed,
+// the key's, and has no credential yet, but the made key itself; and its claim allows the key (claimAllows).
+func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, key GroupKey) (store.LockGroupRow, error) {
 	row, err := lockedChild(ctx, a, tx, supplier, ErrNoGroup, "the group", func() ([]store.LockGroupRow, error) {
 		return store.New().LockGroup(ctx, tx, store.LockGroupParams{ID: group, SupplierID: supplier})
 	})
@@ -131,17 +135,81 @@ func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.
 		return store.LockGroupRow{}, err
 	case !row.Present:
 		return store.LockGroupRow{}, ErrGroupGone
-	case groupRef != row.UpstreamRef:
+	case key.GroupRef != row.UpstreamRef:
 		return store.LockGroupRow{}, ErrWrongGroup
 	}
-	has, err := store.New().GroupHasCredential(ctx, tx, group)
+	return row, a.claimAllows(ctx, tx, supplier, group, key)
+}
+
+// claimAllows checks the group's credentials and claim for a key: a made key needs the claim it was obtained under, or
+// the one that knows it, or none, and the group may hold no credential but that key; a pasted one needs a group with no
+// credential and no claim that may still lead to a made key.
+func (a *Admin) claimAllows(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, key GroupKey) error {
+	if key.Source != "made" {
+		has, err := store.New().GroupHasCredential(ctx, tx, group)
+		switch {
+		case err != nil:
+			return fmt.Errorf("read the group's keys: %w", err)
+		case has:
+			return ErrGroupHasKey
+		}
+		return unclaimed(persist.Unclaimed(ctx, tx, supplier, group, a.now()))
+	}
+	c, err := persist.GroupClaim(ctx, tx, supplier, group)
 	switch {
 	case err != nil:
-		return store.LockGroupRow{}, fmt.Errorf("read the group's keys: %w", err)
-	case has:
-		return store.LockGroupRow{}, ErrGroupHasKey
+		return err
+	case c.Keyed && string(c.Stored) != key.Ref:
+		return ErrGroupHasKey
+	case c.ID != uuid.Nil() && c.ID != key.Claim && string(c.Ref) != key.Ref:
+		return ErrKeyInProgress
 	}
-	return row, nil
+	return nil
+}
+
+// unclaimed is persist.Unclaimed's refusal as the admin names it.
+func unclaimed(err error) error {
+	if errors.Is(err, persist.ErrClaimed) {
+		return ErrKeyInProgress
+	}
+	return err
+}
+
+// storeConnection stores the key a group is connected with. A made key is kept the way the sync keeps the keys it
+// makes, which settles the group's claim, seals a credential the key was erased from again rather than a second row,
+// and leaves one the sync stored first as it is.
+func (a *Admin) storeConnection(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, key GroupKey) (Credential, error) {
+	if key.Source != "made" {
+		return a.storeKey(ctx, tx, supplier, group, storedKey{
+			source: key.Source, ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
+		})
+	}
+	var id uuid.UUID
+	var err error
+	if key.Stored {
+		id, err = a.storedMade(ctx, tx, supplier, key.Ref)
+	} else {
+		id, _, err = persist.StoreMadeKey(ctx, tx, a.keys, supplier, group, persist.MadeKey{
+			Ref: key.Ref, Text: key.Text, Status: "active",
+			Policy: &adapter.KeyPolicy{Models: key.Policy.Models, ExpiresAt: key.Policy.ExpiresAt},
+		})
+	}
+	if errors.Is(err, persist.ErrKeyBound) {
+		return Credential{}, ErrKeyBound
+	}
+	if err != nil {
+		return Credential{}, err
+	}
+	return a.credential(ctx, tx, supplier, id)
+}
+
+// storedMade is the credential a made key the sync stored is.
+func (a *Admin) storedMade(ctx context.Context, tx pg.Tx, supplier uuid.UUID, ref string) (uuid.UUID, error) {
+	id, ok, err := a.CredentialByRef(ctx, tx, supplier, ref)
+	if err == nil && !ok {
+		err = ErrNoCredential
+	}
+	return id, err
 }
 
 // storedKey is a key to store as a credential of a group, sealed to its row, with what the supplier lets it call.
@@ -235,6 +303,9 @@ func (a *Admin) AddKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 		return nil, err
 	}
 	if _, err := a.group(ctx, tx, supplier, group); err != nil {
+		return nil, err
+	}
+	if err := unclaimed(persist.Unclaimed(ctx, tx, supplier, group, a.now())); err != nil {
 		return nil, err
 	}
 	checks := make([]KeyCheck, len(keys))
@@ -482,4 +553,31 @@ func (a *Admin) lockedCredential(ctx context.Context, tx pg.Tx, supplier, creden
 	return lockedChild(ctx, a, tx, supplier, ErrNoCredential, "the credential", func() ([]store.LockCredentialOfRow, error) {
 		return store.New().LockCredentialOf(ctx, tx, store.LockCredentialOfParams{SupplierID: supplier, ID: credential})
 	})
+}
+
+// ReleaseKeyClaim ends a group's claim on making its key, for a person who has checked the supplier: a create whose
+// result is not known that made nothing, or a key made that is to be revoked there. The next connection or sync then
+// makes or finds the key afresh. The audit names the key's id when one is known, for revoking it. A group without a
+// claim is returned as it is, and nothing is recorded.
+func (a *Admin) ReleaseKeyClaim(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, group uuid.UUID, reason string) (Group, error) {
+	if _, err := lockedChild(ctx, a, tx, supplier, ErrNoGroup, "the group", func() ([]store.LockGroupRow, error) {
+		return store.New().LockGroup(ctx, tx, store.LockGroupParams{ID: group, SupplierID: supplier})
+	}); err != nil {
+		return Group{}, err
+	}
+	c, err := persist.GroupClaim(ctx, tx, supplier, group)
+	if err != nil {
+		return Group{}, err
+	}
+	if c.ID != uuid.Nil() {
+		if _, err := store.New().DropKeyClaim(ctx, tx, store.DropKeyClaimParams{ID: group, ClaimID: &c.ID}); err != nil {
+			return Group{}, fmt.Errorf("release the claim: %w", err)
+		}
+		if err := a.record(ctx, tx, actor, "supplier_group.release_key_claim", supplier, reason, map[string]any{
+			"group": group.String(), "sent": !c.SentAt.IsZero(), "upstream_key_ref": string(c.Ref),
+		}); err != nil {
+			return Group{}, err
+		}
+	}
+	return a.group(ctx, tx, supplier, group)
 }

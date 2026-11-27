@@ -152,14 +152,22 @@ func (r *fakeRelay) create(w http.ResponseWriter, req *http.Request) {
 	_, _ = io.WriteString(w, `{"success":true}`) //nolint:errcheck // a test server
 }
 
+// search is new-api's search of the tokens, by whole name or text, in one page that says how many it found.
 func (r *fakeRelay) search(w http.ResponseWriter, name, key string) {
 	var items []string
-	for id, t := range r.tokens {
-		if (name != "" && t.Name == name) || (key != "" && strings.TrimPrefix(t.Key, "sk-") == key) {
-			items = append(items, fmt.Sprintf(`{"id":%d,"name":%q,"group":%q,"status":%d}`, id, t.Name, t.Group, t.Status))
+	for id := int64(1); id < r.next; id++ {
+		t, ok := r.tokens[id]
+		if ok && ((name != "" && t.Name == name) || (key != "" && strings.TrimPrefix(t.Key, "sk-") == key)) {
+			items = append(items, tokenJSON(id, t))
 		}
 	}
-	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"items":[%s]}}`, strings.Join(items, ",")) //nolint:errcheck // a test server
+	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"page":1,"total":%d,"items":[%s]}}`, len(items), strings.Join(items, ",")) //nolint:errcheck // a test server
+}
+
+// tokenJSON is a token as new-api's listing and search show it: the key masked, with its model limits.
+func tokenJSON(id int64, t *relayToken) string {
+	return fmt.Sprintf(`{"id":%d,"name":%q,"group":%q,"status":%d,"key":%q,"expired_time":-1,"model_limits_enabled":%t,"model_limits":%q}`,
+		id, t.Name, t.Group, t.Status, maskedToken(strings.TrimPrefix(t.Key, "sk-")), t.Limits != "", t.Limits)
 }
 
 // list is a page of the tokens by ID, each key masked as new-api masks it, with its model limits.
@@ -173,8 +181,7 @@ func (r *fakeRelay) list(w http.ResponseWriter, page, size string) {
 		if !ok || int(id) <= (p-1)*n || int(id) > p*n {
 			continue
 		}
-		items = append(items, fmt.Sprintf(`{"id":%d,"name":%q,"group":%q,"status":%d,"key":%q,"expired_time":-1,"model_limits_enabled":%t,"model_limits":%q}`,
-			id, t.Name, t.Group, t.Status, maskedToken(strings.TrimPrefix(t.Key, "sk-")), t.Limits != "", t.Limits))
+		items = append(items, tokenJSON(id, t))
 	}
 	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"page":%d,"page_size":%d,"total":%d,"items":[%s]}}`, p, n, len(r.tokens), strings.Join(items, ",")) //nolint:errcheck // a test server
 }
@@ -188,7 +195,7 @@ func (r *fakeRelay) reveal(w http.ResponseWriter, ref string) {
 	id, _ := strconv.ParseInt(ref, 10, 64) //nolint:errcheck // a ref that is no number is no token
 	t, ok := r.tokens[id]
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"success":false,"message":"record not found"}`) //nolint:errcheck // a test server
 		return
 	}
 	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"key":%q}}`, strings.TrimPrefix(t.Key, "sk-")) //nolint:errcheck // a test server
