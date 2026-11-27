@@ -4,16 +4,9 @@
 -- credential when its type has more than one, and the values of the type's text fields, such as OpenAI's organization
 -- or Azure's api-version. Each value is a string; the type that stores a row checks its members, and a node refuses a
 -- supplier whose rows its type would not have written. NULL is no setting. A replaced cloud credential that returns to
--- its row writes the new credential's settings there.
+-- its row writes the new credential's settings there. Existing Bedrock credentials get their form in 00058.
 ALTER TABLE suppliers.credentials
     ADD COLUMN settings jsonb CONSTRAINT credentials_settings_check CHECK (jsonb_typeof(settings) = 'object');
-
--- Bedrock now takes an access key or an API key, so a node loads its credential only with the form named. Every
--- Bedrock credential stored before this was an access key, Bedrock's default form. Vertex AI keeps one form, and no
--- other type stored before this has more than one.
-UPDATE suppliers.credentials c SET settings = '{"form": "access_key"}'
-FROM suppliers.suppliers s
-WHERE s.id = c.supplier_id AND s.kind = 'bedrock' AND c.status <> 'erased';
 
 -- A pasted key's own balance, for a type that reads one (docs/domains/suppliers-direct.md「模型重读与余额」): each key is
 -- a wallet of its own. The amount is in the currency of the price entry its supplier is connected at, and observed_at
@@ -22,6 +15,6 @@ ALTER TABLE suppliers.credentials
     ADD COLUMN balance_native numeric
         CONSTRAINT credentials_balance_native_check CHECK (balance_native <> ALL (ARRAY['NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric])),
     ADD COLUMN balance_observed_at timestamptz,
-    ADD CONSTRAINT credentials_balance_observed_check CHECK ((balance_native IS NULL) = (balance_observed_at IS NULL));
+    ADD CONSTRAINT credentials_balance_observed_check CHECK ((balance_native IS NULL) = (balance_observed_at IS NULL)) NOT VALID;
 
 GRANT UPDATE (settings, balance_native, balance_observed_at) ON TABLE suppliers.credentials TO axiom_app;

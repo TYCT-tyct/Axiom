@@ -39,9 +39,8 @@ GRANT SELECT, INSERT, DELETE ON TABLE suppliers.egress_proxies TO axiom_app;
 GRANT UPDATE (name, ciphertext, nonce, wrapped_dek, key_version, username, fallback_id, status)
     ON TABLE suppliers.egress_proxies TO axiom_app;
 
--- The column was never written or read before this: every credential went direct, which NULL now says.
-UPDATE suppliers.credentials SET egress_id = NULL WHERE egress_id IS NOT NULL;
+-- The column was never written or read before this: every credential went direct, which NULL now says. Rows that name
+-- no proxy are cleared in 00058 and the key validated in 00059, so this only adds it, without scanning the table.
 ALTER TABLE suppliers.credentials
     DROP CONSTRAINT credentials_egress_id_check,
-    ADD CONSTRAINT credentials_egress_id_fkey FOREIGN KEY (egress_id) REFERENCES suppliers.egress_proxies (id);
-CREATE INDEX credentials_egress ON suppliers.credentials (egress_id) WHERE egress_id IS NOT NULL;
+    ADD CONSTRAINT credentials_egress_id_fkey FOREIGN KEY (egress_id) REFERENCES suppliers.egress_proxies (id) NOT VALID;
