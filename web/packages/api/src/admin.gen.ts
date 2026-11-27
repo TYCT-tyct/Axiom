@@ -4374,7 +4374,7 @@ export interface components {
             low_balance_thresholds?: components["schemas"]["LowBalanceThreshold"][];
             reason: components["schemas"]["Reason"];
         };
-        /** @description A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, at a relay's latest confirmed unit value. */
+        /** @description A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, a relay's balance converted at its latest confirmed unit value. */
         LowBalanceThreshold: {
             supplier_id: components["schemas"]["Uuid"];
             /** @description A non-negative exact decimal in text. */

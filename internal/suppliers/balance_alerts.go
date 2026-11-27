@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"slices"
+	"unicode/utf8"
 	"uuid"
 
 	"axiom/internal/platform/alert"
@@ -33,17 +34,21 @@ type balanceReading struct {
 }
 
 // The balances read, each with the line it is held to. Relays read theirs onto the supplier; a type with wallets onto each
-// key. Only suppliers that are served or about to be are read, and only keys that can still be called. The default line
-// is 5 of the settlement currency.
+// key. Only suppliers that are served or about to be are read, and only keys that can still be called. A line a person
+// set is in the balance's own unit. The default line is 5 of the settlement currency: a relay's native balance is
+// converted at its latest confirmed unit value and compared exactly, never against a rounded native line; a relay with no
+// confirmed unit value has no default line.
 const balanceReadings = `WITH line AS (SELECT l.supplier_id, l.threshold::numeric FROM unnest($1::uuid[], $2::text[]) l(supplier_id, threshold)),
 live AS (SELECT s.* FROM suppliers.suppliers s WHERE s.status IN ('connecting','active','low_balance','needs_attention'))
 SELECT r.key, r.supplier_id, r.name, r.hint, trim_scale(r.balance)::text, trim_scale(r.threshold)::text, r.unit, r.balance < r.threshold
 FROM (
- SELECT s.id::text AS key, s.id AS supplier_id, s.name, NULL::text AS hint, s.balance_native AS balance,
-  CASE s.native_unit WHEN 'usd' THEN 'USD' ELSE s.native_unit END AS unit,
-  coalesce(l.threshold, round(5 / (SELECT u.value FROM suppliers.unit_values u
-   WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), 6)) AS threshold
+ SELECT s.id::text AS key, s.id AS supplier_id, s.name, NULL::text AS hint,
+  CASE WHEN l.threshold IS NULL THEN s.balance_native * u.value ELSE s.balance_native END AS balance,
+  CASE WHEN l.threshold IS NULL THEN s.settlement_currency WHEN s.native_unit = 'usd' THEN 'USD' ELSE s.native_unit END AS unit,
+  coalesce(l.threshold, CASE WHEN u.value IS NOT NULL THEN 5 END) AS threshold
  FROM live s LEFT JOIN line l ON l.supplier_id = s.id
+ LEFT JOIN LATERAL (SELECT v.value FROM suppliers.unit_values v
+  WHERE v.supplier_id = s.id AND v.currency = s.settlement_currency AND v.native_unit = s.native_unit ORDER BY v.id DESC LIMIT 1) u ON true
  WHERE s.mode = 'relay' AND s.balance_native IS NOT NULL
  UNION ALL
  SELECT s.id::text || '/' || c.id::text, s.id, s.name, c.hint, c.balance_native, s.settlement_currency, coalesce(l.threshold, 5)
@@ -144,11 +149,25 @@ func readBalances(ctx context.Context, tx pg.Tx, lines LowBalanceLines) ([]balan
 			return nil, err
 		}
 		// Only the key's last characters, which the admin shows too, ever leave the credentials row.
-		r.fields = map[string]string{"supplier": name, "supplier_id": supplier.String(), "balance": balance, "threshold": threshold, "unit": unit}
+		// Every field is cut to what a signal holds (platform/alert: 512 bytes a value), so no reading can make Persist
+		// refuse it and roll back the whole pass; the supplier's ID names it whole.
+		r.fields = map[string]string{"supplier": clip(name, 200), "supplier_id": supplier.String(), "balance": clip(balance, 512),
+			"threshold": clip(threshold, 512), "unit": unit}
 		if hint != nil {
 			r.fields["key_hint"] = "…" + *hint
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// clip is s cut to at most n bytes, on a character boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

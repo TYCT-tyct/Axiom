@@ -58,6 +58,7 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 		key      string
 		resolved bool
 		fields   string // balance threshold unit [key hint], for a raise
+		name     string // the supplier field, when it is not the supplier's name as set
 	}
 	steps := []struct {
 		name   string
@@ -80,10 +81,11 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 		{"a relay back at its line resolves", func() {
 			exec(`UPDATE suppliers.suppliers SET balance_native=50 WHERE id=$1`, w.supplier)
 		}, []want{{key: relayKey, resolved: true}}},
-		{"a relay without a line is held to 5 of its settlement currency at its unit value", func() {
+		{"a relay without a line is held to 5 of its settlement currency, converted unrounded at its unit value", func() {
 			delete(lines, w.supplier)
-			exec(`UPDATE suppliers.suppliers SET balance_native=2.4 WHERE id=$1`, w.supplier)
-		}, []want{{key: relayKey, fields: "2.4 2.5 quota"}}},
+			exec(`INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 6, 'test', 'rate')`, w.supplier)
+			exec(`UPDATE suppliers.suppliers SET balance_native=0.833333 WHERE id=$1`, w.supplier)
+		}, []want{{key: relayKey, fields: "4.999998 5 USD"}}},
 		{"a line set in the wallet's currency moves the wallet above it", func() {
 			lines[wallet] = "4.5"
 		}, []want{{key: walletAlert, resolved: true}}},
@@ -93,6 +95,10 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 		{"a key that can no longer be called is no longer low", func() {
 			exec(`UPDATE suppliers.credentials SET status='disabled' WHERE id=$1`, key)
 		}, []want{{key: walletAlert, resolved: true}}},
+		{"a supplier name past what a signal holds is cut on a character boundary", func() {
+			exec(`UPDATE suppliers.suppliers SET name=repeat('余', 200) WHERE id=$1`, wallet)
+			exec(`UPDATE suppliers.credentials SET status='active' WHERE id=$1`, key)
+		}, []want{{key: walletAlert, fields: "4.99 10 CNY …wxyz", name: strings.Repeat("余", 66)}}},
 	}
 	for _, step := range steps {
 		step.change()
@@ -104,7 +110,8 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 		for i, s := range got {
 			fields := strings.TrimSpace(strings.Join([]string{s.Fields["balance"], s.Fields["threshold"], s.Fields["unit"], s.Fields["key_hint"]}, " "))
 			if s.Kind != "suppliers.low_balance" || s.Key != step.want[i].key || s.Resolved != step.want[i].resolved ||
-				!s.Resolved && (fields != step.want[i].fields || s.Fields["supplier_id"] == "" || s.Fields["supplier"] == "") {
+				!s.Resolved && (fields != step.want[i].fields || s.Fields["supplier_id"] == "" || s.Fields["supplier"] == "" ||
+					step.want[i].name != "" && s.Fields["supplier"] != step.want[i].name) {
 				t.Errorf("%s: signal %d is %+v, want %+v", step.name, i, s, step.want[i])
 			}
 		}

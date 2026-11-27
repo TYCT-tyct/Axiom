@@ -4903,7 +4903,7 @@ type LoginLimitsView struct {
 	Limits *LoginLimits `json:"limits,omitempty"`
 }
 
-// LowBalanceThreshold A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, at a relay's latest confirmed unit value.
+// LowBalanceThreshold A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency. A supplier without a line is held to 5 of its settlement currency, a relay's balance converted at its latest confirmed unit value.
 type LowBalanceThreshold struct {
 	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	SupplierId Uuid `json:"supplier_id"`
