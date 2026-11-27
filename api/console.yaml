@@ -3766,6 +3766,47 @@ components:
           description: >-
             The endpoint's sale prices. Absent when this request is anonymous and the site keeps its prices to
             signed-in members, under the same rule as the model's `pricing`.
+        source_class:
+          allOf: [{$ref: "#/components/schemas/SourceClassName"}]
+          description: >-
+            Where the endpoint's supply comes from, as its real responses' fingerprints classed it: the class, never
+            the supplier. Absent from a node that does not publish it.
+        quality_score:
+          type: number
+          format: double
+          minimum: 0
+          description: >-
+            The fixed benchmark's score against the official direct run, which scores 100. Absent while no run counts
+            for the endpoint.
+        uptime_last_5m: {$ref: "#/components/schemas/EndpointUptime"}
+        uptime_last_30m: {$ref: "#/components/schemas/EndpointUptime"}
+        uptime_last_1d: {$ref: "#/components/schemas/EndpointUptime"}
+        latency_last_30m:
+          allOf: [{$ref: "#/components/schemas/EndpointPercentiles"}]
+          description: Time to first token over the last 30 minutes, in milliseconds. Absent while too few answers came.
+        throughput_last_30m:
+          allOf: [{$ref: "#/components/schemas/EndpointPercentiles"}]
+          description: >-
+            Output speed over the last 30 minutes, in tokens per second: pN is the speed N% of answers reached or
+            exceeded, so p90 is the lower. Absent while too few answers came.
+    EndpointUptime:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 100
+      description: >-
+        The percentage of the endpoint's attempts over the window that succeeded, as OpenRouter's `uptime_last_*`;
+        failures of the request itself and rate limits are not counted. Each node counts its own attempts. Absent while
+        the window has fewer than five.
+    EndpointPercentiles:
+      type: object
+      additionalProperties: false
+      required: [p50, p75, p90, p99]
+      properties:
+        p50: {type: number, format: double}
+        p75: {type: number, format: double}
+        p90: {type: number, format: double}
+        p99: {type: number, format: double}
     ModelAbility:
       type: string
       enum: [tools, images, documents, reasoning, prompt_cache, structured_output, web_search, code_execution, file_search]

@@ -3467,17 +3467,28 @@ type AdminSite struct {
 // AlertChannel defines model for AlertChannel.
 type AlertChannel struct {
 	Email *openapi_types.Email `json:"email,omitempty"`
-	Id    *string              `json:"id,omitempty"`
+
+	// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
+	FeishuUrl *string `json:"feishu_url,omitempty"`
+	Id        *string `json:"id,omitempty"`
+
+	// TelegramChatId The Telegram chat a bot posts to: a numeric ID or a public @username. The bot's token is set with the channel secret before use. Exactly one destination member is set; configure only after all nodes support bots.
+	TelegramChatId *string `json:"telegram_chat_id,omitempty"`
 
 	// WebhookUrl HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
 	WebhookUrl *string `json:"webhook_url,omitempty"`
+
+	// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
+	WecomUrl *string `json:"wecom_url,omitempty"`
 }
 
 // AlertConfiguration defines model for AlertConfiguration.
 type AlertConfiguration struct {
-	Channels *[]AlertChannel `json:"channels,omitempty"`
-	Rev      *int64          `json:"rev,omitempty"`
-	Rules    *[]AlertRule    `json:"rules,omitempty"`
+	// AdminOrigin The admin origin the last replacement came from, which the links in notifications open; absent before the first replacement.
+	AdminOrigin *string         `json:"admin_origin,omitempty"`
+	Channels    *[]AlertChannel `json:"channels,omitempty"`
+	Rev         *int64          `json:"rev,omitempty"`
+	Rules       *[]AlertRule    `json:"rules,omitempty"`
 
 	// SpendDetection Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged.
 	SpendDetection *SpendDetection `json:"spend_detection,omitempty"`
@@ -3487,10 +3498,19 @@ type AlertConfiguration struct {
 type AlertConfigurationRequest struct {
 	Channels []struct {
 		Email *openapi_types.Email `json:"email,omitempty"`
-		Id    string               `json:"id"`
+
+		// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
+		FeishuUrl *string `json:"feishu_url,omitempty"`
+		Id        string  `json:"id"`
+
+		// TelegramChatId The Telegram chat a bot posts to: a numeric ID or a public @username. The bot's token is set with the channel secret before use. Exactly one destination member is set; configure only after all nodes support bots.
+		TelegramChatId *string `json:"telegram_chat_id,omitempty"`
 
 		// WebhookUrl HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
 		WebhookUrl *string `json:"webhook_url,omitempty"`
+
+		// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
+		WecomUrl *string `json:"wecom_url,omitempty"`
 	} `json:"channels"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
@@ -3594,7 +3614,7 @@ type AlertWebhookSecretRequest struct {
 	Reason Reason `json:"reason"`
 	Rev    int64  `json:"rev"`
 
-	// Secret 32 to 512 UTF-8 bytes shared with the receiver. Rotation retains the old key for one hour; another rotation during that hour returns conflict.
+	// Secret A webhook's signing secret, 32 to 512 UTF-8 bytes shared with the receiver: rotation retains the old key for one hour, and another rotation during that hour returns conflict. A Feishu bot's signing secret or a Telegram bot's token, which replace the old one at once. Never returned.
 	Secret *string `json:"secret,omitempty"`
 }
 
