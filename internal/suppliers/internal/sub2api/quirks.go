@@ -15,25 +15,35 @@ import (
 // quirks is the call half: what is particular to sub2api when a request is sent to it.
 type quirks struct{}
 
-// Formats lists what a group serves. M1 sells only standard groups without peak pricing on a platform it speaks:
-// subscription groups draw on windows, not the wallet, and a peak multiplier changes the price by the hour, neither of
-// which a cost plan can express yet. A group open only to Claude Code (claude_code_only) admits a request only from a
-// claude-cli/x.y.z User-Agent (sub2api service/claude_code_validator.go) and sends any other to its fallback group at
-// that group's price, or refuses it; Axiom does not pass on a client's identity (docs/domains/gateway.md「转发规则」)
-// and does not make one up, so the group is not sold. Facts that cannot be read serve nothing.
+// Formats lists what a group serves. Only standard groups are sold, on a platform whose gateway answers a format Axiom
+// speaks: subscription groups draw on windows, not the wallet, and are the only ones a peak multiplier applies to
+// (sub2api service/group.go ValidatePeakRateConfig); a peak multiplier changes the price by the hour, which a cost plan
+// cannot express. A group open only to Claude Code (claude_code_only) admits a request only from a claude-cli/x.y.z
+// User-Agent (sub2api service/claude_code_validator.go) and sends any other to its fallback group at that group's
+// price, or refuses it; Axiom does not pass on a client's identity (docs/domains/gateway.md「转发规则」) and does not
+// make one up, so the group is not sold. Facts that cannot be read serve nothing.
 func (quirks) Formats(g adapter.GroupFacts) []protocol.Format {
 	var f facts
 	if err := jsonx.Unmarshal(g, &f); err != nil || f.Status != "active" || f.Subscription != "standard" || f.Peak || f.ClaudeCode {
 		return nil
 	}
-	switch f.Platform {
-	case "anthropic":
-		return []protocol.Format{protocol.Messages}
-	case "openai":
-		return []protocol.Format{protocol.Responses, protocol.Chat}
-	default:
-		return nil
-	}
+	return platformFormats[f.Platform]
+}
+
+// platformFormats is what a group of each platform serves, by the gateway sub2api sends its requests to
+// (domain/platforms.go, server/routes/gateway.go, 0.2.25). The Anthropic gateway answers Messages. The OpenAI gateway
+// answers Chat for every platform on it, and Responses only for OpenAI's own: the other providers on it (Grok and the
+// API-key providers such as Kimi and GLM) are reached at their Chat Completions endpoints. The Gemini gateway turns
+// Messages and Chat into Gemini's own requests; Antigravity's accounts answer Messages. A composite group picks the
+// platform of each request by its model on the server, which an ordinary user cannot see, so what it serves is not
+// known and it is not sold; nor is a platform this table does not name.
+var platformFormats = map[string][]protocol.Format{
+	"anthropic": {protocol.Messages}, "typesafe": {protocol.Messages},
+	"openai": {protocol.Responses, protocol.Chat},
+	"grok":   {protocol.Chat}, "kimi": {protocol.Chat}, "zhipu": {protocol.Chat}, "deepseek": {protocol.Chat},
+	"minimax": {protocol.Chat}, "opencode_go": {protocol.Chat}, "command_code": {protocol.Chat}, "cline": {protocol.Chat},
+	"gemini":      {protocol.Messages, protocol.Chat},
+	"antigravity": {protocol.Messages},
 }
 
 // chargeRefPattern is what sub2api puts in X-Client-Request-Id: a UUID. Anything else is not taken for a reference.
