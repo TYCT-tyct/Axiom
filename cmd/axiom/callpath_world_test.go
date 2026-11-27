@@ -274,7 +274,7 @@ func (w *callWorld) listModel(cat *catalog.Catalog, slug, name string) uuid.UUID
 		w.t.Fatal(err)
 	}
 	made, err := cat.CreateModel(ctx, catalog.CreateModelRequest{
-		Op: op(), Slug: slug, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceOfficial, Spec: jsonx.Raw(servedSpec),
+		Op: op(), Slug: slug, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(servedSpec),
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -289,10 +289,9 @@ func (w *callWorld) listModel(cat *catalog.Catalog, slug, name string) uuid.UUID
 			w.t.Fatal(err)
 		}
 	}
-	// The author's own official price: a direct or cloud line sells a model at no other.
 	if _, err := cat.PublishPrice(ctx, catalog.PublishPriceRequest{
-		Op: op(), Model: model, Source: catalog.SourceOfficial, Schedule: jsonx.Raw(servedReference),
-		Evidence: jsonx.Raw(w.officialProof(author)),
+		Op: op(), Model: model, Source: catalog.SourceManual, Schedule: jsonx.Raw(servedReference),
+		Evidence: jsonx.Raw(`{"url":"https://example.com/pricing"}`),
 	}); err != nil {
 		w.t.Fatal(err)
 	}

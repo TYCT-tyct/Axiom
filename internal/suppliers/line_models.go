@@ -34,12 +34,13 @@ type lineOffer struct {
 }
 
 // price is the line's own price of m in the currency: the catalog's reference price, for a model of an author the type
-// serves, and only when the price came from the author's own official price list. A reference price from a dataset or
-// typed in by a person may be another seller's (OpenRouter lists one provider's, often below the author's own), and
-// pricing the author's own API from it would understate the line's cost; such an endpoint's cost is unknown instead.
+// serves, unless the price came from OpenRouter's dataset. That one is an aggregator's selling price (for an open-weight
+// model a third-party provider's, often far below the author's own), and pricing the author's own API from it would
+// understate the line's cost; such an endpoint's cost is unknown instead. The author's page, LiteLLM's compilation of
+// vendors' list prices and a person's confirmed figure are the author's price.
 func (o lineOffer) price(snap *catalog.Snapshot, m catalog.Model, currency string) (catalog.ReferencePrice, bool) {
 	ref, ok := snap.ReferencePrice(m.ID, currency)
-	return ref, ok && ref.Source == catalog.SourceOfficial && slices.Contains(o.serves, m.Author)
+	return ref, ok && ref.Source != catalog.SourceOpenRouter && slices.Contains(o.serves, m.Author)
 }
 
 // offer is what the passed keys list.

@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -38,16 +39,36 @@ func TestATypeOfAnyAuthorIsNotPricedFromTheCatalog(t *testing.T) {
 	}
 }
 
-// TestALineIsPricedOnlyFromItsAuthorsOwnPriceList: a direct line of the author's own API sells the author's model at
-// the catalog's reference price only when that price came from the author's official price list (docs/domains/
-// suppliers-direct.md「成本与线路倍率」). A model whose price another source gave (here typed in by a person; a dataset
-// such as OpenRouter's lists one provider's price, often below the author's) has an unknown cost on the line, when
-// connected, at a new ratio and when projected again, and is not routed; the model priced from the official list is.
-func TestALineIsPricedOnlyFromItsAuthorsOwnPriceList(t *testing.T) {
+// TestALineIsNotPricedFromAnAggregatorsPrice: a direct line of the author's own API sells the author's model at the
+// catalog's reference price unless that price came from OpenRouter's dataset (docs/domains/suppliers-direct.md「成本与线路
+// 倍率」): there it is an aggregator's selling price, for an open-weight model a third-party provider's, not the
+// author's own. The vendor's own page, LiteLLM's compilation of vendors' list prices and a person's confirmed figure
+// are the author's price. A model priced from OpenRouter has an unknown cost on the line, when connected, at a new
+// ratio and when projected again, and is not routed; the others are priced and routed.
+func TestALineIsNotPricedFromAnAggregatorsPrice(t *testing.T) {
 	t.Parallel()
 	w := newPastedWorld(t)
-	w.listFrom("pebble", stonePrice, catalog.SourceManual)
-	w.provider.set("sk-good-key", providerKey{models: []string{"stone", "pebble"}})
+	sources := []struct {
+		model  string
+		source catalog.PriceSource
+		routed bool
+	}{
+		{"stone", catalog.SourceManual, true}, // the world's model, priced by hand
+		{"basalt", catalog.SourceOfficial, true},
+		{"flint", catalog.SourceLiteLLM, true},
+		{"pebble", catalog.SourceOpenRouter, false},
+	}
+	names := make([]string, len(sources))
+	for i, s := range sources {
+		names[i] = s.model
+		if s.model != "stone" {
+			w.list(s.model, stonePrice)
+		}
+		// The price as its source would have published it; a new revision makes the catalog read it again.
+		w.sql(fmt.Sprintf("UPDATE catalog.reference_price SET source = '%s' WHERE model_id = '%s'", s.source, uuid.UUID(w.models[s.model])),
+			"UPDATE catalog.revision SET n = n + 1")
+	}
+	w.provider.set("sk-good-key", providerKey{models: names})
 	line := w.connect("pasted", "", "sk-good-key")
 	for _, step := range []struct {
 		name string
@@ -62,8 +83,9 @@ func TestALineIsPricedOnlyFromItsAuthorsOwnPriceList(t *testing.T) {
 		if err := step.do(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
-		w.expectRouted(step.name, line, "stone", true)
-		w.expectRouted(step.name, line, "pebble", false)
+		for _, s := range sources {
+			w.expectRouted(step.name+", "+string(s.source), line, s.model, s.routed)
+		}
 	}
 }
 
@@ -124,9 +146,9 @@ func TestAWithdrawnPriceTakesTheEndpointOutOfRouting(t *testing.T) {
 func (w *pastedWorld) withdrawUSD(model catalog.ModelID) {
 	w.t.Helper()
 	ctx, yuan := w.t.Context(), jsonx.Raw(strings.Replace(stonePrice, "USD", "CNY", 1))
-	evidence := w.evidence(catalog.SourceOfficial, "CNY")
+	evidence := jsonx.Raw(`{"url":"https://example.com/pricing"}`)
 	if _, err := w.cat.PublishPrice(ctx, catalog.PublishPriceRequest{
-		Op: w.op(), Model: model, Source: catalog.SourceOfficial, Schedule: yuan, Evidence: evidence,
+		Op: w.op(), Model: model, Source: catalog.SourceManual, Schedule: yuan, Evidence: evidence,
 	}); err != nil {
 		w.t.Fatal(err)
 	}
@@ -141,7 +163,7 @@ func (w *pastedWorld) withdrawUSD(model catalog.ModelID) {
 		bases[c] = ref.ID
 	}
 	if _, err := w.cat.SelectPriceSource(ctx, catalog.SelectPriceSourceRequest{
-		Op: w.op(), Model: model, Rev: view.Rev, Source: catalog.SourceOfficial, Bases: bases,
+		Op: w.op(), Model: model, Rev: view.Rev, Source: catalog.SourceManual, Bases: bases,
 		Prices: []catalog.SourcePrice{{Schedule: yuan, Evidence: evidence}},
 	}); err != nil {
 		w.t.Fatal(err)

@@ -8686,7 +8686,7 @@ type SupplierTypeEntry struct {
 	Currency string `json:"currency"`
 	Id       string `json:"id"`
 
-	// Models Listed catalog models of the type's makers with a reference price in the currency from the maker's own official price list; absent for a type that sells any maker's models.
+	// Models Listed catalog models of the type's makers with a reference price in the currency from a source other than OpenRouter's dataset, an aggregator's selling price; absent for a type that sells any maker's models.
 	Models *int   `json:"models,omitempty"`
 	Origin string `json:"origin"`
 }
