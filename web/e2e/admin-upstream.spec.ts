@@ -29,10 +29,10 @@ test.describe("suppliers", () => {
     await open(page, "/suppliers?tab=inbox", "usual", { suppliers });
     await press(page, "upstream.add").click();
     // the search finds the one type by its kind, as the families in other types' lines also say OpenAI
+    await dialog(page).getByLabel(words("upstream.types.search")).fill("openai");
     await dialog(page)
-      .getByLabel(words("upstream.types.search"))
-      .fill("openai");
-    await dialog(page).getByRole("button", { name: /OpenAI/ }).click();
+      .getByRole("button", { name: /OpenAI/ })
+      .click();
     await expect(
       dialog(page).getByLabel(words("upstream.addDialog.to")).locator("option", { hasText: "Far Direct" }),
     ).toHaveCount(1);
