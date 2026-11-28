@@ -392,7 +392,7 @@ func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requ
 }
 
 const listPriceCosts = `-- name: ListPriceCosts :many
-SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency, cs.basis,
  v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id=e.supplier_id
@@ -409,6 +409,7 @@ type ListPriceCostsRow struct {
 	EndpointID         uuid.UUID
 	ModelID            uuid.UUID
 	SettlementCurrency string
+	Basis              string
 	UnitValueID        uuid.UUID
 	UnitValue          string
 	Schedule           []byte
@@ -428,6 +429,7 @@ func (q *Queries) ListPriceCosts(ctx context.Context, db DBTX) ([]ListPriceCosts
 			&i.EndpointID,
 			&i.ModelID,
 			&i.SettlementCurrency,
+			&i.Basis,
 			&i.UnitValueID,
 			&i.UnitValue,
 			&i.Schedule,

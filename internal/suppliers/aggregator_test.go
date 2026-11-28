@@ -90,7 +90,7 @@ func (w *pastedWorld) setGeneration(id string, a answer) {
 }
 
 // routable is the snapshot's view of the endpoint.
-func (w *pastedWorld) routable(endpoint uuid.UUID) (Routable, bool) {
+func (w *pastedWorld) routable(endpoint uuid.UUID) Routable {
 	w.t.Helper()
 	if err := w.svc.Reload(w.t.Context()); err != nil {
 		w.t.Fatal(err)
@@ -101,10 +101,11 @@ func (w *pastedWorld) routable(endpoint uuid.UUID) (Routable, bool) {
 	}
 	for _, r := range all {
 		if r.ID == endpoint {
-			return r, true
+			return r
 		}
 	}
-	return Routable{}, false
+	w.t.Fatalf("endpoint %s is not routable", endpoint)
+	return Routable{}
 }
 
 // TestAnAggregatorsLineIsCostedAtItsCeiling: an aggregator's endpoint is not routed until its ceiling is read; then its
@@ -129,7 +130,7 @@ func TestAnAggregatorsLineIsCostedAtItsCeiling(t *testing.T) {
 		t.Errorf("the plan's basis is %s", basis)
 	}
 	w.svc.SetMeasuredCancels(stone, true)
-	r, _ := w.routable(stone)
+	r := w.routable(stone)
 	if r.Cancels || string(r.Provider) != `{"max_price":{"completion":"30","prompt":"6"}}` {
 		t.Errorf("routable: cancels %v, provider %s; want reserved whole within the ceiling", r.Cancels, r.Provider)
 	}
@@ -278,6 +279,7 @@ func TestTheCeilingChecks(t *testing.T) {
 		// The attempt is booked at the ratio it ran at, 0.5, whatever the line's is by the lookup.
 		{name: "a record read after the ratio changed", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 2 * time.Minute, ratio: "1", booked: "0.004", state: "done"},
 		{name: "a key erased since", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 2 * time.Minute, erased: true, booked: "0.0045", state: "done"},
+		{name: "a key sealed under a version this node lacks", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 2 * time.Minute, unsealable: true, booked: "0.0045", state: "lookup"},
 		{name: "a figure within the tolerance", reported: figure("0.00909", false), settled: "0.004545", booked: "0.004545", state: "done"},
 		{name: "a figure past the tolerance", reported: figure("0.0091", false), settled: "0.00455", booked: "0.00455", state: "done", alert: "ceiling_exceeded"},
 		{name: "past the bound of guessed usage", reported: figure("0.02", false), settled: "0.01", guessed: true, booked: "0.01", state: "done"},
@@ -302,9 +304,33 @@ type ceilingCheck struct {
 	repriced bool          // the endpoint is on another plan by the checks
 	ratio    string        // the line's ratio by the checks, "" for the one the attempt ran at
 	erased   bool          // the attempt's key was erased by the checks
-	booked   string        // the cost booked after the checks, run twice
-	state    string
-	alert    string // the alert's key, "" for none: the endpoint is still routed
+	// unsealable: the key is sealed under a key version this node does not hold, which a restart may bring
+	unsealable bool
+	booked     string // the cost booked after the checks, run twice
+	state      string
+	alert      string // the alert's key, "" for none: the endpoint is still routed
+}
+
+// arrange makes what the case says changed between the settlement and the checks.
+func (c ceilingCheck) arrange(w *pastedWorld, jobs *lines, line uuid.UUID) {
+	w.t.Helper()
+	if c.guessed {
+		w.sql("UPDATE suppliers.attempt_costs SET cost_flag = 'unpriced'")
+	}
+	if c.repriced {
+		w.relistAt(jobs, strings.Replace(stoneCeiling, "0.00003", "0.00004", 1))
+	}
+	if c.ratio != "" {
+		if err := w.setRatio(line, c.ratio); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	if c.unsealable {
+		w.sql("UPDATE suppliers.credentials SET key_version = key_version + 1000")
+	}
+	if c.erased {
+		w.sql("UPDATE suppliers.credentials SET status = 'erased', ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL")
+	}
 }
 
 func (c ceilingCheck) run(t *testing.T) {
@@ -315,20 +341,7 @@ func (c ceilingCheck) run(t *testing.T) {
 	known := c.reported != nil && !c.reported.BYOK
 	record := w.settle(w.endpoint(line, "stone"), "gen-1", usage, c.reported, c.settled, known)
 	w.setGeneration("gen-1", c.record)
-	if c.guessed {
-		w.sql("UPDATE suppliers.attempt_costs SET cost_flag = 'unpriced'")
-	}
-	if c.repriced {
-		w.relistAt(jobs, strings.Replace(stoneCeiling, "0.00003", "0.00004", 1))
-	}
-	if c.ratio != "" {
-		if err := w.setRatio(line, c.ratio); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if c.erased {
-		w.sql("UPDATE suppliers.credentials SET status = 'erased', ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL")
-	}
+	c.arrange(w, jobs, line)
 	w.clock.advance(c.wait)
 	for range 2 {
 		if err := jobs.checkCeilings(t.Context()); err != nil {
@@ -339,7 +352,7 @@ func (c ceilingCheck) run(t *testing.T) {
 	if want := c.booked + "/" + c.state; row != want {
 		t.Errorf("the attempt is %s, want %s", row, want)
 	}
-	if !c.erased { // a line without a key is in no snapshot
+	if !c.erased && !c.unsealable { // a line without a key it can open is in no snapshot
 		w.expectRouted(c.name, line, "stone", c.alert == "")
 	}
 	w.expectAlert(c.alert)
@@ -395,6 +408,10 @@ func TestACeilingPricesAllTheModelReports(t *testing.T) {
 			w.expectRouted(c.name, line, "gemini", c.routed)
 			if c.routed {
 				w.expectPlanPrices(w.endpoint(line, "gemini"), w.models["gemini"])
+				// The copied tiers are no floor under the model's shared price (billing's CopiedTiers).
+				if r := w.routable(w.endpoint(line, "gemini")); r.CopiedTiers != 1<<catalog.ServiceTierFlex|1<<catalog.ServiceTierPriority {
+					t.Errorf("copied tiers %b, want flex and priority", r.CopiedTiers)
+				}
 			}
 		})
 	}

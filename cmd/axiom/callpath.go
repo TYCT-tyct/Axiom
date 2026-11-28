@@ -418,7 +418,10 @@ func priceCosts(endpoints []suppliers.Routable, rates []platform.ExchangeRate, c
 				}
 			}
 		}
-		costs = append(costs, billing.PriceCost{Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID, Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate})
+		costs = append(costs, billing.PriceCost{
+			Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID,
+			Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate, CopiedTiers: e.CopiedTiers,
+		})
 	}
 	return costs
 }

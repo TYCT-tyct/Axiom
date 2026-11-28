@@ -20,6 +20,16 @@ type PriceCost struct {
 	Currency     platform.Currency     `json:"-"`
 	CurrencyCode string                `json:"currency"`
 	Exchange     platform.ExchangeRate `json:"exchange"`
+	// CopiedTiers are the service tiers the schedule prices only by copying its standard prices, as an aggregator's
+	// ceiling plan does for every tier the model declares: a bound on what the tier costs, not its cost, so they set no
+	// floor under a shared sale price (allowsSharedCosts). The endpoint is still costed at them.
+	CopiedTiers catalog.ServiceTierSet `json:"copied_tiers,omitzero"`
+}
+
+// floorSchedule is the part of the schedule a shared sale price must cover: every tier but the copied ones.
+func (c PriceCost) floorSchedule() PriceCost {
+	c.Schedule = c.Schedule.WithoutServiceTiers(c.CopiedTiers)
+	return c
 }
 
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.

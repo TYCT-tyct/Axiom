@@ -183,12 +183,14 @@ func (s Sold) allowsEndpointCosts(model catalog.Model, costs []PriceCost) bool {
 }
 
 func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
-	for _, c := range costs {
+	floors := make([]PriceCost, len(costs))
+	for i, c := range costs {
 		if Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
 			return false
 		}
+		floors[i] = c.floorSchedule()
 	}
-	cost, err := convertedCosts(costs, s.Schedule.Currency())
+	cost, err := convertedCosts(floors, s.Schedule.Currency())
 	if err != nil {
 		return false
 	}

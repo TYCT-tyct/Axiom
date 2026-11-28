@@ -86,6 +86,15 @@ func ceilingCost(bound platform.Exact, ratio *big.Rat, reported *reportedCost) (
 	return native, boundCredits, false, err
 }
 
+// copiedTiers are the tiers a plan of the basis prices by copying its standard prices: every tier but the standard
+// one of a ceiling plan (highestOf), none of any other.
+func copiedTiers(basis string, plan catalog.Schedule) catalog.ServiceTierSet {
+	if basis != ceilingBasis {
+		return 0
+	}
+	return plan.ServiceTiers()
+}
+
 // ceilingFresh is how long a read ceiling prices an endpoint. The ceilings are read every hour, so 24 hours lets the
 // aggregator's listing fail for a whole day before its endpoints leave routing; past that, a provider that joined or
 // raised its price since may be above the ceiling in an item max_price cannot bound.

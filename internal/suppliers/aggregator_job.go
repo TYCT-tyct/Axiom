@@ -151,8 +151,8 @@ func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup,
 		if err != nil {
 			return nil, nil, err
 		}
-		key, first := l.lookupKey(ctx, tx, opened, r.CredentialID)
-		if key == nil && first {
+		key, erased := l.lookupKey(ctx, tx, opened, r.CredentialID)
+		if erased {
 			shut = append(shut, r.CredentialID)
 		}
 		if key != nil {
@@ -162,20 +162,22 @@ func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup,
 	return due, shut, nil
 }
 
-// lookupKey is the credential's key, opened once a run and kept in opened, nil when it does not open, which is logged;
-// first says this call opened it.
-func (l *lines) lookupKey(ctx context.Context, tx pg.Tx, opened map[uuid.UUID]*secret.Secret, credential uuid.UUID) (*secret.Secret, bool) {
+// lookupKey is the credential's key, opened once a run and kept in opened, nil when it does not open, which is logged.
+// erased says, once a run, that the credential holds no key at all, so nothing will read its attempts' records; one
+// sealed under a key version this node lacks is read again next run, by a node that may hold it.
+func (l *lines) lookupKey(ctx context.Context, tx pg.Tx, opened map[uuid.UUID]*secret.Secret, credential uuid.UUID) (key *secret.Secret, erased bool) {
 	if key, seen := opened[credential]; seen {
 		return key, false
 	}
-	key, err := l.admin.openKey(ctx, tx, credential)
+	sealed, err := l.admin.openKey(ctx, tx, credential)
 	if err != nil {
-		l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record; its attempts stay at the bound", "credential", credential.String(), "err", err)
+		l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record", "credential", credential.String(), "err", err)
 		opened[credential] = nil
-		return nil, true
+		return nil, errors.Is(err, ErrStatusLocked)
 	}
-	opened[credential] = &key
-	return &key, true
+	key = &sealed
+	opened[credential] = key
+	return key, false
 }
 
 // bookLookup books one record found against its attempt (SettleLookup, once a generation): the cost is the record's

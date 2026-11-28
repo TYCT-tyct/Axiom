@@ -316,6 +316,23 @@ func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedul
 	return out, nil
 }
 
+// ServiceTiers are the tiers the schedule prices besides the standard one.
+func (s Schedule) ServiceTiers() ServiceTierSet {
+	return s.offered &^ (1 << ServiceTierStandard)
+}
+
+// WithoutServiceTiers is the schedule without its prices at tiers; the standard tier stays. Billing compares a shared
+// sale price only with the tiers a cost really has (billing's PriceCost.CopiedTiers).
+func (s Schedule) WithoutServiceTiers(tiers ServiceTierSet) Schedule {
+	for _, st := range tiers.List() {
+		if st != ServiceTierStandard {
+			s.offered &^= 1 << st
+			s.levels[st] = level{}
+		}
+	}
+	return s
+}
+
 // WithRate sets one item's price at every band of every offered service tier, adding the item where the schedule did
 // not price it. The gateway uses it to price a plugin search at the selected backend's published rate rather than at
 // the model's: the reservation locks the returned schedule, so the search is charged exactly what was reserved

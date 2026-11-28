@@ -145,7 +145,7 @@ LIMIT @batch::int;
 
 -- name: ListPriceCosts :many
 -- Costs depend on configured eligibility, never on a node's adapter or key availability.
-SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency, cs.basis,
  v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id=e.supplier_id
