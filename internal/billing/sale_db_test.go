@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"cmp"
 	"strings"
 	"testing"
 	"uuid"
@@ -18,6 +19,8 @@ type snapshotter struct {
 	db   *pg.DB
 	cat  *catalog.Catalog
 	opts int
+	// spec and reference are the models' spec and reference price, saleSpec and saleReady when empty.
+	spec, reference string
 }
 
 const (
@@ -55,7 +58,7 @@ func (f *snapshotter) model(slug string) catalog.ModelID {
 		f.t.Fatal(err)
 	}
 	created, err := f.cat.CreateModel(ctx, catalog.CreateModelRequest{
-		Op: op(), Slug: slug, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(saleSpec),
+		Op: op(), Slug: slug, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(cmp.Or(f.spec, saleSpec)),
 	})
 	if err != nil {
 		f.t.Fatal(err)
@@ -69,7 +72,7 @@ func (f *snapshotter) model(slug string) catalog.ModelID {
 		f.t.Fatal(err)
 	}
 	if _, err := f.cat.PublishPrice(ctx, catalog.PublishPriceRequest{
-		Op: op(), Model: model, Source: catalog.SourceManual, Schedule: jsonx.Raw(saleReady), Evidence: jsonx.Raw(saleProof),
+		Op: op(), Model: model, Source: catalog.SourceManual, Schedule: jsonx.Raw(cmp.Or(f.reference, saleReady)), Evidence: jsonx.Raw(saleProof),
 	}); err != nil {
 		f.t.Fatal(err)
 	}

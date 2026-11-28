@@ -20,37 +20,20 @@ type PriceCost struct {
 	Currency     platform.Currency     `json:"-"`
 	CurrencyCode string                `json:"currency"`
 	Exchange     platform.ExchangeRate `json:"exchange"`
-	// CopiedTiers are the service tiers the schedule prices only by copying its standard prices, as an aggregator's
-	// ceiling plan does for every tier the model declares: a bound on what the tier costs, not its cost, so they set no
-	// floor under a shared sale price (allowsSharedCosts). The endpoint is still costed at them.
-	CopiedTiers catalog.ServiceTierSet `json:"copied_tiers,omitzero"`
+	// StandardOnly says the endpoint is priced and served at the standard service tier only, as an aggregator's ceiling
+	// plan is: the tiers its schedule lacks are not the endpoint's to serve, so they are not missing from its cost and
+	// set no floor under a shared sale price (allowsSharedCosts).
+	StandardOnly bool `json:"standard_only,omitempty"`
 }
 
-// floorSchedule is the part of the schedule a shared sale price must cover: every tier but the copied ones.
-func (c PriceCost) floorSchedule() PriceCost {
-	c.Schedule = c.Schedule.WithoutServiceTiers(c.CopiedTiers)
-	return c
-}
-
-// UncoveredTiers are the copied tiers of the cost whose prices the sale schedule does not cover: a shared sale price
-// sets no floor at them (allowsSharedCosts), so an endpoint costed above the sale price at such a tier would sell it
-// at a loss, and is not routed at it. A cost that cannot be converted leaves every copied tier uncovered.
-func UncoveredTiers(sale catalog.Schedule, c PriceCost) catalog.ServiceTierSet {
-	if c.CopiedTiers == 0 {
-		return 0
+// reportable is what the cost must price of what the model reports: an endpoint served at the standard tier only is
+// costed at no other.
+func (c PriceCost) reportable(model catalog.Model) catalog.Reportable {
+	r := model.Reportable()
+	if c.StandardOnly {
+		r.ServiceTiers = 0
 	}
-	cost, err := c.converted(sale.Currency())
-	if err != nil {
-		return c.CopiedTiers
-	}
-	var out catalog.ServiceTierSet
-	for _, st := range c.CopiedTiers.List() {
-		only := cost.WithoutServiceTiers(cost.ServiceTiers() &^ (1 << st))
-		if covered, err := sale.CoversCost(only); err != nil || !covered {
-			out.Add(st)
-		}
-	}
-	return out
+	return r
 }
 
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.

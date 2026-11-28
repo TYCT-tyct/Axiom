@@ -376,11 +376,11 @@ func (w *pastedWorld) expectAlert(key string) {
 	}
 }
 
-// TestACeilingPricesAllTheModelReports: an aggregator's plan prices every service tier the catalog declares for the
-// model, flex and priority among them, at the same ceiling, so routing and the model's shared price find no tier
-// missing; a ceiling that lacks an item the model reports leaves the endpoint unpriced rather than putting a plan that
-// cannot price the model among its costs.
-func TestACeilingPricesAllTheModelReports(t *testing.T) {
+// TestACeilingPricesTheStandardTierOnly: OpenRouter lists no price per service tier, so an aggregator's plan prices
+// every item the model reports at the standard tier and no other tier, even of a model that declares flex and
+// priority, and its endpoint is served at the standard tier only; a ceiling that lacks an item the model reports leaves
+// the endpoint unpriced rather than putting a plan that cannot price the model among its costs.
+func TestACeilingPricesTheStandardTierOnly(t *testing.T) {
 	t.Parallel()
 	const geminiSpec = `{"items":["input","output","cache_read"],"tiers":["standard","flex","priority"],"context_length":1000000,` +
 		`"max_output_tokens":8192,"streams":true,"abilities":["tools"]}`
@@ -391,7 +391,7 @@ func TestACeilingPricesAllTheModelReports(t *testing.T) {
 		name, ceiling string
 		routed        bool
 	}{
-		{"every tier at the ceiling", `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.00001","cache_read":"0.0000002"}}`, true},
+		{"every item at the ceiling", `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.00001","cache_read":"0.0000002"}}`, true},
 		{"an item the ceiling lacks", `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.00001"}}`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -407,10 +407,9 @@ func TestACeilingPricesAllTheModelReports(t *testing.T) {
 			}
 			w.expectRouted(c.name, line, "gemini", c.routed)
 			if c.routed {
-				w.expectPlanPrices(w.endpoint(line, "gemini"), w.models["gemini"])
-				// The copied tiers are no floor under the model's shared price (billing's CopiedTiers).
-				if r := w.routable(w.endpoint(line, "gemini")); r.CopiedTiers != 1<<catalog.ServiceTierFlex|1<<catalog.ServiceTierPriority {
-					t.Errorf("copied tiers %b, want flex and priority", r.CopiedTiers)
+				w.expectStandardPlan(w.endpoint(line, "gemini"), w.models["gemini"])
+				if r := w.routable(w.endpoint(line, "gemini")); !r.StandardOnly {
+					t.Error("the endpoint is not served at the standard tier only")
 				}
 			}
 		})
@@ -438,8 +437,9 @@ func TestACeilingReadIsKeptWhenTheRoundIsCut(t *testing.T) {
 	}
 }
 
-// expectPlanPrices checks that the endpoint's plan prices every item and service tier the model reports.
-func (w *pastedWorld) expectPlanPrices(endpoint uuid.UUID, model catalog.ModelID) {
+// expectStandardPlan checks that the endpoint's plan prices every item the model reports at the standard tier, and
+// prices no other tier.
+func (w *pastedWorld) expectStandardPlan(endpoint uuid.UUID, model catalog.ModelID) {
 	w.t.Helper()
 	plan, err := catalog.ParseSchedule([]byte(w.text(`SELECT s.schedule::text FROM suppliers.endpoints e
 		JOIN suppliers.cost_schedules s ON s.id = e.cost_schedule_id WHERE e.id = $1`, endpoint)))
@@ -447,7 +447,11 @@ func (w *pastedWorld) expectPlanPrices(endpoint uuid.UUID, model catalog.ModelID
 		w.t.Fatal(err)
 	}
 	m, _ := w.snap().Model(model)
-	if missing := plan.Missing(m.Reportable()); missing != (catalog.Reportable{}) {
+	reports := m.Reportable()
+	if missing := plan.Missing(catalog.Reportable{Items: reports.Items}); missing != (catalog.Reportable{}) {
 		w.t.Errorf("the plan leaves %+v of what the model reports unpriced", missing)
+	}
+	if others := reports.ServiceTiers &^ (1 << catalog.ServiceTierStandard); plan.Missing(reports).ServiceTiers != others {
+		w.t.Errorf("the plan prices a tier of %b besides standard", others)
 	}
 }

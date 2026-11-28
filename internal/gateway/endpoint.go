@@ -99,7 +99,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if why != "" {
 		return routing.Endpoint{}, why
 	}
-	reportable := model.Reportable()
+	reportable := servedReportable(model, r)
 	price, why := endpointPrice(sold, r.ID)
 	if why != "" {
 		return routing.Endpoint{}, why
@@ -108,7 +108,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
 		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
 	}
-	tiers := servedTiers(reportable, sold, price, r, rates)
+	tiers := reportable.ServiceTiers
+	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
 	native := routing.Of(r.Formats...)
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
@@ -170,17 +171,15 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	return e, ""
 }
 
-// servedTiers are the service tiers the endpoint is routed at: the model's and the standard one, at which every
-// endpoint is called unless it says otherwise. A shared price sets no floor at a tier an aggregator's plan only copies
-// (billing.PriceCost.CopiedTiers), so the endpoint is not routed at such a tier while its own cost there is above the
-// sale price: it never sells the tier at a loss, and another supplier serves it.
-func servedTiers(reportable catalog.Reportable, sold billing.Sold, price routing.PriceRef, r suppliers.Routable, rates []platform.ExchangeRate) catalog.ServiceTierSet {
-	tiers := reportable.ServiceTiers
-	tiers.Add(catalog.ServiceTierStandard)
-	if sold.Endpoints == nil {
-		tiers &^= billing.UncoveredTiers(price.Schedule, PriceCostOf(r, rates, price.Schedule.Currency()))
+// servedReportable is what the model reports at the tiers the endpoint serves: every tier the model has, except for an
+// endpoint served at the standard tier only (suppliers.Routable.StandardOnly), which a flex or priority call is never
+// routed to and whose price needs no other tier.
+func servedReportable(model catalog.Model, r suppliers.Routable) catalog.Reportable {
+	reportable := model.Reportable()
+	if r.StandardOnly {
+		reportable.ServiceTiers = 0
 	}
-	return tiers
+	return reportable
 }
 
 // PriceCostOf is the endpoint's cost as billing compares it with a sale price in currency, with the exchange rate that
@@ -197,7 +196,7 @@ func PriceCostOf(e suppliers.Routable, rates []platform.ExchangeRate, currency p
 	}
 	return billing.PriceCost{
 		Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID,
-		Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate, CopiedTiers: e.CopiedTiers,
+		Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate, StandardOnly: e.StandardOnly,
 	}
 }
 

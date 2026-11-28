@@ -183,14 +183,14 @@ func (s Sold) allowsEndpointCosts(model catalog.Model, costs []PriceCost) bool {
 }
 
 func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
-	floors := make([]PriceCost, len(costs))
-	for i, c := range costs {
-		if Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+	// A tier a cost does not price is no floor of its: a standard-only endpoint is not served at it (CoversCost reads a
+	// tier the cost lacks as unknown).
+	for _, c := range costs {
+		if Unpriced(c.Schedule, c.reportable(model)) != (catalog.Reportable{}) {
 			return false
 		}
-		floors[i] = c.floorSchedule()
 	}
-	cost, err := convertedCosts(floors, s.Schedule.Currency())
+	cost, err := convertedCosts(costs, s.Schedule.Currency())
 	if err != nil {
 		return false
 	}
@@ -223,8 +223,8 @@ func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
 // endpointAllows is one endpoint's local cost against the price this version set for it, including an override audited
 // for that exact cost.
 func (s Sold) endpointAllows(model catalog.Model, c PriceCost, price catalog.Schedule) bool {
-	if Unpriced(price, model.Reportable()) != (catalog.Reportable{}) ||
-		Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+	if Unpriced(price, c.reportable(model)) != (catalog.Reportable{}) ||
+		Unpriced(c.Schedule, c.reportable(model)) != (catalog.Reportable{}) {
 		return false
 	}
 	cost, err := c.converted(price.Currency())

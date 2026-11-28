@@ -86,15 +86,6 @@ func ceilingCost(bound platform.Exact, ratio *big.Rat, reported *reportedCost) (
 	return native, boundCredits, false, err
 }
 
-// copiedTiers are the tiers a plan of the basis prices by copying its standard prices: every tier but the standard
-// one of a ceiling plan (highestOf), none of any other.
-func copiedTiers(basis string, plan catalog.Schedule) catalog.ServiceTierSet {
-	if basis != ceilingBasis {
-		return 0
-	}
-	return plan.ServiceTiers()
-}
-
 // ceilingFresh is how long a read ceiling prices an endpoint. The ceilings are read every hour, so 24 hours lets the
 // aggregator's listing fail for a whole day before its endpoints leave routing; past that, a provider that joined or
 // raised its price since may be above the ceiling in an item max_price cannot bound.
@@ -119,11 +110,11 @@ func (a *Admin) aggregates(kind string) bool {
 // priceCeilingLine prices each endpoint of an aggregator's line at the highest ceiling of the names its calls are sent
 // by, its own and each key's, times ratio. An endpoint one of whose names has no ceiling read within ceilingFresh has an
 // unknown cost and leaves routing: a key that sends that name would otherwise be costed at another name's prices. A
-// plan in force again at the same prices keeps reconciliation's verdict (SetProjectedEndpointCost). The plan prices
-// every service tier the catalog declares for the model at the same ceiling; one that still leaves an item the model
-// reports unpriced is no plan the model's price can be costed against, and its endpoint stays out too, rather than
-// withdrawing the model's shared price for every supplier (billing's allowsSharedCosts). It reports how many endpoints
-// it priced.
+// plan in force again at the same prices keeps reconciliation's verdict (SetProjectedEndpointCost). The plan prices the
+// standard tier only: the aggregator lists no price per tier, and the endpoint serves no other (Routable.StandardOnly).
+// One that leaves an item the model reports unpriced is no plan the model's price can be costed against, and its
+// endpoint stays out too, rather than withdrawing the model's shared price for every supplier (billing's
+// allowsSharedCosts). It reports how many endpoints it priced.
 func (a *Admin) priceCeilingLine(ctx context.Context, tx pg.Tx, q *store.Queries, snap *catalog.Snapshot, supplier, group uuid.UUID, ratio *big.Rat) (int, error) {
 	ceilings, err := readCeilings(ctx, tx, q, group, a.now().Add(-ceilingFresh))
 	if err != nil {
@@ -136,9 +127,8 @@ func (a *Admin) priceCeilingLine(ctx context.Context, tx pg.Tx, q *store.Queries
 	priced := 0
 	for _, e := range endpoints {
 		model, known := snap.Model(catalog.ModelID(e.ModelID))
-		reports := model.Reportable()
-		highest, ok := highestOf(ceilings, append([]string{e.UpstreamName}, e.CallNames...), reports.ServiceTiers)
-		reports.Items &^= defaultedItems
+		highest, ok := highestOf(ceilings, append([]string{e.UpstreamName}, e.CallNames...))
+		reports := catalog.Reportable{Items: model.Reportable().Items &^ defaultedItems} // at the standard tier
 		if !ok || !known || highest.Missing(reports) != (catalog.Reportable{}) {
 			if err := q.UnsetProjectedEndpointCost(ctx, tx, store.UnsetProjectedEndpointCostParams{ID: e.ID, Reason: new(string(syncer.CostUnknown))}); err != nil {
 				return 0, fmt.Errorf("take %s out of routing: %w", e.UpstreamName, err)
@@ -188,24 +178,14 @@ func readCeilings(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UU
 // perUseItems): a ceiling without them still prices everything a call reports.
 const defaultedItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
-// highestOf is each item's highest price over the ceilings of names, at the standard tier and at each of tiers alike;
-// false when a name has none. The aggregator lists one price per provider, whatever tier a call asks for.
-func highestOf(ceilings map[string]catalog.Schedule, names []string, tiers catalog.ServiceTierSet) (catalog.Schedule, bool) {
+// highestOf is each item's highest price over the ceilings of names, at the standard tier, the one tier the
+// aggregator's endpoint serves; false when a name has none.
+func highestOf(ceilings map[string]catalog.Schedule, names []string) (catalog.Schedule, bool) {
 	rates, currency, ok := highestRates(ceilings, names)
 	if !ok {
 		return catalog.Schedule{}, false
 	}
-	schedule := map[string]any{"v": 1, "currency": currency.String(), "rates": rates}
-	byTier := map[string]any{}
-	for _, st := range tiers.List() {
-		if st != catalog.ServiceTierStandard {
-			byTier[st.String()] = map[string]any{"rates": rates}
-		}
-	}
-	if len(byTier) > 0 {
-		schedule["service_tiers"] = byTier
-	}
-	b, err := jsonx.MarshalCanonical(schedule)
+	b, err := jsonx.MarshalCanonical(map[string]any{"v": 1, "currency": currency.String(), "rates": rates})
 	if err != nil {
 		return catalog.Schedule{}, false
 	}

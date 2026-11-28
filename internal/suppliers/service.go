@@ -65,8 +65,9 @@ type Routable struct {
 	// Provider is the provider object every call to the endpoint carries: OpenRouter's max_price, for an endpoint costed
 	// at its providers' highest price (docs/domains/suppliers-direct.md「OpenRouter 的成本」); nil for every other.
 	Provider []byte
-	// CopiedTiers are the service tiers Schedule prices only by copying its standard prices (PriceCost.CopiedTiers).
-	CopiedTiers catalog.ServiceTierSet
+	// StandardOnly says the endpoint is priced, and served, at the standard service tier only: an aggregator's ceiling
+	// plan, since its endpoints list has no price per tier (PriceCost.StandardOnly).
+	StandardOnly bool
 }
 
 // Platform reports whether the endpoint belongs to the platform rather than a tenant.
@@ -212,9 +213,8 @@ type endpoint struct {
 	// ratio is the line's, for a plan that is an aggregator's highest price times it: a bound, and the attempt costs
 	// what the aggregator reports (Credits); nil for every other plan. provider is the max_price that holds the
 	// aggregator to the bound.
-	ratio       *big.Rat
-	provider    []byte
-	copiedTiers catalog.ServiceTierSet // copiedTiers of the plan
+	ratio    *big.Rat
+	provider []byte
 }
 
 type credential struct {
@@ -364,7 +364,7 @@ func (s *Service) Routable() ([]Routable, error) {
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
 			Generation: snap.generation, Quantization: ep.quantization,
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
-			Byok: ep.byok, ByokFallback: ep.byokFallback, Provider: ep.provider, CopiedTiers: ep.copiedTiers,
+			Byok: ep.byok, ByokFallback: ep.byokFallback, Provider: ep.provider, StandardOnly: ep.ratio != nil,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -418,7 +418,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	wallets := r.OwnerScope == "platform" && registry.TypeOf(a).Balance
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
-		formats: formats, quantization: terms.quantization, ratio: terms.ratio, provider: terms.provider, copiedTiers: copiedTiers(r.Basis, *schedules[r.CostScheduleID]), origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		formats: formats, quantization: terms.quantization, ratio: terms.ratio, provider: terms.provider, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode && !wallets),
 		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback, wallets: wallets,
 	}

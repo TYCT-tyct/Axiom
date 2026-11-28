@@ -17,9 +17,9 @@ type PriceCost struct {
 	Schedule        catalog.Schedule
 	UnitValue       string
 	UnitValueID     uuid.UUID
-	// CopiedTiers are the service tiers an aggregator's ceiling plan prices only by copying its standard prices: a
-	// bound, which sets no floor under a shared sale price (billing.PriceCost.CopiedTiers).
-	CopiedTiers catalog.ServiceTierSet
+	// StandardOnly says the plan prices the standard tier only, as an aggregator's ceiling plan does: the tiers it
+	// lacks are not the endpoint's to serve, and set no floor under a shared sale price (billing.PriceCost.StandardOnly).
+	StandardOnly bool
 }
 
 // PriceCosts reads one canonical cost set without loading an adapter, decrypting a key or using a node's snapshot.
@@ -40,7 +40,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) {
 		}
 		costs = append(costs, PriceCost{
 			Endpoint: r.EndpointID, Model: r.ModelID, Currency: currency, Schedule: schedule, UnitValue: r.UnitValue,
-			UnitValueID: r.UnitValueID, CopiedTiers: copiedTiers(r.Basis, schedule),
+			UnitValueID: r.UnitValueID, StandardOnly: r.Basis == ceilingBasis,
 		})
 	}
 	return costs, nil

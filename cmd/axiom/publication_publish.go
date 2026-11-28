@@ -72,7 +72,7 @@ func publicationCosts(ctx context.Context, tx pg.Tx, currency platform.Currency)
 		if err != nil {
 			return nil, nil, err
 		}
-		endpoints[i] = suppliers.Routable{ID: r.Endpoint, Model: r.Model, Currency: r.Currency, Schedule: r.Schedule, UnitValue: value, UnitValueID: r.UnitValueID, CopiedTiers: r.CopiedTiers}
+		endpoints[i] = suppliers.Routable{ID: r.Endpoint, Model: r.Model, Currency: r.Currency, Schedule: r.Schedule, UnitValue: value, UnitValueID: r.UnitValueID, StandardOnly: r.StandardOnly}
 	}
 	exchange, err := billing.ExchangeRates(ctx, tx)
 	if err != nil {
