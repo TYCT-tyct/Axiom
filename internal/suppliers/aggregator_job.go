@@ -126,6 +126,7 @@ func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup,
 	}
 	defer l.admin.keepExits(exits)
 	var due []lookup
+	opened := map[uuid.UUID]*secret.Secret{} // a key is opened once a run, however many of its attempts are due
 	for _, r := range rows {
 		ag, ok := l.admin.aggregator(r.Kind)
 		exit, _, err := exits.client(r.EgressID)
@@ -136,14 +137,26 @@ func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup,
 		if err != nil {
 			return nil, err
 		}
-		key, err := l.admin.openKey(ctx, tx, r.CredentialID)
-		if err != nil {
-			l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record", "credential", r.CredentialID.String(), "err", err)
-			continue
+		key, seen := opened[r.CredentialID]
+		if !seen {
+			key = l.openLookupKey(ctx, tx, r.CredentialID)
+			opened[r.CredentialID] = key
 		}
-		due = append(due, lookup{CeilingLookupsRow: r, key: key, client: c, ag: ag})
+		if key != nil {
+			due = append(due, lookup{CeilingLookupsRow: r, key: *key, client: c, ag: ag})
+		}
 	}
 	return due, nil
+}
+
+// openLookupKey is the credential's key, nil when it does not open, which is logged once a run.
+func (l *lines) openLookupKey(ctx context.Context, tx pg.Tx, credential uuid.UUID) *secret.Secret {
+	key, err := l.admin.openKey(ctx, tx, credential)
+	if err != nil {
+		l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record", "credential", credential.String(), "err", err)
+		return nil
+	}
+	return &key
 }
 
 // bookLookup books one record against its attempt (SettleLookup, once a generation): the cost is the record's figure
