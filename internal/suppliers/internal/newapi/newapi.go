@@ -29,6 +29,9 @@ func New() *Adapter { return &Adapter{now: time.Now} }
 // Kind implements adapter.Adapter.
 func (*Adapter) Kind() adapter.Kind { return Kind }
 
+// MakesKeys implements adapter.KeyMakerSource: every new-api manager makes keys.
+func (*Adapter) MakesKeys() bool { return true }
+
 // Buckets implements adapter.Adapter: a quarter of new-api's defaults for the 1.0 line.
 func (*Adapter) Buckets() []adapter.BucketSpec {
 	return []adapter.BucketSpec{

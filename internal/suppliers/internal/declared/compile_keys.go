@@ -34,13 +34,28 @@ func (c *compiler) keys(spec Keys) (keysPlan, error) {
 	return k, nil
 }
 
-// keyCreatePlan compiles the optional create operation and checks that its result can be adopted from the listing.
+// keyCreatePlan compiles the optional create operation, with the delete it needs, and checks that its result can be
+// adopted from the listing.
 func (c *compiler) keyCreatePlan(spec Keys, k *keysPlan) error {
-	if spec.Create == nil {
+	switch {
+	case spec.Create == nil && spec.Delete != nil:
+		return errors.New("keys.delete: only with keys.create: the sync revokes only keys it made")
+	case spec.Create == nil:
 		return nil
+	case spec.Delete == nil:
+		return errors.New("keys.delete: required when keys.create is declared, so a second key made for a group is revoked")
 	}
 	create, err := c.keyCreate(*spec.Create)
 	if err != nil {
+		return err
+	}
+	if create.deletePath, err = c.pathTemplate("keys.delete.path", spec.Delete.Path, "ref"); err != nil {
+		return err
+	}
+	if !create.deletePath.has("ref") {
+		return errors.New("keys.delete.path: must name {ref}, the key that is revoked")
+	}
+	if create.deleteBucket, err = c.bucket("keys.delete", spec.Delete.Bucket); err != nil {
 		return err
 	}
 	k.create = create

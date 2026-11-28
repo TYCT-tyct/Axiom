@@ -4714,14 +4714,14 @@ type GroupConnection struct {
 	// Key Required with `paste`, refused with `make` (400); sealed on arrival and never returned.
 	Key *string `json:"key,omitempty"`
 
-	// KeySource `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+	// KeySource `make`: the sync makes a key for the group at the supplier; `paste`: `key` is one the person made there.
 	KeySource GroupConnectionKeySource `json:"key_source"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
 
-// GroupConnectionKeySource `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+// GroupConnectionKeySource `make`: the sync makes a key for the group at the supplier; `paste`: `key` is one the person made there.
 type GroupConnectionKeySource string
 
 // GroupSelection defines model for GroupSelection.

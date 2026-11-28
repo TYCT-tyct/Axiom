@@ -15,14 +15,16 @@ import (
 // keyStore is a Store that also knows the groups to make keys for, which the real one reads from the tables.
 type keyStore struct {
 	*memStore
-	bind      []BindTarget
-	targets   []KeyTarget
-	askedMake int
-	askedBind int
+	bind        []BindTarget
+	targets     []KeyGroup
+	made        []adapter.KeyRef // recorded as made
+	revoked     []adapter.KeyRef // revoked and recorded
+	askedGroups int
+	askedBind   int
 }
 
-func (s *keyStore) KeysToMake(context.Context) ([]KeyTarget, error) {
-	s.askedMake++
+func (s *keyStore) KeyGroups(context.Context) ([]KeyGroup, error) {
+	s.askedGroups++
 	return s.targets, nil
 }
 
@@ -31,17 +33,40 @@ func (s *keyStore) KeysToBind(context.Context, time.Time) ([]BindTarget, error) 
 	return s.bind, nil
 }
 
-// maker is a supplier that can make keys too, and records what it was asked for.
+func (s *keyStore) Made(_ context.Context, _ string, ref adapter.KeyRef) error {
+	s.made = append(s.made, ref)
+	return nil
+}
+
+// Revoke revokes every key it is asked to: the tables' check that no credential holds it is the real store's.
+func (s *keyStore) Revoke(ctx context.Context, _ string, ref adapter.KeyRef, del func(context.Context) error) (bool, error) {
+	if err := del(ctx); err != nil {
+		return false, err
+	}
+	s.revoked = append(s.revoked, ref)
+	return true, nil
+}
+
+// maker is a supplier that can make keys too, and records what it was asked for. A delete is refused for the refs in
+// refuse.
 type maker struct {
 	*supplier
 	create func(groupRef, name string) (adapter.KeyRef, error)
 	secret func(ref adapter.KeyRef) (secret.Secret, error)
 	names  []string
+	refuse map[adapter.KeyRef]bool
 }
 
 func (m *maker) CreateKey(_ context.Context, groupRef, name string) (adapter.KeyRef, error) {
 	m.names = append(m.names, groupRef+"/"+name)
 	return m.create(groupRef, name)
+}
+
+func (m *maker) DeleteKey(_ context.Context, ref adapter.KeyRef) error {
+	if m.refuse[ref] {
+		return adapter.ErrKeyRefused
+	}
+	return nil
 }
 
 func (m *maker) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Secret, error) {
@@ -62,7 +87,7 @@ func TestKeysTaskMakesAKeyForAGroup(t *testing.T) {
 		supplier: base, create: func(_, _ string) (adapter.KeyRef, error) { return "9", nil },
 		secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s3"), nil },
 	}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	c := Commit{State: State{Version: 1}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)
@@ -97,7 +122,7 @@ func TestKeysTaskAdoptsAMadeKeyByName(t *testing.T) {
 		called++
 		return "10", nil
 	}, secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s3"), nil }}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	c := Commit{State: State{Version: 1}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)
@@ -130,7 +155,7 @@ func TestKeysTaskAdoptsAKeyAfterALostCreateResponse(t *testing.T) {
 		},
 		secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s9"), nil },
 	}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	first := Commit{State: State{Version: 1}}
 	if err := keyEngine(m, st).keys(t.Context(), &first); err == nil {
 		t.Fatal("the lost create response was not reported")
@@ -160,7 +185,7 @@ func TestKeysTaskRecordsAFixedKeyFailure(t *testing.T) {
 	m2 := &maker{supplier: m, create: func(_, _ string) (adapter.KeyRef, error) {
 		return "", adapter.ErrKeyNotPermitted
 	}, secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.Secret{}, errors.New("unused") }}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	c := Commit{State: State{Version: 1}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)
@@ -182,7 +207,7 @@ func TestKeysTaskMakesNothingWithoutAKeyMaker(t *testing.T) {
 	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 		return adapter.Page[adapter.KeyState]{Done: true}, nil
 	}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	c := Commit{State: State{Version: 1}}
 	if err := keyEngine(m, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)
@@ -202,7 +227,7 @@ func TestKeysTaskOnboardsOnAResumedCompleteListing(t *testing.T) {
 		called++
 		return "9", nil
 	}, secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s9"), nil }}
-	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	st := &keyStore{memStore: newStore(), targets: []KeyGroup{{GroupRef: "1", Name: "axiom-1-2", Make: true}}}
 	c := Commit{State: State{Version: 1, KeysAt: adapter.Listing("page")}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)

@@ -151,6 +151,9 @@ type keyCreatePlan struct {
 	body   map[string]tmpl
 	ref    path
 	bucket string
+	// The delete of a key the sync made and does not store: a declaration that makes keys revokes a second one.
+	deletePath   tmpl
+	deleteBucket string
 }
 
 type keyPolicyPlan struct {

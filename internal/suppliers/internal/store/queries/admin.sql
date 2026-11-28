@@ -121,7 +121,7 @@ WHERE supplier_id = @supplier_id;
 INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES (@supplier_id, @value::numeric, @actor, @reason);
 
 -- name: LockGroup :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible
 FROM suppliers.supplier_groups WHERE id = @id AND supplier_id = @supplier_id FOR UPDATE;
 
 -- name: SelectGroup :exec

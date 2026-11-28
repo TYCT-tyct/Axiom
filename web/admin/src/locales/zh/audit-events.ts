@@ -165,6 +165,7 @@ export default {
   "supplier_group.connect": "接入渠道分组",
   "supplier_group.select": "选用渠道分组",
   "supplier_group.unselect": "不再选用渠道分组",
+  "supplier_key.revoke": "吊销多余的上游 Key",
   "targets.update": "修改业务目标",
   "unknown_item.clear": "清除未知计费项",
   "user.billing_preference": "修改扣费顺序",

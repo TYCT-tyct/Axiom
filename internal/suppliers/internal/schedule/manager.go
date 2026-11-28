@@ -95,6 +95,19 @@ func (o *openOnUse) CreateKey(ctx context.Context, groupRef, name string) (adapt
 	return maker.CreateKey(ctx, groupRef, name)
 }
 
+// DeleteKey forwards a revocation to the adapter that makes keys; one that does not answers ErrNoKeyMaker.
+func (o *openOnUse) DeleteKey(ctx context.Context, ref adapter.KeyRef) error {
+	m, err := o.get()
+	if err != nil {
+		return err
+	}
+	maker, ok := m.(adapter.KeyMaker)
+	if !ok {
+		return adapter.ErrNoKeyMaker
+	}
+	return maker.DeleteKey(ctx, ref)
+}
+
 // Pool forwards the pool read to the adapter that has one. A relay's manager does not, and answers ErrNotPool; that is
 // how the engine tells a supplier whose group weights it may lower from one whose capacity is its own.
 func (o *openOnUse) Pool(ctx context.Context) (adapter.PoolReading, error) {

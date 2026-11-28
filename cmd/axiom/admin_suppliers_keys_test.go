@@ -6,10 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
@@ -247,41 +250,65 @@ func TestConnectSupplierGroupRefusals(t *testing.T) {
 	f.relay.expectUnsent(t, "sk-pasted-default-0099", "sk-nobody-knows-it", "sk-pasted-disabled-0098")
 }
 
-// TestConnectSupplierGroup: a group gets a key made for it at the supplier under the sync's name for it, or a pasted one
-// the supplier lists under it; either way it is selected and its credential is active, and a pasted key can call only
-// what the supplier lets it. A replay answers the first result without asking the supplier again, a group that has a
-// key already is a conflict before a key is made at the supplier, and the pasted key is nowhere but sealed.
+// TestConnectSupplierGroup: make selects the group and asks the sync for its key, asking the supplier nothing: with no
+// round storing one within the wait it answers 202 with the group, a replay while the group's only credential is a
+// binding still waiting for its text answers 202 again, and one once a key is stored answers it at once. paste stores a
+// key the supplier lists under the group, active, which can call only what the supplier lets it. A group that has a key
+// already is a conflict, and the pasted key is nowhere but sealed.
 func TestConnectSupplierGroup(t *testing.T) {
 	t.Parallel()
 	f := newRelayFixture(t)
 	pasted := "sk-pasted-premium-0042"
 	f.relay.addToken(relayToken{Group: "premium", Key: pasted, Status: 1, Limits: "gpt-a,gpt-b"})
+	f.relay.add("default", "sk-pasted-default-0077")
+	f.run(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET key_eligible = true WHERE id = '%s'`, f.def))
 	key := newKey()
 	body := `{"key_source":"make","reason":"first line"}`
 	rec := f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), body, key)
-	expectAdmin(t, "make", rec, http.StatusCreated, "")
-	var made adminapi.GroupConnected
-	decode(t, rec, &made)
-	expectSame(t, "made", []any{made.Group.Selected, made.Group.Codename != nil, made.Credential.Status, valueOf(made.Credential.KeySource), made.Credential.MaxConcurrency},
-		[]any{true, true, adminapi.CredentialStatus("active"), adminapi.SupplierCredentialKeySource("made"), 4})
+	expectAdmin(t, "make", rec, http.StatusAccepted, "")
+	var asked adminapi.SupplierGroup
+	decode(t, rec, &asked)
+	expectSame(t, "asked", []any{asked.Selected, asked.Codename != nil, valueOf(asked.KeyState)}, []any{true, true, adminapi.SupplierGroupKeyState("pending")})
+	f.send(http.MethodPost, f.path("/credentials"), `{"group_id":"`+f.def+`","upstream_key_ref":"7","reason":"r"}`, http.StatusCreated, &adminapi.SupplierCredential{})
+	expectAdmin(t, "a binding is no key yet", f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), body, key), http.StatusAccepted, "")
+	var stored adminapi.CredentialCheckList // what the sync's round stores, as far as the make can tell
+	f.send(http.MethodPost, f.path("/keys"), `{"group_id":"`+f.def+`","keys":["sk-pasted-default-0077"],"max_concurrency":4,"reason":"r"}`, http.StatusCreated, &stored)
 	replay := f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), body, key)
-	creates, name := f.relay.made()
-	expectSame(t, "replayed", []any{replay.Code, replay.Header().Get("Idempotency-Replayed"), creates, strings.HasPrefix(name, "axiom-")},
-		[]any{http.StatusCreated, "true", 1, true})
+	var made adminapi.GroupConnected
+	decode(t, replay, &made)
+	creates, _ := f.relay.made()
+	expectSame(t, "replayed", []any{replay.Code, replay.Header().Get("Idempotency-Replayed"), made.Credential.Id, valueOf(made.Group.KeyState), creates},
+		[]any{http.StatusCreated, "true", valueOf(stored.Data[0].CredentialId), adminapi.SupplierGroupKeyState("ready"), 0})
 	expectAdmin(t, "a group with a key", f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), `{"key_source":"make","reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
-	creates, _ = f.relay.made()
-	expectSame(t, "keys made at the supplier", creates, 1)
 
 	connected := f.connectGroup(f.premium, `{"key_source":"paste","key":"`+pasted+`","reason":"r"}`)
 	expectSame(t, "pasted", []any{valueOf(connected.Credential.Last4), valueOf(connected.Credential.KeySource), connected.Credential.UpstreamKeyRef},
 		[]any{"0042", adminapi.SupplierCredentialKeySource("pasted"), "1"})
-	expectSame(t, "what each key may call", f.text(`SELECT string_agg(source || ':' || coalesce(allowed_models::text, 'any'), ' ' ORDER BY source) FROM suppliers.credentials`),
-		"made:any pasted:{gpt-a,gpt-b}")
+	expectSame(t, "what each key may call", f.text(`SELECT string_agg(source || ':' || coalesce(allowed_models::text, 'any'), ' ' ORDER BY source || coalesce(allowed_models::text, 'any')) FROM suppliers.credentials`),
+		"bound:any pasted:any pasted:{gpt-a,gpt-b}")
 	f.relay.expectUnsent(t, pasted)
 	expectSame(t, "where the pasted text is", f.text(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE detail::text LIKE '%pasted-premium%') ||
 		'/' || (SELECT count(*) FROM platform.idempotency WHERE response::text LIKE '%pasted-premium%') ||
 		'/' || (SELECT count(*) FROM platform.audit_log WHERE action = 'supplier_group.connect')`), "0/0/2")
+}
+
+// TestAMakeAnswersBeforeThePageGivesUp: the wait for the sync ends, with a second to spare, before the admin page's own
+// limit on a request, so the page always learns whether the group is connected or waiting.
+func TestAMakeAnswersBeforeThePageGivesUp(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("../../web/packages/api/src/index.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile(`const requestTimeout = ([0-9_]+);`).FindSubmatch(source)
+	if found == nil {
+		t.Fatal("the page's requestTimeout is not where it was")
+	}
+	ms, err := strconv.Atoi(strings.ReplaceAll(string(found[1]), "_", ""))
+	if err != nil || keyWaitLimit+time.Second > time.Duration(ms)*time.Millisecond {
+		t.Errorf("a make waits %v, the page %d ms (%v): want the wait to end a second before", keyWaitLimit, ms, err)
+	}
 }
 
 // TestIdentifySupplierKey: the supplier says which group a pasted key is under; a key it does not list has no group;

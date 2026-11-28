@@ -58,7 +58,7 @@ export function ConnectGroupDialog({
         )
       }
       done={() => null}
-      toast={() => t("upstream.connectGroup.done")}
+      toast={(out) => t("credential" in out ? "upstream.connectGroup.done" : "upstream.connectGroup.requested")}
       onClose={onClose}
     />
   );

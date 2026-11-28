@@ -75,6 +75,7 @@
       "ref": "data.id",
       "bucket": "critical"
     },
+    "delete": {"path": "/api/keys/{ref}", "bucket": "critical"},
     "policy": {"models": "models", "expires_at": "expires_at"}
   },
   "charges": {

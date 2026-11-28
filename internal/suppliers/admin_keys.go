@@ -25,6 +25,12 @@ var (
 	ErrGroupHasKey = errors.New("suppliers: the group already has a key")
 	// ErrTooManyCredentials is a check of every credential that would test more than MaxCredentialTests.
 	ErrTooManyCredentials = fmt.Errorf("suppliers: more than %d credentials to test", MaxCredentialTests)
+	// ErrNoKeyNeeded is a group the sync makes no key for: none of its models has a cost plan, so no endpoint of it
+	// could be called with one.
+	ErrNoKeyNeeded = errors.New("suppliers: no model of the group can be sold, so no key is made for it")
+	// ErrKeysHalted is a supplier whose sync stopped reading its keys on an answer the adapter does not know: no round
+	// makes a key until a replaced login restarts it.
+	ErrKeysHalted = errors.New("suppliers: the sync stopped reading the supplier's keys")
 )
 
 // MaxCredentialTests is the most credentials one check of every key tests: each is a request to a third party, and the
@@ -70,49 +76,36 @@ func (*Admin) Credentials(ctx context.Context, tx pg.Tx, q CredentialQuery) (pag
 	return page, more, nil
 }
 
-// GroupKey is the key a group is connected with: one Axiom made at the supplier (Source made) or one a person pasted
-// that the supplier lists under the group (Source pasted). Ref is the supplier's ID of it; Text is only sealed; Policy
-// is what the supplier lets it call, which a key Axiom made is not limited in.
+// GroupKey is a key a person pasted that the supplier lists under the group. Ref is the supplier's ID of it; Text is
+// only sealed; Policy is what the supplier lets it call.
 type GroupKey struct {
-	Source   string
 	Ref      string
 	GroupRef string
 	Text     secret.Secret
 	Policy   KeyPolicy
 }
 
-// ConnectGroup selects a group that has no credential yet and gives it the key, in one change: the credential starts
-// active with defaultMaxConcurrency calls at once and no per-minute ceiling. A pasted key must be listed under this
+// ConnectGroup selects a group that has no credential yet and gives it the pasted key, in one change: the credential
+// starts active with defaultMaxConcurrency calls at once and no per-minute ceiling. The key must be listed under this
 // group (ErrWrongGroup), and a group with a credential is ErrGroupHasKey: a person pauses and resumes it with
 // SelectGroup, keeping its key.
 func (a *Admin) ConnectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, group uuid.UUID, key GroupKey, reason string) (Group, Credential, error) {
-	row, err := a.connectable(ctx, tx, supplier, group, key.GroupRef)
+	row, err := a.connectable(ctx, tx, supplier, group)
 	if err != nil {
 		return Group{}, Credential{}, err
 	}
+	if key.GroupRef != row.UpstreamRef {
+		return Group{}, Credential{}, ErrWrongGroup
+	}
 	c, err := a.storeKey(ctx, tx, supplier, group, storedKey{
-		source: key.Source, ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
+		source: "pasted", ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
 	})
 	if err != nil {
 		return Group{}, Credential{}, err
 	}
-	if !row.Selected {
-		if err := a.chooseGroup(ctx, tx, group, true, row.Codename == nil); err != nil {
-			return Group{}, Credential{}, err
-		}
-	}
-	if err := store.New().BumpConfigGen(ctx, tx, supplier); err != nil {
-		return Group{}, Credential{}, fmt.Errorf("raise the generation: %w", err)
-	}
-	if err := a.record(ctx, tx, actor, "supplier_group.connect", supplier, reason, map[string]any{
-		"group": group.String(), "credential": c.ID.String(), "key_source": key.Source, "upstream_key_ref": key.Ref,
-	}); err != nil {
-		return Group{}, Credential{}, err
-	}
-	if err := persist.ObserveInbox(ctx, tx, supplier, a.now(), persist.InboxGroups, false); err != nil {
-		return Group{}, Credential{}, err
-	}
-	g, err := a.group(ctx, tx, supplier, group)
+	g, err := a.connected(ctx, tx, actor, supplier, row, reason, map[string]any{
+		"group": group.String(), "credential": c.ID.String(), "key_source": "pasted", "upstream_key_ref": key.Ref,
+	})
 	if err != nil {
 		return Group{}, Credential{}, err
 	}
@@ -120,9 +113,28 @@ func (a *Admin) ConnectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	return g, c, nil
 }
 
-// connectable is the group, locked after its supplier, when a key listed under groupRef can connect it: it is the
-// supplier's, still listed, the key's, and has no credential yet.
-func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, groupRef string) (store.LockGroupRow, error) {
+// connected selects a group a key is being given and records the connection, in the change that gives it.
+func (a *Admin) connected(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, row store.LockGroupRow, reason string, detail map[string]any) (Group, error) {
+	if !row.Selected {
+		if err := a.chooseGroup(ctx, tx, row.ID, true, row.Codename == nil); err != nil {
+			return Group{}, err
+		}
+	}
+	if err := store.New().BumpConfigGen(ctx, tx, supplier); err != nil {
+		return Group{}, fmt.Errorf("raise the generation: %w", err)
+	}
+	if err := a.record(ctx, tx, actor, "supplier_group.connect", supplier, reason, detail); err != nil {
+		return Group{}, err
+	}
+	if err := persist.ObserveInbox(ctx, tx, supplier, a.now(), persist.InboxGroups, false); err != nil {
+		return Group{}, err
+	}
+	return a.group(ctx, tx, supplier, row.ID)
+}
+
+// connectable is the group, locked after its supplier, when a key can connect it: it is the supplier's, still listed,
+// and has no credential yet.
+func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID) (store.LockGroupRow, error) {
 	row, err := lockedChild(ctx, a, tx, supplier, ErrNoGroup, "the group", func() ([]store.LockGroupRow, error) {
 		return store.New().LockGroup(ctx, tx, store.LockGroupParams{ID: group, SupplierID: supplier})
 	})
@@ -131,8 +143,6 @@ func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.
 		return store.LockGroupRow{}, err
 	case !row.Present:
 		return store.LockGroupRow{}, ErrGroupGone
-	case groupRef != row.UpstreamRef:
-		return store.LockGroupRow{}, ErrWrongGroup
 	}
 	has, err := store.New().GroupHasCredential(ctx, tx, group)
 	switch {

@@ -397,6 +397,20 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	return adapter.KeyRef(ref), nil
 }
 
+// DeleteKey implements adapter.KeyMaker with the declared delete, which a declaration that makes keys has. A refusal is
+// named as a refused creation is, so the sync leaves that key for its next reconcile.
+func (m *manager) DeleteKey(ctx context.Context, ref adapter.KeyRef) error {
+	p := m.a.keys.create
+	if p == nil {
+		return adapter.ErrNoKeyMaker
+	}
+	_, err := m.do(ctx, "key deletion", http.MethodDelete, p.deletePath, map[string]string{"ref": string(ref)}, p.deleteBucket, nil)
+	return createError(err)
+}
+
+// MakesKeys implements adapter.KeyMakerSource: a declaration makes keys when it declares how.
+func (a *Adapter) MakesKeys() bool { return a.keys.create != nil }
+
 // createError names a refused key creation the way the sync's key steps expect, so the group waits instead of the
 // whole task failing. A 5xx, a transport failure and a broken declaration stay task failures.
 func createError(err error) error {
