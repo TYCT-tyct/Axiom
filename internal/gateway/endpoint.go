@@ -108,8 +108,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
 		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
 	}
-	tiers := reportable.ServiceTiers
-	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
+	tiers := servedTiers(reportable, sold, price, r, rates)
 	native := routing.Of(r.Formats...)
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
@@ -169,6 +168,37 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	surface := e.Surface()
 	e.Caps, e.Parameters, e.Context, e.MaxOutput = surface.Caps, surface.Parameters, surface.Context, surface.MaxOutput
 	return e, ""
+}
+
+// servedTiers are the service tiers the endpoint is routed at: the model's and the standard one, at which every
+// endpoint is called unless it says otherwise. A shared price sets no floor at a tier an aggregator's plan only copies
+// (billing.PriceCost.CopiedTiers), so the endpoint is not routed at such a tier while its own cost there is above the
+// sale price: it never sells the tier at a loss, and another supplier serves it.
+func servedTiers(reportable catalog.Reportable, sold billing.Sold, price routing.PriceRef, r suppliers.Routable, rates []platform.ExchangeRate) catalog.ServiceTierSet {
+	tiers := reportable.ServiceTiers
+	tiers.Add(catalog.ServiceTierStandard)
+	if sold.Endpoints == nil {
+		tiers &^= billing.UncoveredTiers(price.Schedule, PriceCostOf(r, rates, price.Schedule.Currency()))
+	}
+	return tiers
+}
+
+// PriceCostOf is the endpoint's cost as billing compares it with a sale price in currency, with the exchange rate that
+// converts it when its supplier settles in another.
+func PriceCostOf(e suppliers.Routable, rates []platform.ExchangeRate, currency platform.Currency) billing.PriceCost {
+	var rate platform.ExchangeRate
+	if e.Currency != currency {
+		for _, r := range rates {
+			if _, ok := r.Between(e.Currency, currency); ok {
+				rate = r
+				break
+			}
+		}
+	}
+	return billing.PriceCost{
+		Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID,
+		Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate, CopiedTiers: e.CopiedTiers,
+	}
 }
 
 // saleOf is the sale price routing holds for the endpoint's model: the site's published one, or for an endpoint of the

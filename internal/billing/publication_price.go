@@ -32,6 +32,27 @@ func (c PriceCost) floorSchedule() PriceCost {
 	return c
 }
 
+// UncoveredTiers are the copied tiers of the cost whose prices the sale schedule does not cover: a shared sale price
+// sets no floor at them (allowsSharedCosts), so an endpoint costed above the sale price at such a tier would sell it
+// at a loss, and is not routed at it. A cost that cannot be converted leaves every copied tier uncovered.
+func UncoveredTiers(sale catalog.Schedule, c PriceCost) catalog.ServiceTierSet {
+	if c.CopiedTiers == 0 {
+		return 0
+	}
+	cost, err := c.converted(sale.Currency())
+	if err != nil {
+		return c.CopiedTiers
+	}
+	var out catalog.ServiceTierSet
+	for _, st := range c.CopiedTiers.List() {
+		only := cost.WithoutServiceTiers(cost.ServiceTiers() &^ (1 << st))
+		if covered, err := sale.CoversCost(only); err != nil || !covered {
+			out.Add(st)
+		}
+	}
+	return out
+}
+
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.
 func CostEnvelope(costs []PriceCost, currency platform.Currency) (catalog.Schedule, error) {
 	converted, err := convertedCosts(costs, currency)
