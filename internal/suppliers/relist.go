@@ -102,7 +102,7 @@ func registerLines(cfg SyncConfig) error {
 	}
 	cfg.Queue.Every(relistEvery, func() river.JobArgs { return relistArgs{} })
 	cfg.Queue.Every(reprojectEvery, func() river.JobArgs { return reprojectArgs{} })
-	return nil
+	return l.registerCeilingChecks(cfg.Queue)
 }
 
 // relist lists every key of the lines again and projects every line. A line that fails does not keep the others
@@ -302,7 +302,8 @@ func (l *lines) relistKeys(ctx context.Context, snap *catalog.Snapshot, r store.
 		return err
 	}
 	said := l.ask(ctx, line, keys)
-	return l.db.Tx(ctx, l.scope, func(tx pg.Tx) error { return l.writeKeys(ctx, tx, snap, line, said) })
+	written := l.db.Tx(ctx, l.scope, func(tx pg.Tx) error { return l.writeKeys(ctx, tx, snap, line, said) })
+	return errors.Join(written, l.relistCeilings(ctx, line, keys, said))
 }
 
 // keysOf is a line's keys, opened, each asked through its calls' exit; one whose exit is disabled waits for it, as calls do.

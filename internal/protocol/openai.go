@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // openAIUsage is the usage object of OpenAI's two formats, which name the same counts differently: Chat's
@@ -93,11 +94,24 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 		return r, err
 	}
 	unknownCounts(&r, "usage", u.Unknown)
+	r.cost, r.costSet = reportedCost(u.Cost)
+	r.byok = string(u.IsBYOK) == "true"
 	if tier != nil {
 		r.tier, r.tierSet = openAITier(*tier, &r), true
 	}
 	r.sortUnknown()
 	return r, nil
+}
+
+// reportedCost reads usage.cost from its JSON text, never through a float (platform.CeilDecimal): a number from 0 up.
+// Anything else (a string, a negative, null) is no figure at all, which is not a figure of zero. It parses once an
+// attempt, when the reply's usage arrives.
+func reportedCost(v jsontext.Value) (platform.Exact, bool) {
+	if len(v) == 0 || v.Kind() != '0' || v[0] == '-' {
+		return platform.Exact{}, false
+	}
+	e, err := platform.CeilDecimal(string(v))
+	return e, err == nil
 }
 
 // meterUsage maps a usage report just read onto billing items. final is set for the usage of the event that ended the

@@ -259,7 +259,7 @@ func (w *world) charged(counts map[catalog.Item]int64) int64 {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, receipt.currency)
+	_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, nil, receipt.currency)
 	if err != nil || !known {
 		w.t.Fatalf("Credits: %v, known %t", err, known)
 	}

@@ -50,6 +50,10 @@ type Target struct {
 	// CacheBreakpoints is yes for a Responses model that takes explicit cache breakpoints, as OpenAI's from GPT-5.6
 	// on do (OpenAI《Prompt caching》, read 2026-10-16).
 	CacheBreakpoints catalog.Claim
+	// Provider is the provider object every call to the endpoint carries, as a JSON object: OpenRouter's max_price,
+	// which keeps it from choosing a provider above the price the endpoint is costed at; nil for none. The client's own
+	// provider object is a routing parameter, removed before this one goes in.
+	Provider []byte
 }
 
 // Rewrites are the gateway's values for one request.

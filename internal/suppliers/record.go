@@ -12,6 +12,7 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/reconcile"
 	"axiom/internal/suppliers/internal/store"
 )
@@ -62,6 +63,12 @@ type AttemptCost struct {
 	// Unknown is set when the supplier reported usage that has no billing item: it cannot be priced, so the estimate is
 	// not complete, and it is not the same as no usage.
 	Unknown bool
+	// Reported is an aggregator's figure of the cost in its credits, at a ceiling plan only (aggregator.go): then Native
+	// is what the figure makes of it, and Bound the plan's cost of the usage in credits, which the figure is judged
+	// against. ReportedBYOK says the figure is a BYOK call's fee.
+	Reported     *platform.Exact
+	ReportedBYOK bool
+	Bound        *platform.Exact
 }
 
 // Cost prices the usage of an attempt, one entry per segment, with the schedule its receipt names. It reads memory
@@ -140,12 +147,28 @@ func (c *AttemptCost) chargeRequest(schedule *catalog.Schedule, last catalog.Usa
 // Credits multiplies native cost, the attempt's unit value and the reservation's exchange rate, rounding up once to
 // billionths (docs/domains/billing.md「钱的表示」). known is false when usage cannot all be priced, the frozen pair is
 // missing, or the amount overflows. The priced part is still given when convertible; Cost serves native reconciliation.
-func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c AttemptCost, credits int64, known bool, err error) {
+// reported is the supplier's own figure, which only an attempt at a ceiling plan takes (ceilingCost): any other
+// supplier's figure is not what we pay it, nor in our currency. There, known is whether the figure is the whole charge.
+func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, reported *protocol.ReportedCost, currency platform.Currency) (c AttemptCost, credits int64, known bool, err error) {
 	c, err = s.Cost(r, usage)
 	c.Currency = currency
 	if err != nil {
 		c.Conversion = ConversionUnpriced
 		return c, 0, false, err
+	}
+	whole := c.Flag != CostUnpriced
+	if r.ratio != nil {
+		var figure *reportedCost
+		if reported != nil {
+			figure = &reportedCost{amount: reported.Amount, byok: reported.BYOK}
+			c.Reported, c.ReportedBYOK = &figure.amount, figure.byok
+		}
+		native, bound, ok, err := ceilingCost(c.Native, r.ratio, figure)
+		if err != nil {
+			c.Conversion = ConversionOverflow
+			return c, 0, false, err
+		}
+		c.Native, c.Bound, whole = native, &bound, ok
 	}
 	money := inSettlement(c.Native.Rat(), r.unitValue.Rat())
 	c.Conversion = ConversionSame
@@ -166,7 +189,7 @@ func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency plat
 		c.Conversion = ConversionOverflow
 		return c, 0, false, nil
 	}
-	return c, q.Int64(), c.Flag != CostUnpriced, nil
+	return c, q.Int64(), whole, nil
 }
 
 // usedItems are the items the usage has a count of.
@@ -209,6 +232,51 @@ func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
 	}
 }
 
+// setCeiling records what an attempt at a ceiling plan leaves to check (aggregator.go): its generation's id, which the
+// aggregator's record of it is read by and which is never a charge record's key; the figure it reported and the bound
+// to judge it against ('judge'); or, without a figure, that the record is to be read ('lookup'). A figure of 0 is a
+// figure. An attempt that ran nowhere, or whose id never came back, has nothing to check.
+func setCeiling(row *store.AttemptCostRow, a AttemptRecord) error {
+	if a.Receipt.ref != "" {
+		row.GenerationID = &a.Receipt.ref
+	}
+	if a.Cost.Bound == nil || a.Test {
+		return nil
+	}
+	bound, err := decimal(*a.Cost.Bound)
+	if err != nil {
+		return err
+	}
+	row.BoundCost = &bound
+	state := checkJudge
+	switch {
+	case a.Cost.Reported != nil:
+		figure, err := decimal(*a.Cost.Reported)
+		if err != nil {
+			return err
+		}
+		report := reportCharged
+		if a.Cost.ReportedBYOK {
+			report = reportBYOKFee
+		}
+		row.ReportedCost, row.CostReport = &figure, &report
+	case row.GenerationID != nil:
+		state = checkLookup
+	default:
+		return nil
+	}
+	row.CheckState = &state
+	return nil
+}
+
+// The values of attempt_costs.cost_report and check_state (migration 00061).
+const (
+	reportCharged = "charged"
+	reportBYOKFee = "byok_fee"
+	checkLookup   = "lookup"
+	checkJudge    = "judge"
+)
+
 // RecordAttempts writes the cost and reconciliation key of a request's attempts, all in one statement, in the
 // transaction of billing's settlement, so that they are there if and only if the cost billing booked is. An attempt
 // already recorded stays as it was: a settlement repeated after a crash changes nothing.
@@ -234,7 +302,12 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
 		}
 		setBasis(&row, *a)
-		if a.Receipt.ref != "" {
+		switch {
+		case a.Receipt.ratio != nil:
+			if err := setCeiling(&row, *a); err != nil {
+				return err
+			}
+		case a.Receipt.ref != "":
 			row.ChargeRef = &a.Receipt.ref
 		}
 		rows = append(rows, row)

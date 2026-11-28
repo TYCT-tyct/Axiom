@@ -32,7 +32,7 @@ func usageFor(t *testing.T, item catalog.Item, n int64) catalog.Usage {
 
 func creditsOf(t *testing.T, s *Service, r AttemptReceipt, u catalog.Usage, to string) (AttemptCost, int64, bool) {
 	t.Helper()
-	c, amount, known, err := s.Credits(r, []catalog.Usage{u}, currency(t, to))
+	c, amount, known, err := s.Credits(r, []catalog.Usage{u}, nil, currency(t, to))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestMissingExchangeDoesNotDisableNativeReconciliation(t *testing.T) {
 	a := w.attempt(newRequest(), 1, "missing-exchange")
 	a.Receipt.currency = currency(t, "CNY")
 	a.Receipt.unitValue = unitPrice(t, "2")
-	c, amount, known, err := w.svc.Credits(a.Receipt, a.Usage, currency(t, "USD"))
+	c, amount, known, err := w.svc.Credits(a.Receipt, a.Usage, nil, currency(t, "USD"))
 	if err != nil || known || amount != 0 || c.Flag != CostComplete || c.Conversion != ConversionMissingRate {
 		t.Fatalf("missing: %+v %d %v %v", c, amount, known, err)
 	}
@@ -149,7 +149,7 @@ func TestExchangeBasisPersistsAndNeverChanges(t *testing.T) {
 	r.currency = currency(t, "CNY")
 	r.exchange = platform.ExchangeRate{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Numerator: 10, Denominator: 71, Version: 1}
 	usage := usageOf100x50(t)
-	c, amount, known, err := w.svc.Credits(r, usage, currency(t, "USD"))
+	c, amount, known, err := w.svc.Credits(r, usage, nil, currency(t, "USD"))
 	if err != nil || !known {
 		t.Fatal(err)
 	}

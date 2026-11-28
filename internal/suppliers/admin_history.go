@@ -111,8 +111,8 @@ func compareDesc(a, b int64) int {
 const MaxReconciliationDays = 31
 
 // Reconciliation is a supplier's reconciliation by UTC day, newest first, in its native unit, with the unit value in
-// force to show it as money (empty until confirmed). Days is empty for a supplier with no charge records at all: its
-// adapter does not read any.
+// force to show it as money (empty until confirmed). Days is empty for a supplier that never said what it charged: its
+// adapter reads no charge records, and it is no aggregator whose answers say (HasChargeRecords).
 type Reconciliation struct {
 	Supplier           uuid.UUID
 	NativeUnit         string

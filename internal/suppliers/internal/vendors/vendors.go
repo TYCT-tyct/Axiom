@@ -124,8 +124,9 @@ var rows = []direct.Provider{
 		}},
 	},
 	// The aggregators sell every author's models, so they serve none by name and the catalog prices none of their
-	// endpoints: each costs what the aggregator charges for it, which neither lets a key read (suppliers-direct.md
-	// 「聚合商按自己的价」). Their endpoints' cost is unknown and they are not routed until it can be.
+	// endpoints: each costs what the aggregator charges for it (suppliers-direct.md「聚合商按自己的价」). OpenRouter says
+	// the most any of a model's providers charge, which its endpoints are costed at, and what each call did cost
+	// (「OpenRouter 的成本」); SiliconFlow says neither, and its endpoints' cost is unknown.
 	{
 		Type: adapter.Type{
 			Kind: "openrouter", Name: "OpenRouter", Vendor: "openrouter", Group: adapter.GroupOfficial,
@@ -133,7 +134,7 @@ var rows = []direct.Provider{
 			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
 		},
 		// The public /models answers any key; the key's own list, filtered by its account's settings, does not.
-		Root: "/api/v1", Models: "/api/v1/models/user",
+		Root: "/api/v1", Models: "/api/v1/models/user", Aggregator: openRouter,
 	},
 	{
 		Type: adapter.Type{

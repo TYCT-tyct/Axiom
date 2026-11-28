@@ -76,6 +76,7 @@ func newPastedWorld(t *testing.T) *pastedWorld {
 		direct.New(direct.Provider{Type: aggregate}),
 		direct.New(direct.Provider{Type: regional}),
 		direct.New(direct.Provider{Type: typeOf("wallet"), Balance: &direct.Balance{Path: "/v1/balance", Read: walletBalance}}),
+		direct.New(direct.Provider{Type: routerType(aggregate), Aggregator: routerAggregator}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +228,16 @@ type keyProvider struct {
 	server *httptest.Server
 	mu     sync.Mutex
 	keys   map[string]providerKey
+	// ceilings and generations are what the router type's aggregator answers (aggregator_test.go): a name's ceiling, by
+	// its status and body, and a generation's record, by id.
+	ceilings    map[string]answer
+	generations map[string]answer
+}
+
+// answer is one of the provider's answers: a status, 200 for none, and a body.
+type answer struct {
+	status int
+	body   string
 }
 
 // providerKey is what the provider knows of one key: the models it lists, its balance in a currency, and whether it
@@ -239,7 +250,7 @@ type providerKey struct {
 
 func newKeyProvider(t *testing.T) *keyProvider {
 	t.Helper()
-	p := &keyProvider{keys: map[string]providerKey{}}
+	p := &keyProvider{keys: map[string]providerKey{}, ceilings: map[string]answer{}, generations: map[string]answer{}}
 	p.server = httptest.NewTLSServer(http.HandlerFunc(p.serve))
 	t.Cleanup(p.server.Close)
 	return p
@@ -248,11 +259,25 @@ func newKeyProvider(t *testing.T) *keyProvider {
 func (p *keyProvider) serve(rw http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	k, ok := p.keys[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	ceiling, hasCeiling := p.ceilings[strings.TrimPrefix(r.URL.Path, "/v1/ceiling/")]
+	generation, hasGeneration := p.generations[r.URL.Query().Get("id")]
 	p.mu.Unlock()
 	var body string
 	switch {
 	case !ok:
 		rw.WriteHeader(http.StatusUnauthorized)
+	case strings.HasPrefix(r.URL.Path, "/v1/ceiling/") || r.URL.Path == "/v1/generation":
+		a, has := ceiling, hasCeiling
+		if r.URL.Path == "/v1/generation" {
+			a, has = generation, hasGeneration
+		}
+		if !has {
+			a = answer{status: http.StatusNotFound}
+		}
+		if a.status != 0 {
+			rw.WriteHeader(a.status)
+		}
+		body = a.body
 	case r.URL.Path == "/v1/models":
 		ids := make([]string, len(k.models))
 		for i, m := range k.models {

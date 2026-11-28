@@ -20,7 +20,7 @@ import (
 // requests were priced, so a loop that reprices all segments under the last receipt is visible.
 type perCallCosts struct{ calls int }
 
-func (c *perCallCosts) Credits(_ suppliers.AttemptReceipt, _ []catalog.Usage, _ platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+func (c *perCallCosts) Credits(_ suppliers.AttemptReceipt, _ []catalog.Usage, _ *protocol.ReportedCost, _ platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
 	c.calls++
 	return suppliers.AttemptCost{Native: platform.AmountExact(1), Flag: suppliers.CostComplete}, 1, true, nil
 }

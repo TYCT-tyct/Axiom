@@ -35,6 +35,19 @@ type Provider struct {
 	// Balance is how it tells a key's own balance; nil for a provider that does not. It is what makes the type's
 	// description say Balance.
 	Balance *Balance
+	// Aggregator is how a provider that sells every author's models at its providers' own prices tells what a call
+	// may cost and what one did cost (adapter.Aggregator); nil for every other.
+	Aggregator *Aggregator
+}
+
+// Aggregator is an aggregator's two free reads: Ceiling of a name's providers' prices at CeilingPath(name), and
+// Generation of one generation's record at GenerationPath(id), whose id comes back in the header GenerationHeader.
+type Aggregator struct {
+	GenerationHeader string
+	CeilingPath      func(name string) string
+	Ceiling          func(body []byte) adapter.Ceiling
+	GenerationPath   func(id string) string
+	Generation       func(body []byte) (adapter.Generation, error)
 }
 
 // Balance is a provider's balance of one key: a GET of Path, which it does not charge for, with the key as for Chat,
@@ -65,9 +78,10 @@ type Adapter struct {
 }
 
 var (
-	_ adapter.Adapter  = (*Adapter)(nil)
-	_ adapter.Direct   = (*Adapter)(nil)
-	_ adapter.Balancer = (*Adapter)(nil)
+	_ adapter.Adapter    = (*Adapter)(nil)
+	_ adapter.Direct     = (*Adapter)(nil)
+	_ adapter.Balancer   = (*Adapter)(nil)
+	_ adapter.Aggregator = (*Adapter)(nil)
 )
 
 // New is the adapter of the provider.
@@ -155,16 +169,31 @@ type quirks struct{ p Provider }
 
 var _ adapter.Wire = quirks{}
 
-// Policy implements adapter.CallQuirks. A provider streams and stops generating when the client disconnects.
-func (quirks) Policy() adapter.CallPolicy { return adapter.CallPolicy{Streams: true, Cancels: true} }
+// Policy implements adapter.CallQuirks. A provider streams and stops generating when the client disconnects. An
+// aggregator cannot say so: it may fall back to a provider that generates on and charges the whole answer, so its calls
+// are reserved whole, whatever an endpoint was measured to do.
+func (q quirks) Policy() adapter.CallPolicy {
+	if q.p.Aggregator != nil {
+		return adapter.CallPolicy{Streams: true, CancelsFixed: true}
+	}
+	return adapter.CallPolicy{Streams: true, Cancels: true}
+}
 
 // Formats implements adapter.CallQuirks. A direct API's endpoints are written from their models' abilities when the
 // keys are pasted (adapter.Direct), not inferred from a group's listing.
 func (quirks) Formats(adapter.GroupFacts) []protocol.Format { return nil }
 
 // ChargeRef implements adapter.CallQuirks. A provider's charges are never read, so there is no record to match a
-// request id with, and an attempt that kept one would wait for a charge that never comes and be reported unmatched.
-func (quirks) ChargeRef(http.Header) (adapter.ChargeRef, bool) { return "", false }
+// request id with, and an attempt that kept one would wait for a charge that never comes and be reported unmatched. An
+// aggregator's id of the generation is kept: it is what its record of the generation is read by, when the answer did
+// not say what it cost.
+func (q quirks) ChargeRef(h http.Header) (adapter.ChargeRef, bool) {
+	if q.p.Aggregator == nil {
+		return "", false
+	}
+	id := h.Get(q.p.Aggregator.GenerationHeader)
+	return adapter.ChargeRef(id), id != ""
+}
 
 // Path implements adapter.Wire: Messages under the Anthropic-compatible root of a provider that has one, as they are for
 // one of Anthropic's family, and the OpenAI formats under the provider's root.

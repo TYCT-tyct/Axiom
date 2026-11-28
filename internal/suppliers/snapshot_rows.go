@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"fmt"
+	"math/big"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -43,6 +44,27 @@ func optionalQuantization(r store.ListRoutableRow) (Quantization, error) {
 		return "", fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
 	}
 	return quantization, nil
+}
+
+// endpointTerms is how calls to an endpoint are made and costed besides its schedule: the precision recorded, and for
+// an aggregator's ceiling plan the line's ratio and the provider object its calls carry (ceilingTerms).
+type endpointTerms struct {
+	quantization Quantization
+	ratio        *big.Rat
+	provider     []byte
+}
+
+// termsOf reads the endpoint's terms from its row, whose schedule parseSchedule has read.
+func termsOf(r store.ListRoutableRow, schedules map[uuid.UUID]*catalog.Schedule) (endpointTerms, error) {
+	q, err := optionalQuantization(r)
+	if err != nil || r.Basis != ceilingBasis {
+		return endpointTerms{quantization: q}, err
+	}
+	ratio, provider, err := ceilingTerms(*schedules[r.CostScheduleID], r.LineRatio)
+	if err != nil {
+		return endpointTerms{}, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
+	}
+	return endpointTerms{quantization: q, ratio: ratio, provider: provider}, nil
 }
 
 // relayMode is the mode of a supplier Axiom logs in to: its keys draw on one account there.

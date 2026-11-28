@@ -150,6 +150,43 @@ func ParseExact(s string) (Exact, error) {
 
 var errOverflow = errors.New("exact amount: the sum overflows 128 bits")
 
+// CeilDecimal reads a supplier's figure written as a JSON number (an exponent allowed, as a float is written) from its
+// text, never through a float, rounded up to a whole 10⁻¹⁵ (CeilExact). Text longer than 64 bytes or an exponent past
+// ±30 is refused before it is parsed: an exponent sizes the number built, and one in the millions would take that many
+// digits of memory.
+func CeilDecimal(s string) (Exact, error) {
+	if len(s) > 64 {
+		return Exact{}, errDecimal
+	}
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		if exp, err := strconv.Atoi(s[i+1:]); err != nil || exp < -30 || exp > 30 {
+			return Exact{}, errDecimal
+		}
+	}
+	r, ok := new(big.Rat).SetString(s)
+	if !ok || strings.ContainsAny(s, "/") {
+		return Exact{}, errDecimal
+	}
+	return CeilExact(r)
+}
+
+var errDecimal = errors.New("decimal: want a number of at most 64 characters with an exponent within ±30")
+
+// CeilExact is r rounded up to a whole 10⁻¹⁵ of a currency: a supplier's figure with more decimals than an Exact holds
+// is never taken for less than it says. It rejects a value outside Exact's range.
+func CeilExact(r *big.Rat) (Exact, error) {
+	n := new(big.Int).Mul(r.Num(), big.NewInt(priceScale))
+	q, m := new(big.Int).DivMod(n, r.Denom(), new(big.Int)) // Euclidean: q is the floor
+	if m.Sign() != 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	hi := new(big.Int).Rsh(new(big.Int).Set(q), 64)
+	if !hi.IsInt64() {
+		return Exact{}, errOverflow
+	}
+	return Exact{hi.Int64(), new(big.Int).And(q, new(big.Int).SetUint64(math.MaxUint64)).Uint64()}, nil
+}
+
 // Add returns e + f. Within the documented domain of prices and usage a sum cannot overflow; it is still checked
 // rather than wrapped, so an error is the worst outcome of a broken bound.
 func (e Exact) Add(f Exact) (Exact, error) {

@@ -72,7 +72,7 @@ type Ledger interface {
 // (docs/domains/billing.md「供应商成本」). The AttemptCost is the same pricing in the supplier's own unit, which is what
 // suppliers stores of the attempt for reconciliation.
 type Costs interface {
-	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c suppliers.AttemptCost, cost int64, known bool, err error)
+	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, reported *protocol.ReportedCost, currency platform.Currency) (c suppliers.AttemptCost, cost int64, known bool, err error)
 }
 
 // ExecDeps are what an Executor needs. Every one is required.

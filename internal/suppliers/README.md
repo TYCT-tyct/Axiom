@@ -120,6 +120,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 平台直连和云线路成本 = 价 × 线路倍率，与倍率同成同败 | 定价与倍率同一事务、锁里读倍率 |
 | 直连和云线路不按 OpenRouter 数据集的参考价定价，这样的端点成本未知 | `lineOffer.price` 一处判定；`TestALineIsNotPricedFromAnAggregatorsPrice` |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
+| 聚合商端点的计划 ≥ 每家服务商每一档的价；只有 `ceiling` 计划采信回答里的扣费；显式的零与没报分开；没报时按上界记、不为零；补查按生成号只记一次；实测的取消不改它的整额预留 | `openRouterCeiling` 逐项取大；`Credits` 只看 `AttemptReceipt.ratio`；`reported_cost` 与 `cost_report` 的 CHECK；`SettleLookup` 的状态条件，`estimated_native` 不可改；`CallPolicy.CancelsFixed`（`TestAnAttemptAtACeilingCostsWhatTheAggregatorSaid`、`TestTheCeilingChecks`） |
 | 价目行即收费；确认价 = 基础价 × 倍率 | `TestEndpointCostIsWhatAnAttemptIsCharged`、`TestConfirmedBaseIsWhatACallIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |
 | 停用、擦除、被拒的凭证不再被挑 | `ListRoutable` 只取 `active`；应答节点提交后即 `Reload` |

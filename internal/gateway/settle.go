@@ -291,7 +291,13 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	c, credits, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+	// The supplier's figure is of the one answer the usage came with; a model-side loop's samplings are several, and
+	// the last one's figure is not the attempt's.
+	reported := a.usage.Cost
+	if len(a.hops) > 0 {
+		reported = nil
+	}
+	c, credits, known, err := s.x.Costs.Credits(receipt, usage, reported, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
 		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that
@@ -301,8 +307,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	}
 	c.Flag = costFlag(rec.Segments, c.Flag)
 	// Profit needs the whole cost: one the usage did not fully support (none reported, or a guessed or unpriced item) is
-	// not a cost known to be what the supplier charged, whatever it converted to.
-	rec.CostKnown = known && err == nil && c.Flag == suppliers.CostComplete
+	// not a cost known to be what the supplier charged, whatever it converted to, unless the supplier's own figure of
+	// its whole charge is what the cost is (known says so of a figure; a BYOK fee is not one).
+	rec.CostKnown = known && err == nil && (c.Flag == suppliers.CostComplete || c.Reported != nil)
 	rec.Cost, rec.Estimate = credits, c
 }
 

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/textshape"
 )
 
@@ -43,6 +44,17 @@ type Segment struct {
 type Usage struct {
 	Segments []Segment
 	Invalid  error
+	// Cost is what the supplier says the attempt cost, as OpenRouter reports it in usage.cost: nil unless the reply
+	// ended normally and its usage carried a cost that is a non-negative number. Only suppliers knows whether a
+	// supplier's figure is what it charged us (docs/domains/suppliers-direct.md「OpenRouter 的成本」).
+	Cost *ReportedCost
+}
+
+// ReportedCost is a supplier's own figure of an attempt's cost, in its credits, rounded up to a whole 10⁻¹⁵. BYOK says
+// the call ran on a provider key of the supplier's account, when the figure is only the supplier's fee.
+type ReportedCost struct {
+	Amount platform.Exact
+	BYOK   bool
 }
 
 // Progress is what the relay has seen so far, for billing's meter after every step. ContentBytes are the text,

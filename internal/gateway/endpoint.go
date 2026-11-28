@@ -160,7 +160,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		UnknownItem:      blockedItem,
 		AudiencePrices:   sold.Audiences,
 		Price:            price,
-		Target:           targetOf(r.Upstream, streams, dialect),
+		Target:           targetOf(r.Upstream, streams, dialect, r.Provider),
 	}
 	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity
 		e.Capacity = r.Capacity
@@ -263,12 +263,13 @@ var capabilityParameters = [...]struct {
 
 // targetOf is how an attempt is written for the endpoint: its upstream name and whether it streams, and the spec's
 // dialect as it is. An unset claim stays unset in the Target; protocol decides what a request that needs it is to do
-// (internal/protocol/README.md「跨格式转换」), so no default for the model is made here.
-func targetOf(upstream string, streams bool, d catalog.Dialect) protocol.Target {
+// (internal/protocol/README.md「跨格式转换」), so no default for the model is made here. provider is the supplier's
+// provider object for every call to the endpoint (suppliers.Routable.Provider).
+func targetOf(upstream string, streams bool, d catalog.Dialect, provider []byte) protocol.Target {
 	return protocol.Target{
 		Model: upstream, Streams: streams, Thinking: d.Thinking, EncryptedReasoning: d.EncryptedReasoning, MidSystem: d.MidSystem,
 		UntrustedSystemAfterTools: d.UntrustedSystemAfterTools, DefaultSamplingOnly: d.DefaultSamplingOnly,
-		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints,
+		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints, Provider: provider,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"maps"
+	"math/big"
 	"net/http"
 	"net/http/httptrace"
 	"sync"
@@ -70,6 +71,9 @@ type AttemptReceipt struct {
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 	proxy                                    string             // the credential's exit when the attempt took it
+	// ratio is the line's ratio of an attempt at a ceiling plan, which its cost is reckoned from (aggregator.go); nil
+	// for every other.
+	ratio *big.Rat
 }
 
 // CredentialID identifies the selected key for independent health evidence.
@@ -300,7 +304,7 @@ func (a *Attempt) receipt() AttemptReceipt {
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
 		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
-		proxy: a.cred.proxy,
+		proxy: a.cred.proxy, ratio: a.ep.ratio,
 	}
 }
 

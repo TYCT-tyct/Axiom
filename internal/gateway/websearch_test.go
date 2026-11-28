@@ -219,7 +219,7 @@ func TestWebPluginSearchBudgetRefusedBeforeSearch(t *testing.T) {
 // captureCosts records the usage the supplier's price is computed from.
 type captureCosts struct{ usage []catalog.Usage }
 
-func (c *captureCosts) Credits(_ suppliers.AttemptReceipt, usage []catalog.Usage, _ platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+func (c *captureCosts) Credits(_ suppliers.AttemptReceipt, usage []catalog.Usage, _ *protocol.ReportedCost, _ platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
 	c.usage = append(c.usage, usage...)
 	return suppliers.AttemptCost{Flag: suppliers.CostComplete}, 0, true, nil
 }

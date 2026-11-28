@@ -45,6 +45,43 @@ type Balancer interface {
 	ReadBalance(ctx context.Context, c Client, key secret.Secret, s Settings, currency platform.Currency) (Money, error)
 }
 
+// Aggregator is the half of a direct type that sells many authors' models and bills each call at whichever of its
+// providers served it (docs/domains/suppliers-direct.md「OpenRouter 的成本」): what a name may cost at most, and what one
+// generation did cost, both read with requests it does not charge for. Aggregates is false for every other direct type,
+// which is never asked.
+type Aggregator interface {
+	Aggregates() bool
+	// ReadCeiling is the highest price of each item across every provider of name and every one of their price tiers.
+	ReadCeiling(ctx context.Context, c Client, key secret.Secret, s Settings, name string) Ceiling
+	// ReadGeneration is the aggregator's own record of the generation id names, Found false while it has none.
+	ReadGeneration(ctx context.Context, c Client, key secret.Secret, s Settings, id string) (Generation, error)
+}
+
+// CeilingOutcome is what a ceiling's read found.
+type CeilingOutcome uint8
+
+// The outcomes. CeilingInconclusive says nothing (a timeout, a 5xx): the ceiling read before stands.
+const (
+	CeilingInconclusive CeilingOutcome = iota
+	CeilingRead
+	CeilingNone          // the aggregator has no provider of the name
+	CeilingUnexpressible // a provider prices an item the schedule cannot express
+)
+
+// Ceiling is the answer to a ceiling's read: the schedule, in the price entry's currency, when it is CeilingRead.
+type Ceiling struct {
+	Outcome  CeilingOutcome
+	Schedule catalog.Schedule
+}
+
+// Generation is an aggregator's record of one generation: what it charged, in its credits, and whether it ran on a
+// provider key of the account's, when that is only its fee.
+type Generation struct {
+	Found bool
+	Cost  platform.Exact
+	BYOK  bool
+}
+
 // Money is an amount in a currency, as a provider reports a balance.
 type Money struct {
 	Amount   platform.Exact
