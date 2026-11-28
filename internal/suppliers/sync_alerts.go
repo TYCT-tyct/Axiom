@@ -55,6 +55,9 @@ func (w syncAlertWorker) work(ctx context.Context, job *river.Job[syncAlertArgs]
 			if err := emitSupplierAvailability(ctx, tx, cfg.Clock()); err != nil {
 				return err
 			}
+			if err := emitBalanceAlerts(ctx, tx, cfg.LowBalance); err != nil {
+				return err
+			}
 		}
 		var err error
 		ids, err = readSupplierAlertIDs(ctx, tx, `SELECT supplier_id FROM suppliers.sync_states WHERE supplier_id>$1 ORDER BY supplier_id LIMIT 20`, job.Args.After)
@@ -168,7 +171,7 @@ func readSyncAlertEvents(ctx context.Context, tx pg.Tx, id uuid.UUID, version in
 }
 
 func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncAlertEvent, p *syncAlertPosition) error {
-	kind, key, resolved := "", supplier.String(), false
+	kind := ""
 	switch e.kind {
 	case "needs_attention":
 		kind = "suppliers.sync_attention"
@@ -182,12 +185,10 @@ func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncA
 		p.Attention[kind] = fault
 	case "task_halted":
 		return forwardStoppedTask(ctx, tx, supplier, e, p)
-	case "balance_low", "balance_recovered":
-		kind, resolved = "suppliers.low_balance", e.kind == "balance_recovered"
-	default:
+	default: // a low balance is told from the balances themselves (balance_alerts.go), against the line set for it
 		return nil
 	}
-	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: key, Severity: "warning", Resolved: resolved})
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: supplier.String(), Severity: "warning"})
 }
 
 func recoverSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syncer.State, version int64, p *syncAlertPosition) error {
@@ -224,9 +225,6 @@ func initializeSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syn
 				return err
 			}
 		}
-	}
-	if state.LowNotified {
-		return forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "balance_low"}, p)
 	}
 	return nil
 }

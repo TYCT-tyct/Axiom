@@ -13,8 +13,8 @@ export default {
   noChannels: "没有通知渠道",
   edit: "编辑规则与渠道",
   save: "保存告警配置",
-  editIntro: "规则和渠道用 JSON 数组填写。异常花费检测在这一页的行里改。",
-  invalid: "请检查规则和渠道的 JSON 数组。",
+  editIntro: "规则、渠道和供应商余额告警线用 JSON 数组填写。异常花费检测在这一页的行里改。",
+  invalid: "请检查规则、渠道和余额告警线的 JSON 数组。",
   saved: "告警配置已保存。",
   testChannel: "发送测试",
   queued: "测试已排队。到告警事件查看发送回执。",
@@ -50,4 +50,9 @@ export default {
   invalidBotSecret: "长度需为 1 到 512 字节。",
   invalidToken: "请填 BotFather 给的令牌，例如 123456:ABC…",
   links: "通知里的链接打开 {{origin}}。",
+  balanceLines: "供应商余额告警线",
+  editLines: "编辑余额告警线",
+  balanceLine: "余额低于此数时告警，单位与读到的余额相同",
+  balanceDefault:
+    "没有设告警线的供应商低于 5 个结算币种单位时告警：中转站看账户余额，自带钱包的每把 key 看自己的余额。告警线用 supplier_id 和 threshold 组成的 JSON 数组填写。",
 };

@@ -1,6 +1,6 @@
 # observability
 
-调用记录、对话内容、告警和花费异常检测的代码接口与不变量；行为见[记录与告警](../../docs/domains/observability.md)；指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)。比较过的做法和实测在[存档](../../docs/archive/observability.md)。
+调用记录、对话内容、告警和花费异常检测的代码接口与不变量；行为见[记录与告警](../../docs/domains/observability.md)；指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)。
 
 基线 `00049`：[迁移规则](../platform/README.md#迁移)。
 
@@ -46,6 +46,7 @@ func RegisterUsage(db, scope, q *pg.Queue) error
 func RegisterAlerts(db, scope, q, m *mail.Mailer, keys *secret.Keyring, exit *egress.Client) error
 // 告警配置
 func GetAlertConfiguration(ctx, tx) (AlertConfiguration, error); func SetAlertConfiguration(ctx, tx, AlertConfiguration) error
+func LowBalanceLines(ctx, tx) (map[uuid.UUID]string, error)
 func ListAlertEvents(ctx, tx, AlertEventPage) ([]AlertEvent, error)
 func SendAlertTest(ctx, tx, channel string, now) (uuid.UUID, error)
 func ResolveAlertEvent(ctx, tx, id uuid.UUID, now) error
@@ -113,7 +114,7 @@ schema `observability`，全部强制行级安全。
 - **停放**：待定记录在 `pending/<请求 ID>.rec`，4 字节 CRC32C 加记录字节，临时文件 fsync、改名、目录 fsync，经 `os.Root` 打开；第二条待定记录返回 `ErrClosed`。启动时在写协程开始前把停放的记录追加进 spill 再删除，打断的临时文件删掉，校验和不对拒绝启动（`TestADamagedParkedRecordFailsTheStart`）。`Close` 报告的未写条数含停放的记录（`TestCloseReportsParkedRecords`）。
 - **单写者**：`call-log.lock` 上的 `flock` 排他锁；`SpillBacklog` 由备份在节点停止后持共享锁调用，校验同启动但不截断、不删文件（[备份与恢复](../../docs/ops/backup-restore.md#备份)）。`testdata/spill` 是恢复演练用的两份 spill，`TestRehearsalSpillsReplay` 保证新版本仍能重放。
 - **恢复**：末段的短头或短正文截掉；CRC 不符或中间段损坏时启动失败，报出文件和偏移，文件不动。
-- **入库**：普通连接池；每批一个事务，`call_log` 和 `call_attempt` 各一条 `INSERT … SELECT FROM jsonb_array_elements($1)`，成员名就是列名。补全后的批在内存里保留补全值，重试不再读账本。
+- **入库**：普通连接池；每批一个事务，`call_log` 和 `call_attempt` 各一条 `INSERT … SELECT FROM jsonb_array_elements($1)`，成员名就是列名。批的补全值留在内存，重试不再读账本。
 - **指标**：`axiom.observability.records.pending`、`records.written`、`records.unsettled`、`attempts.written`、`write.retries`、`records.lost`、`attempts.lost`，丢失的带 `reason`（`invalid`、`spill`、`shutdown`）；`retention.partitions{action,table}`。没有账户、key 或用户标签。`BenchmarkEnqueue`、`BenchmarkEnqueueParallel`、`BenchmarkEncodeRecord`、`BenchmarkSpillAppend` 的分配次数由合并队列比较。
 
 ## 追溯

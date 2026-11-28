@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { BalanceLinesCard } from "../alert-balance-lines";
 import { ChangeDialog, useSnapshot } from "../change";
 import en from "../locales/en/alert-configuration";
 import settingWords from "../locales/settings";
@@ -215,6 +216,7 @@ function Configuration({ view }: { view: Config }) {
           <Rules rules={view.rules ?? []} />
         </SettingsCard>
         <ChannelsCard view={view} edit={setEdit} />
+        <BalanceLinesCard lines={view.low_balance_thresholds ?? []} onEdit={() => setEdit({ kind: "configuration" })} />
         {spend ? (
           <SettingsCard scope="platform" title={t("alertConfig.spend")}>
             <SwitchSetting drafts={drafts} setting="alerts.spendOn" />
@@ -332,12 +334,14 @@ function readConfiguration(live: Config, values: Record<string, string>): Config
   try {
     const rules = parseJSONLossless(values.rules ?? "");
     const channels = parseJSONLossless(values.channels ?? "");
-    if (!Array.isArray(rules) || !Array.isArray(channels)) return undefined;
+    const lines = parseJSONLossless(values.lines ?? "");
+    if (!Array.isArray(rules) || !Array.isArray(channels) || !Array.isArray(lines)) return undefined;
     // Keep parsed numbers exact. The API validates the fields and their bounds.
     return {
       rev: live.rev ?? 1,
       rules,
       channels,
+      low_balance_thresholds: lines,
       ...(live.spend_detection ? { spend_detection: live.spend_detection } : {}),
     } as ConfigInput;
   } catch {
@@ -417,6 +421,14 @@ function Replace({ live, onClose }: { live: Config; onClose: () => void }) {
             rows={5}
             defaultValue={formatJSON(view.channels ?? [])}
             error={errors.field(error, "channels")}
+            spellCheck={false}
+          />
+          <TextArea
+            label={t("alertConfig.balanceLines")}
+            name="lines"
+            rows={4}
+            defaultValue={formatJSON(view.low_balance_thresholds ?? [])}
+            error={errors.field(error, "low_balance_thresholds")}
             spellCheck={false}
           />
         </Stack>
