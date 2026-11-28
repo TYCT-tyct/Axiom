@@ -13,8 +13,9 @@ export default {
   noChannels: "No notification channels",
   edit: "Edit rules and channels",
   save: "Save alert configuration",
-  editIntro: "Enter rules and channels as JSON arrays. Unusual spend detection is edited in the rows of this page.",
-  invalid: "Check the rules and channels JSON arrays.",
+  editIntro:
+    "Enter rules, channels and supplier balance lines as JSON arrays. Unusual spend detection is edited in the rows of this page.",
+  invalid: "Check the rules, channels and balance lines JSON arrays.",
   saved: "Alert configuration saved.",
   testChannel: "Send test",
   queued: "The test is queued. Check Alert events for the delivery receipt.",
@@ -52,4 +53,9 @@ export default {
   invalidBotSecret: "Enter a value of 1 to 512 bytes.",
   invalidToken: "Enter the token BotFather gave, such as 123456:ABC…",
   links: "Links in notifications open {{origin}}.",
+  balanceLines: "Supplier balance alert lines",
+  editLines: "Edit balance lines",
+  balanceLine: "Alerts under this amount, in the unit its balance is read in",
+  balanceDefault:
+    "A supplier without a line alerts under 5 of its settlement currency: a relay's account balance, and each key that reads its own wallet. Enter lines as a JSON array of supplier_id and threshold.",
 };

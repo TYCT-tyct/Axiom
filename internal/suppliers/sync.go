@@ -36,6 +36,8 @@ type SyncConfig struct {
 	// Rates are the platform's exchange rates, which a key's balance told in another currency than its price entry's
 	// is converted at; nil is none, and such a balance is not stored.
 	Rates func(context.Context, pg.Tx) ([]platform.ExchangeRate, error)
+	// LowBalance is the alert lines people set (balance_alerts.go); nil is none, and every supplier has the default.
+	LowBalance LowBalanceLines
 }
 
 // RegisterSync makes the node sync the suppliers: it adds the workers and the periodic sweep to the queue, which then

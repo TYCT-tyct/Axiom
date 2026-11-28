@@ -8599,6 +8599,7 @@ components:
         rules: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertRule"}}
         channels: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertChannel"}}
         spend_detection: {$ref: "#/components/schemas/SpendDetection"}
+        low_balance_thresholds: {type: array, maxItems: 1000, items: {$ref: "#/components/schemas/LowBalanceThreshold"}}
         admin_origin: {type: string, description: "The admin origin the last replacement came from, which the links in notifications open; absent before the first replacement."}
     SpendDetection:
       type: object
@@ -8663,7 +8664,27 @@ components:
         rules: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertRule"}], required: [id, kind, minimum_severity, threshold, duration_seconds, channel, quiet_start, quiet_end, repeat_seconds]}}
         channels: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertChannel"}], required: [id]}}
         spend_detection: {$ref: "#/components/schemas/SpendDetection"}
+        low_balance_thresholds:
+          type: array
+          maxItems: 1000
+          items: {$ref: "#/components/schemas/LowBalanceThreshold"}
+          description: Replaces every supplier's alert line; absent keeps the saved ones.
         reason: {$ref: "#/components/schemas/Reason"}
+    LowBalanceThreshold:
+      type: object
+      required: [supplier_id, threshold]
+      additionalProperties: false
+      description: >-
+        A supplier's line for the `suppliers.low_balance` alert, which fires once when a relay account's balance, or a
+        pasted key's own wallet, falls under it, and resolves once the balance is back at or over it. The amount is in
+        the unit the supplier's balances are read in: a relay's native unit (`quota` or `usd`), a key's wallet currency.
+        A supplier without a line is held to 5 of its settlement currency, a relay's balance converted at its latest confirmed unit value.
+      properties:
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        threshold:
+          type: string
+          pattern: '^(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$'
+          description: A non-negative exact decimal in text.
     AlertTestRequest:
       type: object
       required: [channel, reason]

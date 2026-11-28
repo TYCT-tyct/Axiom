@@ -44,14 +44,15 @@ type AlertChannel struct {
 }
 
 // AlertConfiguration is replaced atomically with optimistic concurrency. SpendDetection is optional so an older node's
-// replacement leaves it untouched. AdminOrigin is the admin origin the last replacement came from: the links a
-// notification carries open it.
+// replacement leaves it untouched; LowBalanceThresholds is optional so a replacement that does not send them keeps the
+// saved ones. AdminOrigin is the admin origin the last replacement came from: the links a notification carries open it.
 type AlertConfiguration struct {
-	Rev            int64           `json:"rev"`
-	Rules          []AlertRule     `json:"rules"`
-	Channels       []AlertChannel  `json:"channels"`
-	SpendDetection *SpendDetection `json:"spend_detection,omitempty"`
-	AdminOrigin    string          `json:"admin_origin,omitempty"`
+	Rev                  int64                  `json:"rev"`
+	Rules                []AlertRule            `json:"rules"`
+	Channels             []AlertChannel         `json:"channels"`
+	SpendDetection       *SpendDetection        `json:"spend_detection,omitempty"`
+	LowBalanceThresholds *[]LowBalanceThreshold `json:"low_balance_thresholds,omitempty"`
+	AdminOrigin          string                 `json:"admin_origin,omitempty"`
 }
 
 // AlertEvent is an incident, with independent receipts for each destination.
@@ -93,6 +94,9 @@ func GetAlertConfiguration(ctx context.Context, tx pg.Tx) (AlertConfiguration, e
 	if err != nil {
 		return c, err
 	}
+	if c.LowBalanceThresholds == nil {
+		c.LowBalanceThresholds = &[]LowBalanceThreshold{}
+	}
 	d, err := getSpendDetection(ctx, tx)
 	c.SpendDetection = &d
 	return c, err
@@ -124,12 +128,16 @@ func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) 
 			return ErrAlertConfiguration
 		}
 	}
+	if err := keepLowBalanceThresholds(ctx, tx, &c); err != nil {
+		return err
+	}
 	// Detection is stored apart from the rules so a node that predates it cannot drop it while replacing the body.
 	stored := struct {
-		Rules       []AlertRule    `json:"rules"`
-		Channels    []AlertChannel `json:"channels"`
-		AdminOrigin string         `json:"admin_origin,omitempty"`
-	}{Rules: c.Rules, Channels: c.Channels, AdminOrigin: c.AdminOrigin}
+		Rules                []AlertRule            `json:"rules"`
+		Channels             []AlertChannel         `json:"channels"`
+		LowBalanceThresholds *[]LowBalanceThreshold `json:"low_balance_thresholds,omitempty"`
+		AdminOrigin          string                 `json:"admin_origin,omitempty"`
+	}{Rules: c.Rules, Channels: c.Channels, LowBalanceThresholds: c.LowBalanceThresholds, AdminOrigin: c.AdminOrigin}
 	body, err := jsonx.MarshalCanonical(stored)
 	if err != nil {
 		return err
@@ -182,6 +190,9 @@ func validateAlertConfiguration(c AlertConfiguration) error {
 			return ErrAlertConfiguration
 		}
 		rules[r.ID] = true
+	}
+	if c.LowBalanceThresholds != nil {
+		return validateLowBalanceThresholds(*c.LowBalanceThresholds)
 	}
 	return nil
 }

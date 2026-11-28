@@ -46,34 +46,27 @@ type supplierAlertTest struct {
 	received         chan struct{}
 }
 
-func TestSupplierSyncStormSendsOneNoticeAndOneRecovery(t *testing.T) {
+// TestSupplierLowBalanceSendsOneNoticeAndOneRecovery: a relay's balance falling under the line set for it in the alert
+// configuration reaches the channel once, and its rise back over the line once as the same incident's recovery.
+func TestSupplierLowBalanceSendsOneNoticeAndOneRecovery(t *testing.T) {
 	t.Parallel()
 	w := newSupplierAlertTest(t)
 	w.enqueue(supplierAlertPass{})
-	w.waitPosition(0)
-	w.journal(1, "balance_low", 1000, `{"LowNotified":true}`)
+	w.waitLow(false)
+	w.balance("40")
 	w.enqueue(supplierAlertPass{})
-	w.waitPosition(1)
+	w.waitLow(true)
 	w.enqueue(operatorAlertPass{})
 	w.waitNotice()
+	w.balance("60")
 	w.enqueue(supplierAlertPass{})
-	w.enqueue(operatorAlertPass{})
-	w.journal(2, "balance_recovered", 1, `{}`)
-	w.enqueue(supplierAlertPass{})
-	w.waitPosition(2)
+	w.waitLow(false)
 	w.waitReceipt(0)
 	w.enqueue(operatorAlertPass{})
 	w.waitNotice()
 	w.waitReceipt(-1)
 	if w.firing.Load() != 1 || w.recovery.Load() != 1 {
-		t.Fatalf("storm sent %d notices and %d recoveries", w.firing.Load(), w.recovery.Load())
-	}
-	var occurrences int
-	w.tx(func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT occurrences FROM observability.alert_events WHERE kind='suppliers.low_balance'`).Scan(&occurrences)
-	})
-	if occurrences != 1000 {
-		t.Fatalf("storm lost occurrences: %d", occurrences)
+		t.Fatalf("the crossing sent %d notices and %d recoveries", w.firing.Load(), w.recovery.Load())
 	}
 }
 
@@ -93,7 +86,7 @@ func newSupplierAlertTest(t *testing.T) *supplierAlertTest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = suppliers.RegisterSyncAlerts(suppliers.SyncConfig{DB: w.db, Scope: pg.PlatformScope(), Queue: w.queue}); err != nil {
+	if err = suppliers.RegisterSyncAlerts(suppliers.SyncConfig{DB: w.db, Scope: pg.PlatformScope(), Queue: w.queue, LowBalance: observability.LowBalanceLines}); err != nil {
 		t.Fatal(err)
 	}
 	if err = observability.RegisterAlerts(w.db, pg.PlatformScope(), w.queue, m, keys, exit); err != nil {
@@ -119,7 +112,7 @@ func (w *supplierAlertTest) seed(destination string, keys *secret.Keyring) {
 		if _, err := tx.Exec(ctx, `INSERT INTO suppliers.suppliers(id,owner_scope,name,kind,origin,upstream_account,native_unit,settlement_currency,mgmt_egress_id) VALUES($1,'platform','alert source','newapi','https://supplier.example','sync','quota','USD','direct')`, w.supplier); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_states(supplier_id,version,state,next_due) VALUES($1,0,'{}','infinity')`, w.supplier); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE suppliers.suppliers SET status='active', balance_native=100 WHERE id=$1`, w.supplier); err != nil {
 			return err
 		}
 		c, err := observability.GetAlertConfiguration(ctx, tx)
@@ -128,6 +121,7 @@ func (w *supplierAlertTest) seed(destination string, keys *secret.Keyring) {
 		}
 		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: destination}}
 		c.Rules = []observability.AlertRule{{ID: "balance", Kind: "suppliers.low_balance", MinimumSeverity: "warning", Threshold: 1, Channel: "hook"}}
+		c.LowBalanceThresholds = &[]observability.LowBalanceThreshold{{SupplierID: w.supplier, Threshold: "50"}}
 		if err = observability.SealAlertAddresses(ctx, tx, keys, &c); err != nil {
 			return err
 		}
@@ -182,21 +176,18 @@ func (w *supplierAlertTest) enqueue(args river.JobArgs) {
 	})
 }
 
-func (w *supplierAlertTest) journal(version int64, kind string, count int, state string) {
+func (w *supplierAlertTest) balance(amount string) {
 	w.t.Helper()
-	ctx := w.t.Context()
 	w.tx(func(tx pg.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why) SELECT $1,$2,n,$3,'','','','' FROM generate_series(0,$4::int-1)n`, w.supplier, version, kind, count); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `UPDATE suppliers.sync_states SET version=$2,state=$3 WHERE supplier_id=$1`, w.supplier, version, state)
+		_, err := tx.Exec(w.t.Context(), `UPDATE suppliers.suppliers SET balance_native=$2::text::numeric WHERE id=$1`, w.supplier, amount)
 		return err
 	})
 }
 
-func (w *supplierAlertTest) waitPosition(version int64) {
+// waitLow waits for the balance alerts' last reading to have the relay on the given side of its line.
+func (w *supplierAlertTest) waitLow(low bool) {
 	w.t.Helper()
-	w.waitQuery(`SELECT EXISTS(SELECT FROM platform.alert_positions WHERE source=$1 AND (position->>'Version')::bigint=$2)`, "suppliers.sync/"+w.supplier.String(), version)
+	w.waitQuery(`SELECT EXISTS(SELECT FROM platform.alert_positions WHERE source='suppliers.balance_low' AND (position->'Low' ? $1)=$2)`, w.supplier.String(), low)
 }
 
 func (w *supplierAlertTest) waitReceipt(seq int) {

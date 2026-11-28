@@ -43,10 +43,10 @@ func TestSyncAlertStormCheckpointRollbackAndRecovery(t *testing.T) {
 	}
 	forward()
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why,created_at) SELECT $1,1,n,'balance_low','','','sensitive upstream text','', $2 FROM generate_series(0,999) n`, w.supplier, w.clock.now())
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why,created_at) SELECT $1,1,n,'needs_attention','',$3,'sensitive upstream text','sensitive upstream text', $2 FROM generate_series(0,999) n`, w.supplier, w.clock.now(), w.clock.now().Format(time.RFC3339Nano))
 		return err
 	})
-	setSyncAlertState(w, 1, syncer.State{LowNotified: true})
+	setSyncAlertState(w, 1, syncer.State{Status: syncer.NeedsAttention})
 	rollback := errors.New("rollback")
 	err := w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		if err := forwardSyncAlerts(t.Context(), tx, w.supplier); err != nil {
@@ -70,11 +70,9 @@ func TestSyncAlertStormCheckpointRollbackAndRecovery(t *testing.T) {
 	if len(consumeSupplierSignals(w)) != 0 {
 		t.Fatal("checkpoint replayed storm")
 	}
-	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why) VALUES($1,2,0,'balance_recovered','','','','')`, w.supplier)
-		return err
-	})
-	setSyncAlertState(w, 2, syncer.State{})
+	recovered := syncer.State{}
+	recovered.Tasks[syncer.TaskBalance].LastOK = w.clock.now().Add(time.Minute)
+	setSyncAlertState(w, 2, recovered)
 	forward()
 	forward()
 	signals = consumeSupplierSignals(w)
@@ -120,7 +118,7 @@ func TestSyncAlertBootstrapSkipsRecoveredHistory(t *testing.T) {
 	w := newWorld(t, 2)
 	setSyncAlertState(w, 1, syncer.State{})
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why) VALUES($1,1,0,'balance_low','','','',''),($1,1,1,'balance_recovered','','','','')`, w.supplier)
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why) VALUES($1,1,0,'needs_attention','','','',''),($1,1,1,'task_halted','balance','','','')`, w.supplier)
 		return err
 	})
 	w.tx(func(ctx context.Context, tx pg.Tx) error { return forwardSyncAlerts(ctx, tx, w.supplier) })
@@ -181,7 +179,7 @@ func TestSupplierReconciliationPublishesSanitizedCategories(t *testing.T) {
 func assertSanitizedSupplierStorm(t *testing.T, supplier uuid.UUID, signals []alert.Signal) {
 	t.Helper()
 	for _, s := range signals {
-		if s.Kind != "suppliers.low_balance" || s.Key != supplier.String() || s.Resolved || len(s.Fields) != 0 {
+		if s.Kind != "suppliers.sync_attention" || s.Key != supplier.String() || s.Resolved || len(s.Fields) != 0 {
 			t.Fatalf("unsanitized signal: %+v", s)
 		}
 	}
