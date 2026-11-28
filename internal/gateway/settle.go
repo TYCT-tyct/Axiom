@@ -291,7 +291,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	c, credits, known, err := s.x.Costs.Credits(receipt, usage, a.reportedCost(), a.entry.Price.Schedule.Currency())
+	c, credits, known, err := s.x.Costs.Credits(receipt, usage, a.usage.Cost, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
 		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that

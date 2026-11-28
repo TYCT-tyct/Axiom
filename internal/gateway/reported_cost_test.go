@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"context"
+	"net/http"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -8,7 +11,45 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
+
+// TestEachSamplingOfASearchLoopIsPricedWithItsOwnFigure: every sampling of the openrouter:web_search loop is a supplier
+// request of its own, settled before the next is sent, so each is priced with the figure its own answer gave, an
+// explicit zero among them.
+func TestEachSamplingOfASearchLoopIsPricedWithItsOwnFigure(t *testing.T) {
+	t.Parallel()
+	run(t, func(t *testing.T, ctx context.Context) {
+		costs := &reportedCosts{}
+		upstream := protocol.Chat
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			costs:  costs,
+			script: map[int][]scripted{1: {
+				serve(beat{data: strings.Replace(chatToolCall, `"total_tokens":14`, `"total_tokens":14,"cost":0`, 1)}),
+				serve(beat{data: strings.Replace(chatAnswer, `"total_tokens":25`, `"total_tokens":25,"cost":0.0003`, 1)}),
+			}},
+		})
+		h.run()
+		if h.w.status != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+		}
+		var got []string
+		for _, r := range costs.reported {
+			if r == nil {
+				got = append(got, "none")
+			} else {
+				got = append(got, r.Amount.Rat().FloatString(4))
+			}
+		}
+		if strings.Join(got, ",") != "0.0000,0.0003" {
+			t.Errorf("the samplings were priced with %v, want 0 and 0.0003", got)
+		}
+	})
+}
 
 // reportedCosts records the supplier's figure each attempt is priced with.
 type reportedCosts struct{ reported []*protocol.ReportedCost }

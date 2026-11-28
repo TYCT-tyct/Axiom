@@ -281,7 +281,7 @@ func (m *meter) result() Usage {
 	reply, final := m.progress()
 	reply.Reported = final
 	u := Usage{Segments: append([]Segment{reply}, m.compactions...), Invalid: m.invalid}
-	if m.final && m.costSet { // a reply cut short may have reported a figure for less than it ran to
+	if m.final && m.costSet && m.invalid == nil { // a reply cut short, or whose usage was voided, has no figure
 		u.Cost = &ReportedCost{Amount: m.cost, BYOK: m.byok}
 	}
 	if !m.final && !m.trustedCompactions || u.Invalid != nil {

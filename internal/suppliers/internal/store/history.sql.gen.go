@@ -32,12 +32,10 @@ WITH days AS (
     FROM generate_series($1::timestamptz, $2::timestamptz, interval '1 day') d
 ), estimated AS (
     SELECT (a.finished_at AT TIME ZONE 'UTC')::date AS day,
-        sum(CASE WHEN a.cost_report IS NOT NULL THEN a.bound_cost * g.ratio ELSE a.estimated_native END) AS amount,
+        sum(CASE WHEN a.cost_report IS NOT NULL THEN a.bound_cost * a.line_ratio ELSE a.estimated_native END) AS amount,
         count(*) FILTER (WHERE a.charge_ref IS NOT NULL AND a.state = 'pending' AND a.finished_at < $3::timestamptz) AS unmatched,
         sum(coalesce(a.actual_native, a.estimated_native)) FILTER (WHERE a.cost_report IS NOT NULL) AS reported, count(a.cost_report) AS reports
     FROM suppliers.attempt_costs a
-    JOIN suppliers.endpoints e ON e.id = a.endpoint_id
-    JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id
     WHERE a.supplier_id = $4 AND a.finished_at >= $1::timestamptz AND a.finished_at < $5::timestamptz
     GROUP BY 1
 ), charged AS (
@@ -85,8 +83,8 @@ type ReconciliationDaysRow struct {
 // charge records of the day add up to, with the counts the matching reached. A charge above the estimate is one
 // reconciliation judged "under" (we estimated too little), below it "over". An attempt is unmatched once the grace is
 // over without a charge claiming it. An aggregator's attempt whose cost it said (cost_report) is estimated at its
-// plan's bound and charged at what it is booked at, both at the line's ratio, and counts as a charge matched; one it did
-// not say anything of yet is estimated at the bound it is booked at.
+// plan's bound and charged at what it is booked at, both at the line's ratio it ran at, and counts as a charge
+// matched; one it did not say anything of yet is estimated at the bound it is booked at.
 func (q *Queries) ReconciliationDays(ctx context.Context, db DBTX, arg ReconciliationDaysParams) ([]ReconciliationDaysRow, error) {
 	rows, err := db.Query(ctx, reconciliationDays,
 		arg.FromAt,

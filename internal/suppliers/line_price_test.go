@@ -115,14 +115,17 @@ func (w *pastedWorld) op() catalog.Op {
 }
 
 // list puts acme's model of the name on sale at the price.
-func (w *pastedWorld) list(name, price string) {
+func (w *pastedWorld) list(name, price string) { w.listSpec(name, stoneSpec, price) }
+
+// listSpec puts acme's model of the name and specification on sale at the price.
+func (w *pastedWorld) listSpec(name, spec, price string) {
 	w.t.Helper()
 	ctx := w.t.Context()
 	if _, err := w.cat.SaveAuthor(ctx, catalog.SaveAuthorRequest{Op: w.op(), Slug: "acme", Name: "acme"}); err != nil {
 		w.t.Fatal(err)
 	}
 	made, err := w.cat.CreateModel(ctx, catalog.CreateModelRequest{
-		Op: w.op(), Slug: "acme/" + name, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(stoneSpec),
+		Op: w.op(), Slug: "acme/" + name, VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: jsonx.Raw(spec),
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -238,6 +241,7 @@ type keyProvider struct {
 type answer struct {
 	status int
 	body   string
+	hang   bool // the answer never comes: the request waits until its caller gives up
 }
 
 // providerKey is what the provider knows of one key: the models it lists, its balance in a currency, and whether it
@@ -259,25 +263,14 @@ func newKeyProvider(t *testing.T) *keyProvider {
 func (p *keyProvider) serve(rw http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	k, ok := p.keys[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
-	ceiling, hasCeiling := p.ceilings[strings.TrimPrefix(r.URL.Path, "/v1/ceiling/")]
-	generation, hasGeneration := p.generations[r.URL.Query().Get("id")]
 	p.mu.Unlock()
 	var body string
 	switch {
 	case !ok:
 		rw.WriteHeader(http.StatusUnauthorized)
 	case strings.HasPrefix(r.URL.Path, "/v1/ceiling/") || r.URL.Path == "/v1/generation":
-		a, has := ceiling, hasCeiling
-		if r.URL.Path == "/v1/generation" {
-			a, has = generation, hasGeneration
-		}
-		if !has {
-			a = answer{status: http.StatusNotFound}
-		}
-		if a.status != 0 {
-			rw.WriteHeader(a.status)
-		}
-		body = a.body
+		p.aggregate(rw, r)
+		return
 	case r.URL.Path == "/v1/models":
 		ids := make([]string, len(k.models))
 		for i, m := range k.models {
@@ -290,6 +283,27 @@ func (p *keyProvider) serve(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusPaymentRequired)
 	}
 	_, _ = rw.Write([]byte(body)) //nolint:errcheck // what arrives is what the test's checks read
+}
+
+// aggregate answers the router type's reads: a name's ceiling, or a generation's record, 404 for one it does not know.
+func (p *keyProvider) aggregate(rw http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	a, has := p.ceilings[strings.TrimPrefix(r.URL.Path, "/v1/ceiling/")]
+	if r.URL.Path == "/v1/generation" {
+		a, has = p.generations[r.URL.Query().Get("id")]
+	}
+	p.mu.Unlock()
+	switch {
+	case !has:
+		rw.WriteHeader(http.StatusNotFound)
+	case a.hang:
+		<-r.Context().Done()
+	default:
+		if a.status != 0 {
+			rw.WriteHeader(a.status)
+		}
+		_, _ = rw.Write([]byte(a.body)) //nolint:errcheck // what arrives is what the test's checks read
+	}
 }
 
 // set makes the provider know the key as k, or forget it for a zero k.

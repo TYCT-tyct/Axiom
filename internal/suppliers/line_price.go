@@ -118,7 +118,7 @@ func (a *Admin) priceLine(ctx context.Context, tx pg.Tx, snap *catalog.Snapshot,
 	}
 	q := store.New()
 	if a.aggregates(s.Kind) {
-		return a.priceCeilingLine(ctx, tx, q, s.ID, group, ratio)
+		return a.priceCeilingLine(ctx, tx, q, snap, s.ID, group, ratio)
 	}
 	currency := s.SettlementCurrency
 	endpoints, err := q.LineEndpointsOf(ctx, tx, group)

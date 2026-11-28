@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // DirectUsage reads the usage of an embeddings or rerank reply, in the items the catalog prices. A reply without usage
@@ -79,13 +80,20 @@ func (d *directScanner) usageObject() (Usage, error) {
 	if err != nil {
 		return Usage{}, err
 	}
-	return Usage{Segments: []Segment{{Usage: u, Reported: c.seen}}}, nil
+	out := Usage{Segments: []Segment{{Usage: u, Reported: c.seen}}}
+	if c.costSet { // a whole reply is final: its usage.cost is the supplier's figure, as a stream's last report is
+		out.Cost = &ReportedCost{Amount: c.cost, BYOK: c.byok}
+	}
+	return out, nil
 }
 
-// directCounts are the items a direct reply's usage reports, each the largest of the members that count it.
+// directCounts are the items a direct reply's usage reports, each the largest of the members that count it, and the
+// supplier's figure of its cost (usage.cost and is_byok).
 type directCounts struct {
 	input, searches int64
 	seen            catalog.ItemSet
+	cost            platform.Exact
+	costSet, byok   bool
 }
 
 // usageMember reads the usage member just named into c.
@@ -97,6 +105,17 @@ func (d *directScanner) usageMember(c *directCounts) error {
 		into, item = &c.input, catalog.ItemInput
 	case "search_units":
 		into, item = &c.searches, catalog.ItemWebSearch
+	case "cost", "is_byok":
+		v, err := d.dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		if string(d.name) == "cost" {
+			c.cost, c.costSet = reportedCost(v)
+		} else {
+			c.byok = string(v) == "true"
+		}
+		return nil
 	default:
 		return d.skip()
 	}

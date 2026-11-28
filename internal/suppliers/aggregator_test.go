@@ -71,11 +71,11 @@ func routerLine(t *testing.T, w *pastedWorld, ratio string) (uuid.UUID, *lines) 
 	return line, &lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}
 }
 
-// setCeiling makes the router answer stone's ceiling so.
-func (w *pastedWorld) setCeiling(a answer) {
+// setCeiling makes the router answer the name's ceiling so.
+func (w *pastedWorld) setCeiling(name string, a answer) {
 	w.provider.mu.Lock()
 	defer w.provider.mu.Unlock()
-	w.provider.ceilings["stone"] = a
+	w.provider.ceilings[name] = a
 }
 
 // setGeneration makes the router answer the generation's record so; a zero answer is a record not there.
@@ -119,7 +119,7 @@ func TestAnAggregatorsLineIsCostedAtItsCeiling(t *testing.T) {
 	stone := w.endpoint(line, "stone")
 	w.expectRouted("connected", line, "stone", false)
 
-	w.setCeiling(answer{body: stoneCeiling})
+	w.setCeiling("stone", answer{body: stoneCeiling})
 	if err := jobs.relist(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestAnAggregatorsLineIsCostedAtItsCeiling(t *testing.T) {
 		{"priced past the schedule", answer{body: "unexpressible"}, 0, false},
 	} {
 		w.clock.advance(step.advance)
-		w.setCeiling(step.ceiling)
+		w.setCeiling("stone", step.ceiling)
 		if err := jobs.relist(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +176,7 @@ func TestAnAttemptAtACeilingCostsWhatTheAggregatorSaid(t *testing.T) {
 	t.Parallel()
 	w := newPastedWorld(t)
 	line, jobs := routerLine(t, w, "0.5")
-	w.setCeiling(answer{body: stoneCeiling})
+	w.setCeiling("stone", answer{body: stoneCeiling})
 	if err := jobs.relist(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestAnAttemptAtACeilingCostsWhatTheAggregatorSaid(t *testing.T) {
 		{"charged nothing", line, "gen-b", &protocol.ReportedCost{}, "0", true, "gen-b/0/charged/0.009/judge/"},
 		{"byok", line, "gen-c", &protocol.ReportedCost{Amount: exact(t, "0.0004"), BYOK: true}, "0.0047", false, "gen-c/0.0004/byok_fee/0.009/judge/"},
 		{"no figure", line, "gen-d", nil, "0.0045", false, "gen-d///0.009/lookup/"},
-		{"no figure and no id", line, "", nil, "0.0045", false, "///0.009//"},
+		{"no figure and no id", line, "", nil, "0.0045", false, "///0.009/done/"},
 		// stone at its catalog price: 1000 × 0.000003 + 100 × 0.000015.
 		{"another supplier's figure", pasted, "", &protocol.ReportedCost{Amount: exact(t, "0.004")}, "0.0045", true, "/////"},
 	} {
@@ -273,6 +273,11 @@ func TestTheCeilingChecks(t *testing.T) {
 		{name: "too soon for a record", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 30 * time.Second, booked: "0.0045", state: "lookup"},
 		{name: "no record yet", settled: "0.0045", wait: time.Hour, booked: "0.0045", state: "lookup"},
 		{name: "no record in a day", settled: "0.0045", wait: 25 * time.Hour, booked: "0.0045", state: "done"},
+		{name: "a server error within the day", settled: "0.0045", record: answer{status: 503}, wait: 2 * time.Minute, booked: "0.0045", state: "lookup"},
+		{name: "a server error past the day", settled: "0.0045", record: answer{status: 503}, wait: 25 * time.Hour, booked: "0.0045", state: "done"},
+		// The attempt is booked at the ratio it ran at, 0.5, whatever the line's is by the lookup.
+		{name: "a record read after the ratio changed", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 2 * time.Minute, ratio: "1", booked: "0.004", state: "done"},
+		{name: "a key erased since", settled: "0.0045", record: answer{body: `{"cost":"0.008"}`}, wait: 2 * time.Minute, erased: true, booked: "0.0045", state: "done"},
 		{name: "a figure within the tolerance", reported: figure("0.00909", false), settled: "0.004545", booked: "0.004545", state: "done"},
 		{name: "a figure past the tolerance", reported: figure("0.0091", false), settled: "0.00455", booked: "0.00455", state: "done", alert: "ceiling_exceeded"},
 		{name: "past the bound of guessed usage", reported: figure("0.02", false), settled: "0.01", guessed: true, booked: "0.01", state: "done"},
@@ -295,6 +300,8 @@ type ceilingCheck struct {
 	wait     time.Duration // from the attempt's end to the checks
 	guessed  bool          // the usage was estimated, not reported
 	repriced bool          // the endpoint is on another plan by the checks
+	ratio    string        // the line's ratio by the checks, "" for the one the attempt ran at
+	erased   bool          // the attempt's key was erased by the checks
 	booked   string        // the cost booked after the checks, run twice
 	state    string
 	alert    string // the alert's key, "" for none: the endpoint is still routed
@@ -314,6 +321,14 @@ func (c ceilingCheck) run(t *testing.T) {
 	if c.repriced {
 		w.relistAt(jobs, strings.Replace(stoneCeiling, "0.00003", "0.00004", 1))
 	}
+	if c.ratio != "" {
+		if err := w.setRatio(line, c.ratio); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.erased {
+		w.sql("UPDATE suppliers.credentials SET status = 'erased', ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL")
+	}
 	w.clock.advance(c.wait)
 	for range 2 {
 		if err := jobs.checkCeilings(t.Context()); err != nil {
@@ -324,14 +339,16 @@ func (c ceilingCheck) run(t *testing.T) {
 	if want := c.booked + "/" + c.state; row != want {
 		t.Errorf("the attempt is %s, want %s", row, want)
 	}
-	w.expectRouted(c.name, line, "stone", c.alert == "")
+	if !c.erased { // a line without a key is in no snapshot
+		w.expectRouted(c.name, line, "stone", c.alert == "")
+	}
 	w.expectAlert(c.alert)
 }
 
 // relistAt makes the router answer stone's ceiling so and runs the hourly re-list.
 func (w *pastedWorld) relistAt(jobs *lines, ceiling string) {
 	w.t.Helper()
-	w.setCeiling(answer{body: ceiling})
+	w.setCeiling("stone", answer{body: ceiling})
 	if err := jobs.relist(w.t.Context()); err != nil {
 		w.t.Fatal(err)
 	}
@@ -343,5 +360,77 @@ func (w *pastedWorld) expectAlert(key string) {
 	got := w.text("SELECT coalesce(string_agg(body ->> 'key', ','), '') FROM platform.alert_signals WHERE body ->> 'kind' = 'suppliers.reconciliation_difference'")
 	if got != key {
 		w.t.Errorf("alerts %q, want %q", got, key)
+	}
+}
+
+// TestACeilingPricesAllTheModelReports: an aggregator's plan prices every service tier the catalog declares for the
+// model, flex and priority among them, at the same ceiling, so routing and the model's shared price find no tier
+// missing; a ceiling that lacks an item the model reports leaves the endpoint unpriced rather than putting a plan that
+// cannot price the model among its costs.
+func TestACeilingPricesAllTheModelReports(t *testing.T) {
+	t.Parallel()
+	const geminiSpec = `{"items":["input","output","cache_read"],"tiers":["standard","flex","priority"],"context_length":1000000,` +
+		`"max_output_tokens":8192,"streams":true,"abilities":["tools"]}`
+	const geminiPrice = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000004","cache_read":"0.0000001"},` +
+		`"service_tiers":{"flex":{"rates":{"input":"0.0000005","output":"0.000002","cache_read":"0.00000005"}},` +
+		`"priority":{"rates":{"input":"0.0000018","output":"0.0000072","cache_read":"0.00000018"}}}}`
+	for _, c := range []struct {
+		name, ceiling string
+		routed        bool
+	}{
+		{"every tier at the ceiling", `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.00001","cache_read":"0.0000002"}}`, true},
+		{"an item the ceiling lacks", `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.00001"}}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newPastedWorld(t)
+			w.listSpec("gemini", geminiSpec, geminiPrice)
+			w.provider.set("sk-good-router", providerKey{models: []string{"gemini"}})
+			line := w.connect("router", "", "sk-good-router")
+			jobs := &lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}
+			w.setCeiling("gemini", answer{body: c.ceiling})
+			if err := jobs.relist(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			w.expectRouted(c.name, line, "gemini", c.routed)
+			if c.routed {
+				w.expectPlanPrices(w.endpoint(line, "gemini"), w.models["gemini"])
+			}
+		})
+	}
+}
+
+// TestACeilingReadIsKeptWhenTheRoundIsCut: each name's ceiling is stored once it is read, so a round the job's deadline
+// cuts short, here at a name whose answer never comes, keeps what it read before.
+func TestACeilingReadIsKeptWhenTheRoundIsCut(t *testing.T) {
+	t.Parallel()
+	w := newPastedWorld(t)
+	w.list("gravel", stonePrice)
+	w.provider.set("sk-good-router", providerKey{models: []string{"gravel", "stone"}})
+	line := w.connect("router", "", "sk-good-router")
+	jobs := &lines{db: w.db, scope: platformScope, admin: w.admin, cat: w.cat, logger: slog.Default()}
+	w.setCeiling("stone", answer{body: stoneCeiling})
+	w.setCeiling("gravel", answer{hang: true})
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := jobs.relist(ctx); err == nil {
+		t.Error("a round the deadline cut short reported no error")
+	}
+	if got := w.text("SELECT count(*)::text FROM suppliers.supplier_models WHERE supplier_id = $1 AND upstream_name = 'stone' AND ceiling IS NOT NULL", line); got != "1" {
+		t.Errorf("stone's ceiling read before the cut was not kept")
+	}
+}
+
+// expectPlanPrices checks that the endpoint's plan prices every item and service tier the model reports.
+func (w *pastedWorld) expectPlanPrices(endpoint uuid.UUID, model catalog.ModelID) {
+	w.t.Helper()
+	plan, err := catalog.ParseSchedule([]byte(w.text(`SELECT s.schedule::text FROM suppliers.endpoints e
+		JOIN suppliers.cost_schedules s ON s.id = e.cost_schedule_id WHERE e.id = $1`, endpoint)))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	m, _ := w.snap().Model(model)
+	if missing := plan.Missing(m.Reportable()); missing != (catalog.Reportable{}) {
+		w.t.Errorf("the plan leaves %+v of what the model reports unpriced", missing)
 	}
 }

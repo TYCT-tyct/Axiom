@@ -18,26 +18,43 @@ WHERE supplier_group_id = @supplier_group_id AND upstream_name = @upstream_name;
 -- name: EndpointCallNames :many
 -- Every endpoint of the line with each name a call to it is sent by: its own, and the one each key in service lists
 -- it as (credentials.call_names).
-SELECT e.id, e.upstream_name,
+SELECT e.id, e.upstream_name, e.model_id,
     coalesce(array_agg(DISTINCT c.call_names ->> e.upstream_name) FILTER (WHERE c.call_names ? e.upstream_name), '{}')::text[] AS call_names
 FROM suppliers.endpoints e
 LEFT JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active'
 WHERE e.supplier_group_id = @supplier_group_id
-GROUP BY e.id, e.upstream_name
+GROUP BY e.id, e.upstream_name, e.model_id
 ORDER BY e.id;
 
 -- name: CeilingLookups :many
 -- The attempts at a ceiling plan that settled without the aggregator's figure, finished before @before, oldest first:
--- each with the key it ran on, which its generation's record is read with, and the line's ratio.
-SELECT a.generation_id::text AS generation_id, a.finished_at, a.credential_id, a.supplier_id, a.estimated_native::text AS estimated_native,
-    s.kind, s.origin, c.settings, c.egress_id, g.ratio::text AS line_ratio
-FROM suppliers.attempt_costs a
-JOIN suppliers.credentials c ON c.id = a.credential_id
-JOIN suppliers.suppliers s ON s.id = a.supplier_id
-JOIN suppliers.supplier_groups g ON g.id = c.supplier_group_id
-WHERE a.check_state = 'lookup' AND a.finished_at < @before
-ORDER BY a.finished_at, a.generation_id
+-- each with the key it ran on, which its generation's record is read with, and the line's ratio it ran at. Each key
+-- gives at most @per_key of them, so the attempts of a key whose records cannot be read now do not keep the others'
+-- out of the batch.
+SELECT d.generation_id, d.finished_at, d.credential_id, d.supplier_id, d.estimated_native, d.line_ratio, s.kind, s.origin, c.settings, c.egress_id
+FROM (
+    SELECT a.generation_id::text AS generation_id, a.finished_at, a.credential_id, a.supplier_id,
+        a.estimated_native::text AS estimated_native, a.line_ratio::text AS line_ratio,
+        row_number() OVER (PARTITION BY a.credential_id ORDER BY a.finished_at, a.generation_id) AS n
+    FROM suppliers.attempt_costs a
+    WHERE a.check_state = 'lookup' AND a.finished_at < @before
+) d
+JOIN suppliers.credentials c ON c.id = d.credential_id
+JOIN suppliers.suppliers s ON s.id = d.supplier_id
+WHERE d.n <= @per_key::bigint
+ORDER BY d.finished_at, d.generation_id
 LIMIT @max_rows;
+
+-- name: EndStaleLookups :execrows
+-- The attempts whose record no read found within the day (finished before @before): they stay booked at the bound.
+UPDATE suppliers.attempt_costs SET check_state = 'done'
+WHERE check_state = 'lookup' AND finished_at < @before;
+
+-- name: EndKeyLookups :execrows
+-- The attempts of a key that no longer opens, erased or sealed under a key the node does not hold: nothing reads their
+-- records, and they stay booked at the bound.
+UPDATE suppliers.attempt_costs SET check_state = 'done'
+WHERE credential_id = @credential_id AND check_state = 'lookup';
 
 -- name: SettleLookup :execrows
 -- Books the aggregator's record of the generation against its attempt, once: the cost the record makes it and the
@@ -46,10 +63,6 @@ UPDATE suppliers.attempt_costs
 SET actual_native = @actual_native::numeric, reported_cost = @reported_cost::numeric, cost_report = @cost_report, check_state = 'judge'
 WHERE generation_id = @generation_id AND check_state = 'lookup';
 
--- name: EndLookup :execrows
--- An attempt whose generation's record never came: it stays booked at the bound.
-UPDATE suppliers.attempt_costs SET check_state = 'done'
-WHERE generation_id = @generation_id AND check_state = 'lookup';
 
 -- name: CeilingJudgments :many
 -- The attempts whose figure is to be judged against their bound, oldest first, locked so two runs judge each once.

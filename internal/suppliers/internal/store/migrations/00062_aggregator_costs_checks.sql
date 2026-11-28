@@ -16,6 +16,8 @@ ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_bound_cost
 ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_check_state_check;
 ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_report_whole;
 ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_lookup_has_id;
+ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_line_ratio_check;
+ALTER TABLE suppliers.attempt_costs VALIDATE CONSTRAINT attempt_costs_ceiling_whole;
 
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS attempt_costs_generation_id ON suppliers.attempt_costs (generation_id)
     WHERE generation_id IS NOT NULL;

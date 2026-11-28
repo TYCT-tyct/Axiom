@@ -76,14 +76,17 @@ type lookup struct {
 	ag     adapter.Aggregator
 }
 
-// lookUp reads the record of each attempt that settled without the aggregator's figure and books it.
+// lookUp reads the record of each attempt that settled without the aggregator's figure and books the ones found. Only
+// lookupFor running out ends a lookup with no record, and a key that no longer opens: a read that failed, or found no
+// record yet, is read again next run.
 func (l *lines) lookUp(ctx context.Context) error {
 	now := l.admin.now()
 	var due []lookup
+	var shut []uuid.UUID
 	if err := l.db.ReadTx(ctx, l.scope, func(tx pg.Tx) (err error) {
-		due, err = l.lookups(ctx, tx, now)
+		due, shut, err = l.lookups(ctx, tx, now)
 		return err
-	}); err != nil || len(due) == 0 {
+	}); err != nil {
 		return err
 	}
 	read := make([]adapter.Generation, len(due))
@@ -96,7 +99,7 @@ func (l *lines) lookUp(ctx context.Context) error {
 			g, err := d.ag.ReadGeneration(ctx, d.client, d.key, settingsOf(d.Settings), d.GenerationID)
 			if err != nil {
 				l.logger.WarnContext(ctx, "suppliers: a generation's record did not read", "generation_id", d.GenerationID, "err", err)
-				return
+				return // its zero value is no record: read again next run
 			}
 			read[i] = g // each its own element
 		})
@@ -105,27 +108,38 @@ func (l *lines) lookUp(ctx context.Context) error {
 	return l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
 		q := store.New()
 		for i, d := range due {
-			if err := bookLookup(ctx, tx, q, d.CeilingLookupsRow, read[i], now); err != nil {
+			if err := bookLookup(ctx, tx, q, d.CeilingLookupsRow, read[i]); err != nil {
 				return err
 			}
 		}
-		return nil
+		for _, credential := range shut {
+			if _, err := q.EndKeyLookups(ctx, tx, credential); err != nil {
+				return err
+			}
+		}
+		_, err := q.EndStaleLookups(ctx, tx, now.Add(-lookupFor))
+		return err
 	})
 }
 
-// lookups is the attempts due, each with its key opened and the client of its exit; one whose key or exit cannot be
-// had now waits for the next run.
-func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup, error) {
-	rows, err := store.New().CeilingLookups(ctx, tx, store.CeilingLookupsParams{Before: now.Add(-lookupAfter), MaxRows: checkBatch})
+// lookupsPerKey is the most attempts of one key a run reads, so that a key whose records cannot be read now leaves the
+// rest of the batch to the others.
+const lookupsPerKey = 20
+
+// lookups is the attempts due, each with its key opened and the client of its exit, and the keys that no longer open,
+// whose attempts no run can read. One whose exit is disabled waits for it, as calls do.
+func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup, []uuid.UUID, error) {
+	rows, err := store.New().CeilingLookups(ctx, tx, store.CeilingLookupsParams{Before: now.Add(-lookupAfter), PerKey: lookupsPerKey, MaxRows: checkBatch})
 	if err != nil || len(rows) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	exits, err := l.admin.readExits(ctx, tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer l.admin.keepExits(exits)
 	var due []lookup
+	var shut []uuid.UUID
 	opened := map[uuid.UUID]*secret.Secret{} // a key is opened once a run, however many of its attempts are due
 	for _, r := range rows {
 		ag, ok := l.admin.aggregator(r.Kind)
@@ -135,45 +149,46 @@ func (l *lines) lookups(ctx context.Context, tx pg.Tx, now time.Time) ([]lookup,
 		}
 		c, err := client.New(r.Origin, exit, client.NewLimiter(nil, l.admin.now), l.admin.now)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		key, seen := opened[r.CredentialID]
-		if !seen {
-			key = l.openLookupKey(ctx, tx, r.CredentialID)
-			opened[r.CredentialID] = key
+		key, first := l.lookupKey(ctx, tx, opened, r.CredentialID)
+		if key == nil && first {
+			shut = append(shut, r.CredentialID)
 		}
 		if key != nil {
 			due = append(due, lookup{CeilingLookupsRow: r, key: *key, client: c, ag: ag})
 		}
 	}
-	return due, nil
+	return due, shut, nil
 }
 
-// openLookupKey is the credential's key, nil when it does not open, which is logged once a run.
-func (l *lines) openLookupKey(ctx context.Context, tx pg.Tx, credential uuid.UUID) *secret.Secret {
+// lookupKey is the credential's key, opened once a run and kept in opened, nil when it does not open, which is logged;
+// first says this call opened it.
+func (l *lines) lookupKey(ctx context.Context, tx pg.Tx, opened map[uuid.UUID]*secret.Secret, credential uuid.UUID) (*secret.Secret, bool) {
+	if key, seen := opened[credential]; seen {
+		return key, false
+	}
 	key, err := l.admin.openKey(ctx, tx, credential)
 	if err != nil {
-		l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record", "credential", credential.String(), "err", err)
-		return nil
+		l.logger.WarnContext(ctx, "suppliers: a key did not open for a generation's record; its attempts stay at the bound", "credential", credential.String(), "err", err)
+		opened[credential] = nil
+		return nil, true
 	}
-	return &key
+	opened[credential] = &key
+	return &key, true
 }
 
-// bookLookup books one record against its attempt (SettleLookup, once a generation): the cost is the record's figure
-// times the line's ratio, and for a BYOK call that fee on top of the bound the attempt was booked at, since the provider
-// bills the model apart. A record not there yet is read again next run, until lookupFor; then the bound stands.
-func bookLookup(ctx context.Context, tx pg.Tx, q *store.Queries, r store.CeilingLookupsRow, g adapter.Generation, now time.Time) error {
+// bookLookup books one record found against its attempt (SettleLookup, once a generation): the cost is the record's
+// figure times the line's ratio the attempt ran at, and for a BYOK call that fee on top of the bound the attempt was
+// booked at, since the provider bills the model apart. No record found books nothing.
+func bookLookup(ctx context.Context, tx pg.Tx, q *store.Queries, r store.CeilingLookupsRow, g adapter.Generation) error {
 	if !g.Found {
-		if now.Sub(r.FinishedAt) < lookupFor {
-			return nil
-		}
-		_, err := q.EndLookup(ctx, tx, &r.GenerationID)
-		return err
+		return nil
 	}
 	ratio, ok := new(big.Rat).SetString(r.LineRatio)
 	bound, err := platform.ParseExact(r.EstimatedNative)
 	if !ok || err != nil {
-		return fmt.Errorf("generation %s: its line's ratio %q or its cost %q is not a number", r.GenerationID, r.LineRatio, r.EstimatedNative)
+		return fmt.Errorf("generation %s: its ratio %q or its cost %q is not a number", r.GenerationID, r.LineRatio, r.EstimatedNative)
 	}
 	cost, err := platform.CeilExact(new(big.Rat).Mul(g.Cost.Rat(), ratio))
 	report := reportCharged
@@ -307,30 +322,27 @@ func (l *lines) relistCeilings(ctx context.Context, line pastedLine, keys []line
 	}); err != nil {
 		return err
 	}
-	read := make([]adapter.Ceiling, len(rows))
+	// Each name is stored as soon as it is read, in a transaction of its own: a round the job's deadline cuts short keeps
+	// what it read, and the next round reads the rest.
+	errs := make([]error, len(rows))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, ceilingParallel)
 	for i, r := range rows {
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			read[i] = ag.ReadCeiling(ctx, key.client, key.key, key.settings, r.UpstreamName) // each its own element
+			c := ag.ReadCeiling(ctx, key.client, key.key, key.settings, r.UpstreamName)
+			errs[i] = l.db.Tx(ctx, l.scope, func(tx pg.Tx) error { // each its own element
+				q := store.New()
+				if ok, err := line.locked(ctx, tx, q); !ok {
+					return err
+				}
+				return storeCeiling(ctx, tx, q, line.GroupID, r.UpstreamName, c, l.admin.now())
+			})
 		})
 	}
 	wg.Wait()
-	at := l.admin.now()
-	return l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		q := store.New()
-		if ok, err := line.locked(ctx, tx, q); !ok {
-			return err
-		}
-		for i, r := range rows {
-			if err := storeCeiling(ctx, tx, q, line.GroupID, r.UpstreamName, read[i], at); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return errors.Join(errs...)
 }
 
 // ceilingParallel is how many of a line's names are read at once.

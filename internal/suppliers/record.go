@@ -235,7 +235,8 @@ func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
 // setCeiling records what an attempt at a ceiling plan leaves to check (aggregator.go): its generation's id, which the
 // aggregator's record of it is read by and which is never a charge record's key; the figure it reported and the bound
 // to judge it against ('judge'); or, without a figure, that the record is to be read ('lookup'). A figure of 0 is a
-// figure. An attempt that ran nowhere, or whose id never came back, has nothing to check.
+// figure. An attempt that ran nowhere has nothing to check, and one whose id never came back nothing to look up
+// ('done'). The line's ratio the attempt ran at goes with the bound: a later lookup and the history reckon at it.
 func setCeiling(row *store.AttemptCostRow, a AttemptRecord) error {
 	if a.Receipt.ref != "" {
 		row.GenerationID = &a.Receipt.ref
@@ -247,7 +248,8 @@ func setCeiling(row *store.AttemptCostRow, a AttemptRecord) error {
 	if err != nil {
 		return err
 	}
-	row.BoundCost = &bound
+	ratio := a.Receipt.ratio.FloatString(6)
+	row.BoundCost, row.LineRatio = &bound, &ratio
 	state := checkJudge
 	switch {
 	case a.Cost.Reported != nil:
@@ -263,7 +265,7 @@ func setCeiling(row *store.AttemptCostRow, a AttemptRecord) error {
 	case row.GenerationID != nil:
 		state = checkLookup
 	default:
-		return nil
+		state = checkDone
 	}
 	row.CheckState = &state
 	return nil
@@ -275,6 +277,7 @@ const (
 	reportBYOKFee = "byok_fee"
 	checkLookup   = "lookup"
 	checkJudge    = "judge"
+	checkDone     = "done"
 )
 
 // RecordAttempts writes the cost and reconciliation key of a request's attempts, all in one statement, in the

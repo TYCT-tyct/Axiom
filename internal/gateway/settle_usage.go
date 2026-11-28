@@ -3,18 +3,8 @@ package gateway
 import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
-	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
-
-// reportedCost is the supplier's own figure of the attempt's cost, which the answer its usage came with gave. A
-// model-side loop's samplings are several answers, and the last one's figure is not the attempt's.
-func (a *attempt) reportedCost() *protocol.ReportedCost {
-	if len(a.hops) > 0 {
-		return nil
-	}
-	return a.usage.Cost
-}
 
 // addToolUsage adds the call's external searches and file parses to the user's side of the charged attempt after the
 // supplier's cost was computed from the supplier's own usage. The work is ours, not the supplier's: one explicit zero

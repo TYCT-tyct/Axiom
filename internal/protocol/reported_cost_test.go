@@ -15,6 +15,10 @@ import (
 func TestReportedCost(t *testing.T) {
 	t.Parallel()
 	usage := func(extra string) string { return `{"prompt_tokens":9,"completion_tokens":2` + extra + `}` }
+	embedding := func(extra string) string {
+		return `{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"m",` +
+			`"usage":{"prompt_tokens":3,"total_tokens":3` + extra + `}}`
+	}
 	whole := func(extra string) string {
 		return `{"id":"gen-1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant",` +
 			`"content":"Hi"},"finish_reason":"stop"}],"usage":` + usage(extra) + `}`
@@ -23,6 +27,7 @@ func TestReportedCost(t *testing.T) {
 		name, stream string
 		aggregate    bool
 		whole        string // a whole reply body, read by UsageOf instead of a stream
+		direct       string // an embeddings reply, read by DirectUsage
 		want         *protocol.ReportedCost
 	}{
 		{
@@ -57,11 +62,24 @@ func TestReportedCost(t *testing.T) {
 			name: "cut after the usage chunk", stream: chatRole + chatHi + chatStop + chatUsage(usage(`,"cost":0.5`)),
 			want: &protocol.ReportedCost{Amount: exact("0.5")},
 		},
+		// A later report whose count went down voids the usage, and the cost reported with it.
+		{
+			name: "voided by a later report", stream: chatRole + chatHi + chatStop + chatUsage(usage(`,"cost":0`)) +
+				chatUsage(`{"prompt_tokens":9,"completion_tokens":1}`) + chatDone,
+		},
+		{name: "embeddings", direct: embedding(`,"cost":0`), want: &protocol.ReportedCost{}},
+		{name: "embeddings on a BYOK key", direct: embedding(`,"cost":0.00002,"is_byok":true`), want: &protocol.ReportedCost{Amount: exact("0.00002"), BYOK: true}},
+		{name: "embeddings without a cost", direct: embedding(``)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			var got protocol.Usage
 			switch {
+			case c.direct != "":
+				var err error
+				if got, err = protocol.DirectUsage(protocol.Embeddings, []byte(c.direct)); err != nil {
+					t.Fatal(err)
+				}
 			case c.whole != "":
 				got = protocol.UsageOf([]byte(c.whole))
 			case c.aggregate:

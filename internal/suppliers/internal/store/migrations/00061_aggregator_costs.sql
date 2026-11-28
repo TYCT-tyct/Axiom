@@ -23,9 +23,12 @@ GRANT UPDATE (ceiling, ceiling_read_at) ON TABLE suppliers.supplier_models TO ax
 -- whole charge or only the fee of a BYOK call, the plan's bound of the usage in credits, and what is still to be done
 -- with the row: 'lookup' when the answer reported no charge and the generation record is to be read, 'judge' when a
 -- charge is to be compared with the bound, 'done' after. estimated_native, the cost booked at the settlement, is never
--- changed: what the generation record makes the cost goes in actual_native, once.
+-- changed: what the generation record makes the cost goes in actual_native, once. line_ratio is the line's ratio the
+-- attempt ran at, what a credit cost then: the lookup and the history reckon the attempt at it, never at the line's
+-- ratio of a later day. A ceiling's attempt has all of the bound, the ratio and the check state, or none.
 ALTER TABLE suppliers.attempt_costs
     ADD COLUMN generation_id text,
+    ADD COLUMN line_ratio numeric,
     ADD COLUMN actual_native numeric,
     ADD COLUMN reported_cost numeric,
     ADD COLUMN cost_report text,
@@ -41,6 +44,9 @@ ALTER TABLE suppliers.attempt_costs
         CHECK (bound_cost >= 0 AND bound_cost <> ALL (ARRAY['NaN'::numeric, 'Infinity'::numeric])) NOT VALID,
     ADD CONSTRAINT attempt_costs_check_state_check CHECK (check_state IN ('lookup', 'judge', 'done')) NOT VALID,
     ADD CONSTRAINT attempt_costs_report_whole CHECK ((reported_cost IS NULL) = (cost_report IS NULL)) NOT VALID,
-    ADD CONSTRAINT attempt_costs_lookup_has_id CHECK (check_state IS DISTINCT FROM 'lookup' OR generation_id IS NOT NULL) NOT VALID;
+    ADD CONSTRAINT attempt_costs_lookup_has_id CHECK (check_state IS DISTINCT FROM 'lookup' OR generation_id IS NOT NULL) NOT VALID,
+    ADD CONSTRAINT attempt_costs_line_ratio_check CHECK (line_ratio > 0) NOT VALID,
+    ADD CONSTRAINT attempt_costs_ceiling_whole
+        CHECK ((bound_cost IS NULL) = (line_ratio IS NULL) AND (bound_cost IS NULL) = (check_state IS NULL)) NOT VALID;
 
 GRANT UPDATE (actual_native, reported_cost, cost_report, check_state) ON TABLE suppliers.attempt_costs TO axiom_app;
