@@ -99,7 +99,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if why != "" {
 		return routing.Endpoint{}, why
 	}
-	reportable := servedReportable(model, r)
+	reportable := billing.ServedReportable(model, r.StandardOnly)
 	price, why := endpointPrice(sold, r.ID)
 	if why != "" {
 		return routing.Endpoint{}, why
@@ -169,17 +169,6 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	surface := e.Surface()
 	e.Caps, e.Parameters, e.Context, e.MaxOutput = surface.Caps, surface.Parameters, surface.Context, surface.MaxOutput
 	return e, ""
-}
-
-// servedReportable is what the model reports at the tiers the endpoint serves: every tier the model has, except for an
-// endpoint served at the standard tier only (suppliers.Routable.StandardOnly), which a flex or priority call is never
-// routed to and whose price needs no other tier.
-func servedReportable(model catalog.Model, r suppliers.Routable) catalog.Reportable {
-	reportable := model.Reportable()
-	if r.StandardOnly {
-		reportable.ServiceTiers = 0
-	}
-	return reportable
 }
 
 // PriceCostOf is the endpoint's cost as billing compares it with a sale price in currency, with the exchange rate that

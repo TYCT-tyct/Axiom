@@ -26,14 +26,27 @@ type PriceCost struct {
 	StandardOnly bool `json:"standard_only,omitempty"`
 }
 
-// reportable is what the cost must price of what the model reports: an endpoint served at the standard tier only is
-// costed at no other.
-func (c PriceCost) reportable(model catalog.Model) catalog.Reportable {
+// ServedReportable is what an endpoint must price of what the model reports, at the tiers the endpoint serves: every
+// tier the model has, or the standard tier alone for an endpoint served at no other (StandardOnly). It is the one rule
+// that an endpoint's cost and its price are checked against, by publication, by the published price's cost checks and
+// by routing, so they cannot disagree on what an endpoint lacks.
+func ServedReportable(model catalog.Model, standardOnly bool) catalog.Reportable {
 	r := model.Reportable()
-	if c.StandardOnly {
+	if standardOnly {
 		r.ServiceTiers = 0
 	}
 	return r
+}
+
+// reportable is what the cost must price of what the model reports (ServedReportable).
+func (c PriceCost) reportable(model catalog.Model) catalog.Reportable {
+	return ServedReportable(model, c.StandardOnly)
+}
+
+// unpriced says the cost leaves part of what the model reports at the endpoint's tiers without a price: no sale price
+// can be floored on it.
+func (c PriceCost) unpriced(model catalog.Model) bool {
+	return Unpriced(c.Schedule, c.reportable(model)) != (catalog.Reportable{})
 }
 
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.

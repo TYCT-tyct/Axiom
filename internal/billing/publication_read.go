@@ -186,7 +186,7 @@ func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
 	// A tier a cost does not price is no floor of its: a standard-only endpoint is not served at it (CoversCost reads a
 	// tier the cost lacks as unknown).
 	for _, c := range costs {
-		if Unpriced(c.Schedule, c.reportable(model)) != (catalog.Reportable{}) {
+		if c.unpriced(model) {
 			return false
 		}
 	}
@@ -224,7 +224,7 @@ func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
 // for that exact cost.
 func (s Sold) endpointAllows(model catalog.Model, c PriceCost, price catalog.Schedule) bool {
 	if Unpriced(price, c.reportable(model)) != (catalog.Reportable{}) ||
-		Unpriced(c.Schedule, c.reportable(model)) != (catalog.Reportable{}) {
+		c.unpriced(model) {
 		return false
 	}
 	cost, err := c.converted(price.Currency())
