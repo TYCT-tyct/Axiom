@@ -23,19 +23,26 @@ WHERE e.supplier_id = @supplier_id AND e.version = ANY(@versions::bigint[])
 ORDER BY e.version DESC, e.seq;
 
 -- name: HasChargeRecords :one
-SELECT EXISTS (SELECT FROM suppliers.charge_records WHERE supplier_id = @supplier_id)::boolean;
+-- Whether the supplier has said what it charged: in charge records, or in an aggregator's answers and generation
+-- records (attempt_costs.cost_report).
+SELECT (EXISTS (SELECT FROM suppliers.charge_records c WHERE c.supplier_id = @supplier_id)
+    OR EXISTS (SELECT FROM suppliers.attempt_costs a WHERE a.supplier_id = @supplier_id AND a.cost_report IS NOT NULL))::boolean;
 
 -- name: ReconciliationDays :many
 -- Each UTC day from from_at to last_day, midnights, newest first (to_at is the midnight after last_day): what the day's attempts were estimated at, and what the supplier's
 -- charge records of the day add up to, with the counts the matching reached. A charge above the estimate is one
 -- reconciliation judged "under" (we estimated too little), below it "over". An attempt is unmatched once the grace is
--- over without a charge claiming it.
+-- over without a charge claiming it. An aggregator's attempt whose cost it said (cost_report) is estimated at its
+-- plan's bound and charged at what it is booked at, both at the line's ratio it ran at, and counts as a charge
+-- matched; one it did not say anything of yet is estimated at the bound it is booked at.
 WITH days AS (
     SELECT (d AT TIME ZONE 'UTC')::date AS day
     FROM generate_series(@from_at::timestamptz, @last_day::timestamptz, interval '1 day') d
 ), estimated AS (
-    SELECT (a.finished_at AT TIME ZONE 'UTC')::date AS day, sum(a.estimated_native) AS amount,
-        count(*) FILTER (WHERE a.charge_ref IS NOT NULL AND a.state = 'pending' AND a.finished_at < @grace_before::timestamptz) AS unmatched
+    SELECT (a.finished_at AT TIME ZONE 'UTC')::date AS day,
+        sum(CASE WHEN a.cost_report IS NOT NULL THEN a.bound_cost * a.line_ratio ELSE a.estimated_native END) AS amount,
+        count(*) FILTER (WHERE a.charge_ref IS NOT NULL AND a.state = 'pending' AND a.finished_at < @grace_before::timestamptz) AS unmatched,
+        sum(coalesce(a.actual_native, a.estimated_native)) FILTER (WHERE a.cost_report IS NOT NULL) AS reported, count(a.cost_report) AS reports
     FROM suppliers.attempt_costs a
     WHERE a.supplier_id = @supplier_id AND a.finished_at >= @from_at::timestamptz AND a.finished_at < @to_at::timestamptz
     GROUP BY 1
@@ -48,8 +55,10 @@ WITH days AS (
     WHERE c.supplier_id = @supplier_id AND c.occurred_at >= @from_at::timestamptz AND c.occurred_at < @to_at::timestamptz
     GROUP BY 1
 )
-SELECT d.day::text AS day, coalesce(e.amount, 0)::text AS estimated_native, coalesce(c.amount, 0)::text AS charged_native,
-    coalesce(c.charges, 0)::bigint AS charges, coalesce(c.matched, 0)::bigint AS matched, coalesce(c.held, 0)::bigint AS held,
+SELECT d.day::text AS day, coalesce(e.amount, 0)::text AS estimated_native,
+    (coalesce(c.amount, 0) + coalesce(e.reported, 0))::text AS charged_native,
+    (coalesce(c.charges, 0) + coalesce(e.reports, 0))::bigint AS charges,
+    (coalesce(c.matched, 0) + coalesce(e.reports, 0))::bigint AS matched, coalesce(c.held, 0)::bigint AS held,
     coalesce(c.above, 0)::bigint AS charged_above, coalesce(c.below, 0)::bigint AS charged_below,
     coalesce(e.unmatched, 0)::bigint AS unmatched_attempts
 FROM days d

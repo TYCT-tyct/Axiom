@@ -659,7 +659,7 @@ type fakeCosts struct {
 	err   error
 }
 
-func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, *protocol.ReportedCost, platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
 	if c.err != nil {
 		return suppliers.AttemptCost{}, c.cost, c.known, c.err // the figure still comes: the executor books it whatever the error
 	}

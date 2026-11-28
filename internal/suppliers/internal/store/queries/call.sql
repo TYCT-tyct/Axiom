@@ -18,7 +18,7 @@ SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.quantizati
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute, c.region, coalesce(c.call_names ->> e.upstream_name, e.upstream_name)::text AS call_name, c.settings, c.egress_id,
     coalesce(c.balance_native::text, '')::text AS key_balance, c.balance_observed_at AS key_balance_observed_at, g.ratio::text AS line_ratio,
-    cs.id AS cost_schedule_id, cs.schedule
+    cs.id AS cost_schedule_id, cs.schedule, cs.basis
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
 JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
@@ -145,7 +145,7 @@ LIMIT @batch::int;
 
 -- name: ListPriceCosts :many
 -- Costs depend on configured eligibility, never on a node's adapter or key availability.
-SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency, cs.basis,
  v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id=e.supplier_id

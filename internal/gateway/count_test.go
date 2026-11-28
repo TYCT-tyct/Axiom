@@ -144,9 +144,9 @@ type observingCosts struct {
 	observe func()
 }
 
-func (c observingCosts) Credits(r suppliers.AttemptReceipt, u []catalog.Usage, currency platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+func (c observingCosts) Credits(r suppliers.AttemptReceipt, u []catalog.Usage, reported *protocol.ReportedCost, currency platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
 	c.observe()
-	return c.Costs.Credits(r, u, currency)
+	return c.Costs.Credits(r, u, reported, currency)
 }
 
 func BenchmarkInputTextEstimate(b *testing.B) {

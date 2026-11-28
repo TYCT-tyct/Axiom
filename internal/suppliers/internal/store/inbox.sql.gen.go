@@ -280,7 +280,7 @@ WITH cur (kind, subject, detail) AS (
         'balance_days', CASE WHEN sp.spent > 0 THEN floor(s.balance_native / sp.spent)::bigint END)
     FROM suppliers.suppliers s
     LEFT JOIN LATERAL (
-        SELECT sum(a.estimated_native) AS spent FROM suppliers.attempt_costs a
+        SELECT sum(coalesce(a.actual_native, a.estimated_native)) AS spent FROM suppliers.attempt_costs a
         WHERE a.supplier_id = s.id AND a.finished_at > $4::timestamptz
     ) sp ON true
     WHERE s.id = $1 AND s.status = 'low_balance' AND s.balance_native IS NOT NULL

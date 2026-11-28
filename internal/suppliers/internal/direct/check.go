@@ -85,6 +85,65 @@ func (a *Adapter) ReadBalance(ctx context.Context, c adapter.Client, key secret.
 	return m, nil
 }
 
+// errNoAggregator is the reads' error for a provider that is no aggregator; Aggregates says so, and it is not asked.
+var errNoAggregator = errors.New("direct: the provider is no aggregator")
+
+// Aggregates implements adapter.Aggregator.
+func (a *Adapter) Aggregates() bool { return a.p.Aggregator != nil }
+
+// ReadCeiling implements adapter.Aggregator: one GET of the name's providers. A 404 is a name no provider serves; any
+// other answer than 200, or a transport failure, says nothing, and the ceiling read before stands.
+func (a *Adapter) ReadCeiling(ctx context.Context, c adapter.Client, key secret.Secret, s adapter.Settings, name string) adapter.Ceiling {
+	if a.p.Aggregator == nil {
+		return adapter.Ceiling{}
+	}
+	path := a.p.Aggregator.CeilingPath(name)
+	if path == "" { // a name the aggregator prices apart from its model, or not one of its own
+		return adapter.Ceiling{Outcome: adapter.CeilingNone}
+	}
+	resp, err := a.get(ctx, c, key, s, path)
+	switch {
+	case err != nil:
+		return adapter.Ceiling{}
+	case resp.Status == http.StatusNotFound:
+		return adapter.Ceiling{Outcome: adapter.CeilingNone}
+	case resp.Status != http.StatusOK:
+		return adapter.Ceiling{}
+	}
+	return a.p.Aggregator.Ceiling(resp.Body)
+}
+
+// ReadGeneration implements adapter.Aggregator: one GET of the generation's record. A 404 is a record not there yet,
+// as the aggregator writes it a little after the answer; any other answer than 200 is an error that holds no part of it.
+func (a *Adapter) ReadGeneration(ctx context.Context, c adapter.Client, key secret.Secret, s adapter.Settings, id string) (adapter.Generation, error) {
+	if a.p.Aggregator == nil {
+		return adapter.Generation{}, errNoAggregator
+	}
+	resp, err := a.get(ctx, c, key, s, a.p.Aggregator.GenerationPath(id))
+	switch {
+	case err != nil:
+		return adapter.Generation{}, fmt.Errorf("direct: read the generation: %w", err)
+	case resp.Status == http.StatusNotFound:
+		return adapter.Generation{}, nil
+	case resp.Status != http.StatusOK:
+		return adapter.Generation{}, fmt.Errorf("direct: the generation answered %d", resp.Status)
+	}
+	g, err := a.p.Aggregator.Generation(resp.Body)
+	if err != nil {
+		return adapter.Generation{}, fmt.Errorf("direct: read the generation's answer: %w", err)
+	}
+	return g, nil
+}
+
+// get is one GET the provider does not charge for, with the key as a Chat call takes it.
+func (a *Adapter) get(ctx context.Context, c adapter.Client, key secret.Secret, s adapter.Settings, path string) (adapter.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	h := http.Header{"Accept": {"application/json"}}
+	quirks{a.p}.Authorize(h, protocol.Chat, key.Reveal(), s)
+	return c.Do(ctx, adapter.Request{Method: http.MethodGet, Path: path, Header: h})
+}
+
 // checked reads the answer to a check.
 func checked(resp adapter.Response) adapter.KeyCheck {
 	out := adapter.KeyCheck{Status: resp.Status}

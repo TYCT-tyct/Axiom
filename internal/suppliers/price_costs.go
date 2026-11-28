@@ -17,6 +17,9 @@ type PriceCost struct {
 	Schedule        catalog.Schedule
 	UnitValue       string
 	UnitValueID     uuid.UUID
+	// StandardOnly says the plan prices the standard tier only, as an aggregator's ceiling plan does: the tiers it
+	// lacks are not the endpoint's to serve, and set no floor under a shared sale price (billing.PriceCost.StandardOnly).
+	StandardOnly bool
 }
 
 // PriceCosts reads one canonical cost set without loading an adapter, decrypting a key or using a node's snapshot.
@@ -35,7 +38,10 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) {
 		if err != nil {
 			return nil, err
 		}
-		costs = append(costs, PriceCost{Endpoint: r.EndpointID, Model: r.ModelID, Currency: currency, Schedule: schedule, UnitValue: r.UnitValue, UnitValueID: r.UnitValueID})
+		costs = append(costs, PriceCost{
+			Endpoint: r.EndpointID, Model: r.ModelID, Currency: currency, Schedule: schedule, UnitValue: r.UnitValue,
+			UnitValueID: r.UnitValueID, StandardOnly: r.Basis == ceilingBasis,
+		})
 	}
 	return costs, nil
 }

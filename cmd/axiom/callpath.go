@@ -409,16 +409,7 @@ func priceCosts(endpoints []suppliers.Routable, rates []platform.ExchangeRate, c
 			// A key's zero cost is the account's, not the platform's: it must not set the floor of a shared sale price.
 			continue
 		}
-		var rate platform.ExchangeRate
-		if e.Currency != currency {
-			for _, r := range rates {
-				if _, ok := r.Between(e.Currency, currency); ok {
-					rate = r
-					break
-				}
-			}
-		}
-		costs = append(costs, billing.PriceCost{Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID, Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate})
+		costs = append(costs, gateway.PriceCostOf(e, rates, currency))
 	}
 	return costs
 }

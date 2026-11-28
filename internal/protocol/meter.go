@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // usageReport is a usage object mapped onto billing items (catalog README.md「计费项与用量」). tierSet tells a tier the
@@ -24,6 +25,9 @@ type usageReport struct {
 	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
 	// snapshot even when its total is the same as before.
 	inputDetailed, outputDetailed bool
+	// cost is the supplier's figure of the cost that the report carries, when costSet (usage.cost), and byok its is_byok.
+	cost          platform.Exact
+	costSet, byok bool
 }
 
 // tokenTotal is the prompt or output total an upstream reports, and whether it reported one: an explicit 0 is not an
@@ -134,6 +138,9 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 		}
 	}
 	m.sortUnknown()
+	if r.costSet {
+		m.cost, m.costSet, m.byok = r.cost, true, r.byok
+	}
 	if compactions != nil {
 		m.compact(compactions)
 	}
@@ -274,6 +281,9 @@ func (m *meter) result() Usage {
 	reply, final := m.progress()
 	reply.Reported = final
 	u := Usage{Segments: append([]Segment{reply}, m.compactions...), Invalid: m.invalid}
+	if m.final && m.costSet && m.invalid == nil { // a reply cut short, or whose usage was voided, has no figure
+		u.Cost = &ReportedCost{Amount: m.cost, BYOK: m.byok}
+	}
 	if !m.final && !m.trustedCompactions || u.Invalid != nil {
 		for i := range u.Segments[1:] {
 			u.Segments[1+i].Reported = 0

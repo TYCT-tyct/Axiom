@@ -52,6 +52,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"payments.poll":                   QueueMoney,
 		"queue.discard_scan":              QueueArchive,
 		"suppliers.reconcile":             QueueMoney,
+		"suppliers.ceiling_checks":        QueueSyncs,
 		"suppliers.relist":                QueueSyncs,
 		"suppliers.reproject":             QueueSyncs,
 		"suppliers.sync":                  QueueSyncs,

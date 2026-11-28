@@ -86,7 +86,7 @@ func proposePrice(policy PricePolicy, rules []Rule, base *scaledBase, m catalog.
 
 func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Currency) (EndpointPrices, catalog.Schedule, error) {
 	for _, c := range costs {
-		if Unpriced(c.Schedule, m.Reportable()) != (catalog.Reportable{}) {
+		if c.unpriced(m) {
 			return nil, catalog.Schedule{}, ErrUnpriced
 		}
 	}

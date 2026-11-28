@@ -63,6 +63,12 @@ func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstr
 			return u, 0, err
 		}
 	}
+	if len(t.Provider) > 0 && !t.Compact {
+		if u.Body, err = withProviderObject(u.Body, t.Provider, b); err != nil {
+			b.give(b.held)
+			return u, 0, err
+		}
+	}
 	held = int64(cap(u.Body))
 	if b.held < held { // a path that wrote its body without drawing for it, as the direct rewrites do
 		if err := b.draw(held - b.held); err != nil {
@@ -437,6 +443,16 @@ func decodedType(v jsontext.Value, value *[128]byte, b *budget) ([]byte, error) 
 
 // splice is body with its bytes from start to end replaced by with, in a body of its own drawn from b before it is made;
 // body, which it replaces, is given back.
+// withProviderObject adds the endpoint's provider object to a prepared body as its last member. The prepared body has a
+// model, so it is never empty, and no provider of its own: that is a routing parameter, which preparation removed.
+func withProviderObject(body, provider []byte, b *budget) ([]byte, error) {
+	end := len(bytes.TrimRight(body, " \t\r\n")) - 1
+	if end < 1 || body[end] != '}' {
+		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
+	}
+	return splice(body, end, end, append([]byte(`,"provider":`), provider...), b)
+}
+
 func splice(body []byte, start, end int, with []byte, b *budget) ([]byte, error) {
 	size := len(body) - (end - start) + len(with)
 	if err := b.draw(rounded(int64(size))); err != nil {

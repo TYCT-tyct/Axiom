@@ -28,6 +28,9 @@ type CallPolicy struct {
 	Streams bool
 	// Cancels: the supplier stops generating when the client disconnects.
 	Cancels bool
+	// CancelsFixed: no measurement replaces Cancels. An aggregator may fall back to a provider of its own choosing that
+	// generates on after a disconnect, and charges the whole answer, whatever one endpoint was measured to do.
+	CancelsFixed bool
 }
 
 // Execution tells whether the supplier ran the request. The zero value, Unknown, is what is assumed when nothing is

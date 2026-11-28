@@ -36,7 +36,7 @@ func TestEndpointCostIsWhatAnAttemptIsCharged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, receipt.currency)
+		_, got, known, err := w.svc.Credits(receipt, []catalog.Usage{u}, nil, receipt.currency)
 		if want := linesCharge(t, cost, l.Above, counts); err != nil || !known || got != want {
 			t.Errorf("%s above %d: charged %d (%v, %v), the lines say %d", l.Item, l.Above, got, known, err, want)
 		}

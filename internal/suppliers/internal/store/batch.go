@@ -14,8 +14,11 @@ import (
 // These handwritten statements batch rows with unnest or paged VALUES; sqlc cannot type
 // the wide unnest calls or generate variable-length VALUES. Tests use the real tables.
 
-// AttemptCostRow is the cost and reconciliation key of one finished attempt.
+// AttemptCostRow is the cost and reconciliation key of one finished attempt. The ceiling columns are those of an
+// attempt at an aggregator's ceiling plan (migration 00061), nil for every other.
 type AttemptCostRow struct {
+	GenerationID, ReportedCost, CostReport           *string
+	BoundCost, CheckState, LineRatio                 *string
 	UnitValueID, ExchangeRateID                      *uuid.UUID
 	ConversionFrom, ConversionTo, ConversionState    *string
 	RequestID                                        uuid.UUID
@@ -30,14 +33,19 @@ type AttemptCostRow struct {
 	Test                                             bool
 }
 
+// The insert leaves a row whose attempt is there already, so a settlement repeated after a crash changes nothing, and
+// one whose generation id another attempt holds: an aggregator never gives two generations one id, and failing the
+// settlement over a repeated header would leave the user's call to the cleanup.
 const insertAttemptCosts = `
 INSERT INTO suppliers.attempt_costs (request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id,
     cost_schedule_id, charge_ref, usage, priced_at, finished_at, cost_flag, estimated_native,
-    unit_value_id, exchange_rate_id, conversion_from, conversion_to, conversion_state, test)
+    unit_value_id, exchange_rate_id, conversion_from, conversion_to, conversion_state, test,
+    generation_id, reported_cost, cost_report, bound_cost, check_state, line_ratio)
 SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[],
     $9::text[], $10::jsonb[], $11::timestamptz[], $12::timestamptz[], $13::text[], $14::numeric[],
-    $15::uuid[], $16::uuid[], $17::text[], $18::text[], $19::text[], $20::boolean[])
-ON CONFLICT (request_id, attempt_seq) DO NOTHING`
+    $15::uuid[], $16::uuid[], $17::text[], $18::text[], $19::text[], $20::boolean[],
+    $21::text[], $22::numeric[], $23::text[], $24::numeric[], $25::text[], $26::numeric[])
+ON CONFLICT DO NOTHING`
 
 // EndedRequestRow is one request's end: the database time it ended at and the tenant that owns it.
 type EndedRequestRow struct {
@@ -75,8 +83,12 @@ func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) err
 		priced, finished                              []time.Time
 		flag, estimated                               []string
 		test                                          []bool
+		generation, reported, report, bound, check    []*string
+		ratio                                         []*string
 	}
 	for _, r := range rows {
+		a.generation, a.reported, a.report = append(a.generation, r.GenerationID), append(a.reported, r.ReportedCost), append(a.report, r.CostReport)
+		a.bound, a.check, a.ratio = append(a.bound, r.BoundCost), append(a.check, r.CheckState), append(a.ratio, r.LineRatio)
 		a.unit, a.exchange = append(a.unit, r.UnitValueID), append(a.exchange, r.ExchangeRateID)
 		a.from, a.to, a.conversion = append(a.from, r.ConversionFrom), append(a.to, r.ConversionTo), append(a.conversion, r.ConversionState)
 		a.req, a.seq = append(a.req, r.RequestID), append(a.seq, r.AttemptSeq)
@@ -89,7 +101,8 @@ func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) err
 		a.test = append(a.test, r.Test)
 	}
 	_, err := db.Exec(ctx, insertAttemptCosts, a.req, a.seq, a.site, a.account, a.supplier, a.credential, a.endpoint,
-		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated, a.unit, a.exchange, a.from, a.to, a.conversion, a.test)
+		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated, a.unit, a.exchange, a.from, a.to, a.conversion, a.test,
+		a.generation, a.reported, a.report, a.bound, a.check, a.ratio)
 	return err
 }
 

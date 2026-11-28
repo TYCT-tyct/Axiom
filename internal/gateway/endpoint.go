@@ -99,7 +99,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if why != "" {
 		return routing.Endpoint{}, why
 	}
-	reportable := model.Reportable()
+	reportable := billing.ServedReportable(model, r.StandardOnly)
 	price, why := endpointPrice(sold, r.ID)
 	if why != "" {
 		return routing.Endpoint{}, why
@@ -160,7 +160,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		UnknownItem:      blockedItem,
 		AudiencePrices:   sold.Audiences,
 		Price:            price,
-		Target:           targetOf(r.Upstream, streams, dialect),
+		Target:           targetOf(r.Upstream, streams, dialect, r.Provider),
 	}
 	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity
 		e.Capacity = r.Capacity
@@ -169,6 +169,24 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	surface := e.Surface()
 	e.Caps, e.Parameters, e.Context, e.MaxOutput = surface.Caps, surface.Parameters, surface.Context, surface.MaxOutput
 	return e, ""
+}
+
+// PriceCostOf is the endpoint's cost as billing compares it with a sale price in currency, with the exchange rate that
+// converts it when its supplier settles in another.
+func PriceCostOf(e suppliers.Routable, rates []platform.ExchangeRate, currency platform.Currency) billing.PriceCost {
+	var rate platform.ExchangeRate
+	if e.Currency != currency {
+		for _, r := range rates {
+			if _, ok := r.Between(e.Currency, currency); ok {
+				rate = r
+				break
+			}
+		}
+	}
+	return billing.PriceCost{
+		Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID,
+		Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate, StandardOnly: e.StandardOnly,
+	}
 }
 
 // saleOf is the sale price routing holds for the endpoint's model: the site's published one, or for an endpoint of the
@@ -263,12 +281,13 @@ var capabilityParameters = [...]struct {
 
 // targetOf is how an attempt is written for the endpoint: its upstream name and whether it streams, and the spec's
 // dialect as it is. An unset claim stays unset in the Target; protocol decides what a request that needs it is to do
-// (internal/protocol/README.md「跨格式转换」), so no default for the model is made here.
-func targetOf(upstream string, streams bool, d catalog.Dialect) protocol.Target {
+// (internal/protocol/README.md「跨格式转换」), so no default for the model is made here. provider is the supplier's
+// provider object for every call to the endpoint (suppliers.Routable.Provider).
+func targetOf(upstream string, streams bool, d catalog.Dialect, provider []byte) protocol.Target {
 	return protocol.Target{
 		Model: upstream, Streams: streams, Thinking: d.Thinking, EncryptedReasoning: d.EncryptedReasoning, MidSystem: d.MidSystem,
 		UntrustedSystemAfterTools: d.UntrustedSystemAfterTools, DefaultSamplingOnly: d.DefaultSamplingOnly,
-		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints,
+		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints, Provider: provider,
 	}
 }
 

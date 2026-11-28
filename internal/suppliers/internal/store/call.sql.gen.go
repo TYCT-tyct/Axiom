@@ -392,7 +392,7 @@ func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requ
 }
 
 const listPriceCosts = `-- name: ListPriceCosts :many
-SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency, cs.basis,
  v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id=e.supplier_id
@@ -409,6 +409,7 @@ type ListPriceCostsRow struct {
 	EndpointID         uuid.UUID
 	ModelID            uuid.UUID
 	SettlementCurrency string
+	Basis              string
 	UnitValueID        uuid.UUID
 	UnitValue          string
 	Schedule           []byte
@@ -428,6 +429,7 @@ func (q *Queries) ListPriceCosts(ctx context.Context, db DBTX) ([]ListPriceCosts
 			&i.EndpointID,
 			&i.ModelID,
 			&i.SettlementCurrency,
+			&i.Basis,
 			&i.UnitValueID,
 			&i.UnitValue,
 			&i.Schedule,
@@ -448,7 +450,7 @@ SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.quantizati
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute, c.region, coalesce(c.call_names ->> e.upstream_name, e.upstream_name)::text AS call_name, c.settings, c.egress_id,
     coalesce(c.balance_native::text, '')::text AS key_balance, c.balance_observed_at AS key_balance_observed_at, g.ratio::text AS line_ratio,
-    cs.id AS cost_schedule_id, cs.schedule
+    cs.id AS cost_schedule_id, cs.schedule, cs.basis
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
 JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
@@ -501,6 +503,7 @@ type ListRoutableRow struct {
 	LineRatio            string
 	CostScheduleID       uuid.UUID
 	Schedule             []byte
+	Basis                string
 }
 
 // Every credential that can serve an endpoint: the supplier in use with a balance above zero, or one with no balance to
@@ -557,6 +560,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.LineRatio,
 			&i.CostScheduleID,
 			&i.Schedule,
+			&i.Basis,
 		); err != nil {
 			return nil, err
 		}

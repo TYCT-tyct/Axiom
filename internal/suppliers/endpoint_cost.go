@@ -52,8 +52,9 @@ type EndpointCost struct {
 	Model     catalog.ModelID
 	CostState string
 	Plan      *uuid.UUID
-	// Basis is where the plan came from: "published", the supplier's own prices as the sync read them, or "confirmed",
-	// a base price a person confirmed times the group's ratio.
+	// Basis is where the plan came from: "published", the supplier's own prices as the sync read them, "confirmed",
+	// a base price a person confirmed times the group's ratio, or "ceiling", an aggregator's highest price times the
+	// line's ratio, which bounds what an attempt costs (aggregator.go).
 	Basis              string
 	NativeUnit         string
 	SettlementCurrency string

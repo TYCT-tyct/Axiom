@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/big"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,12 @@ type Routable struct {
 	// Byok says the endpoint is the account's own provider key; routing tries it before the platform's endpoints.
 	// ByokFallback says that key may still use them when it is unusable (docs/domains/routing.md「自带的供应商 key」).
 	Byok, ByokFallback bool
+	// Provider is the provider object every call to the endpoint carries: OpenRouter's max_price, for an endpoint costed
+	// at its providers' highest price (docs/domains/suppliers-direct.md「OpenRouter 的成本」); nil for every other.
+	Provider []byte
+	// StandardOnly says the endpoint is priced, and served, at the standard service tier only: an aggregator's ceiling
+	// plan, since its endpoints list has no price per tier (PriceCost.StandardOnly).
+	StandardOnly bool
 }
 
 // Platform reports whether the endpoint belongs to the platform rather than a tenant.
@@ -203,6 +210,11 @@ type endpoint struct {
 	// wallets says each key of the platform supplier is a wallet of its own, whose balance its type reads: the funds are
 	// the keys', not the supplier's.
 	wallets bool
+	// ratio is the line's, for a plan that is an aggregator's highest price times it: a bound, and the attempt costs
+	// what the aggregator reports (Credits); nil for every other plan. provider is the max_price that holds the
+	// aggregator to the bound.
+	ratio    *big.Rat
+	provider []byte
 }
 
 type credential struct {
@@ -352,7 +364,7 @@ func (s *Service) Routable() ([]Routable, error) {
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
 			Generation: snap.generation, Quantization: ep.quantization,
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
-			Byok: ep.byok, ByokFallback: ep.byokFallback,
+			Byok: ep.byok, ByokFallback: ep.byokFallback, Provider: ep.provider, StandardOnly: ep.ratio != nil,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -387,7 +399,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
 	}
-	quantization, err := optionalQuantization(r)
+	terms, err := termsOf(r, schedules)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +418,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	wallets := r.OwnerScope == "platform" && registry.TypeOf(a).Balance
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
-		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		formats: formats, quantization: terms.quantization, ratio: terms.ratio, provider: terms.provider, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode && !wallets),
 		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback, wallets: wallets,
 	}
@@ -423,9 +435,13 @@ func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool) {
 	s.cancels[ep] = cancels
 }
 
-// Policy is how calls to the endpoint behave: the adapter's default, with the measured cancellation over it.
+// Policy is how calls to the endpoint behave: the adapter's default, with the measured cancellation over it unless the
+// adapter fixes it (CancelsFixed).
 func (s *Service) policy(ep *endpoint) adapter.CallPolicy {
 	p := ep.quirks.Policy()
+	if p.CancelsFixed {
+		return p
+	}
 	s.cancelsMu.RLock()
 	defer s.cancelsMu.RUnlock()
 	if measured, ok := s.cancels[ep.id]; ok {
