@@ -54,7 +54,7 @@
 - **两个调用族**：有 Anthropic 前缀的行同时说两族，`families` 是 `openai` 和 `anthropic`。Messages 按模型声明，不按厂商：行里列出厂商的 Anthropic 兼容接口服务的模型名（按厂商文档列出的名字，如 Kimi、DeepSeek、MiniMax 的；`*` 只用于厂商写明全部模型都服务的），名单里的生成模型端点同时声明 Chat 和 Messages，其余只有 Chat，Messages 请求由网关转换。Messages 发到 `<地址><Anthropic 前缀>/v1/messages`，用 `x-api-key`，与 Chat 同一把 key、同一个价；网关对 Messages 请求优先选原生的 Messages，Claude Code 这类客户端不必经过转换。Anthropic 前缀与 OpenAI 前缀在同一地址下，凭证只发往供应商自己的地址这一条不变。
 - **差异只用声明**：厂商的差异是行里的类型化字段或这一行声明的小钩子（模型清单路径、余额读法、额外的请求头），不是可配置的改写。请求体层面的差异（推理字段、`max_completion_tokens`、`stream_options`）由协议层按模型规格处理；某家确实要不同的写法，先录一份样本证明，再作为端点的类型化事实交给协议层，不在供应商一侧改请求体。每一行带一组录制的请求和回答样本，覆盖它声明的差异。
 - **币种跟着价目入口**：结算币种就是所选价目入口的币种，内置类型不能另选：同一模型的人民币价和美元价不是汇率关系（[目录基线的「币种」](catalog.md#目录基线)），另选币种就是用错价目表。只有人填地址的类型（`compatible`、Azure）给结算币种。供应商之间币种不同时，按已有的汇率换算记账（`Credits`）。读得到余额的入口在接入时核对：余额接口报的币种与入口不同，是 422。账号而不是地址决定价目表的厂商（阿里云的中国站和国际站），入口带上账号的说法（`account`），由人按自己的账号选。
-- **聚合商按自己的价**：卖多家模型的类型（OpenRouter、硅基流动）不列作者，成本只能用它对这个名字实际收的价乘线路倍率；没有这样的价，成本未知、不进路由；不拿原厂官方价乘一个倍率去凑。不变量：聚合商的端点只按「它对这次调用会收的价」定成本，取不到就未知。两家现在都取不到，端点都未知：硅基流动的模型清单只有名字，价目只在网页上；OpenRouter 清单里的 `pricing` 是排在首位的那一家服务商的价，一个模型常有几家服务商、价可差数倍，调用按实际服务的那一家收费，按它定成本会低估。
+- **聚合商按自己的价**：卖多家模型的类型（OpenRouter、硅基流动）不列作者，成本只能用它对这次调用实际收的价乘线路倍率，不拿原厂官方价乘一个倍率去凑。不变量：聚合商的端点只按「它对这次调用会收的价」定成本，取不到就未知、不进路由。OpenRouter 在回答里报出这次扣的钱，按它记成本（见「OpenRouter 的成本」，待实现）；硅基流动的模型清单只有名字、价目只在网页上，回答也不报扣费，端点成本未知。
 
 ### 凭证：形式、字段和设置
 
@@ -90,6 +90,20 @@
 - **重新定价**：目录发布新的参考价、聚合商的价变了、或倍率变了，线路的端点按同一个函数重算并指向对应的计划；目录撤下了结算币种的参考价（或类型不再按目录卖这个作者）的端点成本改为未知、退出路由，不沿用已撤的价。倍率在供应商锁里、定价的同一个事务里读，重读和重新投影不会用锁前读到的旧倍率盖掉刚改的。已开始的尝试按回执里的计划版本结算。
 - **不变量**：平台的直连和云线路上，有价端点的参考价都不来自 OpenRouter 数据集；每个有价端点在用的成本计划 = 渠道当前的价按线路倍率缩放、每个单价向上取整一次，因子乘得出（`Derivation.Check`）；改倍率与端点改指同成同败；BYOK 端点的成本计划不因这些操作改变。
 - **只算一次**：倍率就是折扣，直连和云平台的成本按它算好；它们不取请求号、不对账，以后接入官方账单核对时与倍率后的成本比较，不再把折扣当作利润另记一次。
+
+### OpenRouter 的成本
+
+待实现（负责人在 #955 [选定方案 A](https://github.com/TYCT-tyct/Axiom/issues/955#issuecomment-7233863853)）。OpenRouter 把一个模型交给几家服务商中的一家，按实际服务的那家收费，调用前不知道是哪家：预留按所有服务商里的最高价，结算按回答报出的实际扣费。用户的售价不变，照目录和定价规则出，这里只改平台的成本、毛利和端点能不能卖。
+
+- **最高价**：同步（每小时的重读之后）给 OpenRouter 线路上每个映射到目录模型的名字发一次 `GET /api/v1/models/{名字}/endpoints`（不收费，带这条线路的 key、经它的出口，10 秒，同时最多 4 个），对 `data.endpoints[].pricing` 逐个计费项取所有服务商的最大值（不论 `status`；忽略 `discount`，折前价不低于折后价），拼成一张美元价目表，存在 `supplier_models.ceiling`。有服务商对某项报了非零价、而价目表表达不了这一项的，成本未知（`unexpressible`）；404、`endpoints` 为空、名字带 `:` 变体后缀的，成本未知（`unpriced`）；超时和 5xx 保留上次的最高价。调用路径从不发这个请求。
+- **成本计划**：最高价乘线路倍率，`basis='ceiling'`，指纹 `openrouter_ceiling:<价目表规范 JSON 的 SHA-256>`（倍率不是 1 时加 `:ratio:<倍率>`），照「有就取、没有才插」写，价不变不出新版本。准入、路由、付不付得起和定价的保本线都读这份计划，与其他端点一样；所以售价按最高价的成本定，实际成本只会更低。
+- **结算**：protocol 从结束回答的那次用量（Chat、Responses 的最终 `usage`）读 `usage.cost`，按 JSON 原文解析成精确小数（不经浮点，多出的位向上取整），放进 `protocol.Usage.Cost`；不是最终用量、不是非负有限数、或 `is_byok` 为真（这时 `cost` 只是 OpenRouter 的手续费）都不读。网关把它交给 `suppliers.Credits`：只有计划的 `basis` 是 `ceiling` 时才用它，成本 = `usage.cost` × 线路倍率，成本已知；别的计划一律不看这个字段（中转站或另一个 Axiom 回的 `cost` 不是我们付给它的钱，币种也未必是美元）。流式和整份回答同一条路径：网关对上游一律流式，OpenRouter 在 `[DONE]` 之前的最后一块报用量。
+- **没有报扣费**（断流、截断、读到一部分后出错、结束块之前超时）：成本 = 计划 × 用量，用量按[暂估](billing.md#用量来源与暂估)补齐缺的项，标成本未知（是上界，不进毛利统计）。确知没有执行的尝试成本为零，与其他端点相同；其余执行过的尝试成本不为零。
+- **记什么**：`attempt_costs.estimated_native` 记入账的成本（报了扣费时是它乘倍率，否则是计划 × 用量），新列 `bound_native` 只在按报出的扣费入账时记计划 × 用量。历史、待处理队列和保本线读 `estimated_native`，含义仍是「入账的成本」。
+- **扣费超过上界**：入账照实际，不改用户的收费。每分钟的对账任务另扫 `estimated_native` > `bound_native` + 容差（1e-10 美元 + 上界的 1%）、用量完整（`complete`）的尝试，端点仍用这份计划时改为成本未知（`under_estimated`）退出路由并告警 `suppliers.reconcile.under_estimated`，价变了的只记一次；不在结算事务里写端点行，热路径不多锁一行。
+- **不变量**：OpenRouter 端点的计划 ≥ 每家服务商的价，所以正常情况下 实际扣费 ≤ 计划 × 用量，超出时被发现并摘牌；执行过的尝试成本不为零；只有 `ceiling` 计划采信回答里的扣费；结算按「请求 ID + 尝试序号」幂等，扣费随结局一起定下，重试得到同一行（`InsertAttemptCosts` 已有的不改）。
+- **改哪些文件**：`internal/protocol` 的 `openai.go`、`meter.go`、`relayoptions.go`（`Usage.Cost`）和录制样本；`internal/gateway/settle.go`（`attempt.result` 传 `a.usage.Cost`，`ceiling` 计划没报扣费时成本不算已知）；`internal/suppliers` 的 `vendors.go`（OpenRouter 声明最高价的读法）、新文件 `aggregator_price.go`（读、拼最高价）、`line_models.go`、`line_price.go`（`ceiling` 计划、改倍率时重算）、`relist.go`（每小时读最高价）、`record.go`（`Credits` 用报出的扣费、写 `bound_native`）、`reconcile_job.go`（扣费超过上界）和 `store` 的查询与一个迁移（`cost_schedules.basis` 加 `ceiling`、`supplier_models.ceiling` 与 `ceiling_read_at`、`attempt_costs.bound_native`，编号由编排者分配）。billing 不变：它只收网关算好的成本。
+- **测试**：protocol 一张表（流式带扣费、整份回答、断在用量块之前、`is_byok` 为真、`cost` 为负或不是数、只在中途的用量里）；`aggregator_price` 一张表，喂录制的 `/endpoints` 样本（逐项取最大、`discount`、表达不了的项、空列表、404、变体名、同价不出新计划、倍率）；`Credits` 一张表（`ceiling` 加扣费、`ceiling` 无扣费按上界且不为零、非 `ceiling` 计划带 `cost` 被忽略）；对账一张表（超出容差摘牌、容差内不动、换了价不摘）；网关一条：假 OpenRouter 上游流式回扣费，成本行和账本成本等于它，截流时等于计划 × 暂估。`Credits` 选扣费那一处做一次变异证明。硅基流动的端点仍成本未知（改 `line_unpriced_test`）。
 
 ### 模型重读与余额
 
@@ -131,7 +145,12 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 | 类型的模型数按价目入口分别算，所有入口都为 0 才置灰 | 目录先行：没有价的模型成本未知、进不了路由；只看默认入口会把国际站有价的类型误置灰 |
 | 直连 key 定期免费重读模型清单，目录修订变了重新投影 | 厂商上新模型、目录上架后，线路不需要人重贴 key 就能卖 |
 | 只给读得到余额的厂商读余额，按 key（钱包）读，准入按标价比余额 | 预付费的国内厂商余额归零就停，不读余额只能等用户请求失败才知道；同一线路的 key 可能是不同钱包，按供应商读会让一个空钱包停掉其余；厂商按标价扣钱，折扣只影响我们的成本 |
-| 聚合商只按它对调用实际收的价定成本；OpenRouter、硅基流动先接入、端点成本未知；Bedrock 上非 Anthropic、Amazon 的模型和 `compatible` 的端点成本未知 | 聚合商和云平台给第三方模型的价不是原厂官方价，拿原厂价乘一个倍率会把成本算错，成本算低就是毛利虚高。OpenRouter 清单的价是首位服务商的，不是实际收的价（它的帮助文档写明按实际服务的服务商收费），按它定成本同样会低估；接入、列模型、检测 key 不依赖价，先接入，价源定下后端点在下一次投影时定价 |
+| 聚合商只按它对调用实际收的价定成本；硅基流动、Bedrock 上非 Anthropic、Amazon 的模型和 `compatible` 的端点成本未知 | 聚合商和云平台给第三方模型的价不是原厂官方价，拿原厂价乘一个倍率会把成本算错，成本算低就是毛利虚高；接入、列模型、检测 key 不依赖价，先接入，价源定下后端点在下一次投影时定价 |
+| OpenRouter 预留按所有服务商的逐项最高价，结算按回答的 `usage.cost` | 负责人在 #955 [选方案 A](https://github.com/TYCT-tyct/Axiom/issues/955#issuecomment-7233863853)。清单的 `pricing` 是首位服务商的价（OpenRouter [《Models》](https://openrouter.ai/docs/guides/overview/models)），调用按实际服务的那家收费，按它定价会低估；每家的价在 `/api/v1/models/{作者}/{模型}/endpoints`（[《Models API》](https://openrouter.ai/docs/api_reference/models)，美元每 token，有 `discount`）。最高价只会高估，售价和保本线按它定，不亏；实际扣费是 OpenRouter 自己的账，比任何估算都准 |
+| `usage.cost` 默认就有，不发 `usage: {include: true}`；单位是 credits，即美元 | OpenRouter [《Usage Accounting》](https://openrouter.ai/docs/guides/administration/usage-accounting)：每个回答都带用量和以 credits 计的 `cost`，流式在最后一块，`usage.include` 与 `stream_options.include_usage` 已废弃、不起作用；`cost_details.upstream_inference_cost` 只对 BYOK 有意义。[《API Reference》](https://openrouter.ai/docs/api_reference/overview)：流式时用量恰好一次、在 `[DONE]` 之前。[《FAQ》](https://openrouter.ai/docs/faq)：credits 以美元为基准。new-api（8faf1d45e）对 OpenRouter 仍补发 `usage: {include: true}`（`relay/channel/openai/adaptor.go`），读 `usage.cost` 只为反推 Claude 的缓存写入 token（`service/quota.go` 的 `CalcOpenRouterCacheCreateTokens`），按自己的倍率收费、不记成本；sub2api（ee58c0013）没有 OpenRouter 上游。两家都不按它记成本，所以这里没有可照搬的做法 |
+| 扣费随用量在网关里带进结算（`protocol.Usage.Cost`），不走对账 | 另一种是按对账：先按上界入账，事后用请求号（`X-Generation-Id`）读 `/api/v1/generation` 或把扣费写成供应商记录，由对账改成本调整。它能补上断流、崩溃没拿到扣费的尝试，但每次调用多一个请求、OpenRouter 的记录有延迟、毛利先错一阵，还要给 OpenRouter 写一个对账读取器；回答里已有准确的数，结算时就能定下，同一事务里与账本同成同败。断流的缺口按上界记，不为零，以后需要时再用对账补 |
+| 只有 `basis='ceiling'` 的计划采信回答里的 `cost`；`is_byok` 为真时不采信 | 回答里的 `cost` 只有 OpenRouter 自己报才是我们付的钱：中转站可能透传上游的数，另一个 Axiom 回的是它的站点货币；OpenRouter 的 BYOK 回答里 `cost` 只是手续费，模型费在别处付 |
+| 扣费超过上界时照实际入账，由每分钟的对账任务摘牌，不在结算里写端点 | 用户的收费已按锁定的售价定，不该因此变；摘牌沿用对账的 `under_estimated`，价不变就一直摘着，避免一小时后同一个低估的价又上线；结算事务只写自己的行，热点账户的批次不多锁端点行 |
 | 智谱、百炼按目录的官方价卖，用模型清单检测 | 两家的模型清单要鉴权、不收费，无效 key 回 401（四个地址都实测过）；百炼还卖 DeepSeek、Kimi、GLM 等别家的模型，价是百炼自己的，`serves` 只有 Qwen，这些端点成本未知 |
 | 直连和云线路不用来源为 OpenRouter 数据集的参考价，这样的端点成本未知；官方、LiteLLM、手填照用 | 目录给每个模型选一个价源（[价格以模型选定的来源为准](catalog.md#目录基线)）。OpenRouter 的价是聚合商的卖价，开源权重模型的是第三方服务商的：`glm-5.3` 在那里是每百万 $0.07／$1.40，智谱自己收 $1.40／$4.40，拿它给智谱直连定价会把成本算低，路由以为便宜，毛利虚高。LiteLLM 汇总的是各厂商自己的标价，官方是厂商页面，手填是人确认的数，new-api、sub2api 给直连渠道定价也是人设的数乘倍率；只要求官方会让大多数按 LiteLLM 定价的模型退出直连路由 |
 | 智谱只说 OpenAI 格式，不用 `/api/anthropic` | 智谱的 [API Key 分类管理说明](https://docs.bigmodel.cn/cn/coding-plan/notice/api-key-management)：分开管理之前建的「兼容」key，账号曾有编程套餐时在 `/api/anthropic` 消耗套餐额度、套餐到期后中断服务，而同一把 key 在 `/api/paas/v4` 照常按余额计费；检测走的是后者，验得过的 key 发 Messages 仍会失败，套餐期内按标准价记的成本也不对。Messages 请求由网关转成 Chat |
@@ -160,7 +179,8 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 ## 待定问题
 
 - Vertex 的 API key 只能调 Gemini 的 `generateContent`，不能调 Claude 的 `rawPredict`，也不能调 OpenAI 兼容的 Chat。Chat 转 Gemini 原生已有（`google` 包），开这种形式还要：新的凭证形式和它的检测（API key 不能列模型）、只给这种凭证建 Gemini 模型的端点、Vertex 的地址和鉴权；不是一行的改动，开之前描述里不列它。
-- 聚合商、`compatible` 接入的地址和 Bedrock 上第三方模型的价从哪来，定下之前三者的端点成本未知、不进路由。候选：人确认基础价（`confirmBasePrices` 现在只对中转站：基础价存在同步状态里、由同步按分组倍率定价，直连线路回 409，要给直连线路另存基础价并由定价函数读取）；OpenRouter 取每个模型所有服务商价的逐项最大值（`/api/v1/models/{作者}/{模型}/endpoints`，一个模型一次免费请求，成本只会高估）；或按 OpenRouter 回答里的 `usage.cost` 记实际成本（最准，要给直连线路加按回答记成本的路径）。AWS 的 Price List 接口待查。Perplexity 等它的清单接口证实会校验 key；腾讯 TokenHub 待查证后再加。
+- 硅基流动、`compatible` 接入的地址和 Bedrock 上第三方模型的价从哪来，定下之前三者的端点成本未知、不进路由。候选：人确认基础价（`confirmBasePrices` 现在只对中转站，要给直连线路另存基础价并由定价函数读取）。AWS 的 Price List 接口待查。Perplexity 等它的清单接口证实会校验 key；腾讯 TokenHub 待查证后再加。
+- OpenRouter：`/endpoints` 的价没有长上下文分档，有分档的模型按基础价拼出的上界会偏低，靠「扣费超过上界」摘牌兜住，是否改按目录的分档取高待看实测；没拿到扣费的尝试（断流、结算前崩溃）是否再用 `/api/v1/generation` 补实际成本，看这类尝试的占比再定；读 OpenRouter 的余额（`/api/v1/key`）不在这一版。
 - 余额读法按价目入口声明（硅基流动只有国际站能读余额），要与路由的「从没读到余额的 key 算付不起」一起按入口判断；等硅基流动的端点有价再做。
 - 同一钱包的几把 key 各读一次余额、各自比较，若厂商的余额接口给出账户标识，可以合成一个钱包少读几次；看录制样本再定。
 - 每把 key 的花费上限、new-api 的任务类渠道（Midjourney、Suno、视频）不在这一版。
